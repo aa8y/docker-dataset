@@ -7,15 +7,21 @@ RUN apt-get update && \
     apt-get install -y wget && \
     rm -rf /var/lib/apt/lists/*
 
-ARG DATASET=world
-
 # Source: http://pgfoundry.org/frs/?group_id=1000150
-ARG DELLSTORE_FILENAME=dellstore2-normal-1.0
-ARG DELLSTORE_URL=http://pgfoundry.org/frs/download.php/543/${DELLSTORE_FILENAME}.tar.gz
-ARG USDA_FILENAME=usda-r18-1.0
-ARG USDA_URL=http://pgfoundry.org/frs/download.php/555/${USDA_FILENAME}.tar.gz
-ARG WORLD_FILENAME=world-1.0
-ARG WORLD_URL=http://pgfoundry.org/frs/download.php/527/${WORLD_FILENAME}.tar.gz
+ARG DELLSTORE_URL=http://pgfoundry.org/frs/download.php/543/dellstore2-normal-1.0.tar.gz
+ARG DELLSTORE_SQL=dellstore2-normal-1.0/dellstore2-normal-1.0.sql
+ARG USDA_URL=http://pgfoundry.org/frs/download.php/555/usda-r18-1.0.tar.gz
+ARG USDA_SQL=usda-r18-1.0/usda.sql
+ARG WORLD_URL=http://pgfoundry.org/frs/download.php/527/world-1.0.tar.gz
+ARG WORLD_SQL=dbsamples-0.1/world/world.sql
+
+RUN mkdir -p /home/postgres && \
+    touch /home/postgres/.psql_history && \
+    chown -R postgres:postgres /home/postgres
+
+ARG DATASET=world
+ARG DATASET_URL=$WORLD_URL
+ARG DATASET_SQL=$WORLD_SQL
 
 # Set dataset parameters. Defaults to 'world'.
 # RUN if [ $DATASET=="dellstore2" ]; then \
@@ -30,17 +36,12 @@ ARG WORLD_URL=http://pgfoundry.org/frs/download.php/527/${WORLD_FILENAME}.tar.gz
 #       export DATASET_FILENAME=$WORLD_FILENAME; \
 #     fi
 
-ARG DATASET_URL=$DELLSTORE_URL
-ARG DATASET_FILENAME=$DELLSTORE_FILENAME
 ENV POSTGRES_USER docker
 ENV POSTGRES_PASSWORD docker
-ENV POSTGRES_DB docker
+ENV POSTGRES_DB $DATASET
 
 # Separate populating the database from installation as we want to separate the layer.
 WORKDIR /tmp
-
 RUN wget -qO- $DATASET_URL | tar -C . -xzf - && \
-    cp ${DATASET_FILENAME}/${DATASET_FILENAME}.sql /docker-entrypoint-initdb.d/ && \
-    rm -rf /tmp/*
-
-ENTRYPOINT ["postgres"]
+    cp $DATASET_SQL /docker-entrypoint-initdb.d/ && \
+    rm -rf *
