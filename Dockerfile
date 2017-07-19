@@ -1,11 +1,10 @@
-FROM postgres:9.6
+FROM postgres:alpine
 
 MAINTAINER Arun Allamsetty <arun.allamsetty@gmail.com>
 
 # Separate the installation as we can cache it as a layer.
-RUN apt-get update && \
-    apt-get install -y wget && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --update wget && \
+    rm -rf /var/cache/apk/*
 
 # Source: http://pgfoundry.org/frs/?group_id=1000150
 ARG DELLSTORE_URL=http://pgfoundry.org/frs/download.php/543/dellstore2-normal-1.0.tar.gz
@@ -15,9 +14,12 @@ ARG USDA_SQL=usda-r18-1.0/usda.sql
 ARG WORLD_URL=http://pgfoundry.org/frs/download.php/527/world-1.0.tar.gz
 ARG WORLD_SQL=dbsamples-0.1/world/world.sql
 
-RUN mkdir -p /home/postgres && \
-    touch /home/postgres/.psql_history && \
-    chown -R postgres:postgres /home/postgres
+ARG PG_USER=postgres
+ARG PG_HOME=/home/$PG_USER
+
+RUN mkdir -p $PG_HOME && \
+    touch $PG_HOME/.psql_history && \
+    chown -R $PG_USER:$PG_USER $PG_HOME
 
 ARG DATASET=world
 ARG DATASET_URL=$WORLD_URL
@@ -45,3 +47,6 @@ WORKDIR /tmp
 RUN wget -qO- $DATASET_URL | tar -C . -xzf - && \
     cp $DATASET_SQL /docker-entrypoint-initdb.d/ && \
     rm -rf *
+
+USER $PG_USER
+WORKDIR $PG_HOME
