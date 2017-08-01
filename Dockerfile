@@ -8,25 +8,24 @@ RUN apk add --update \
       wget && \
     rm -rf /var/cache/apk/*
 
-# Data Sources.
-# PG Foundry: http://pgfoundry.org/frs/?group_id=1000150
-# SportsDB:   http://www.sportsdb.org/sd/samples
 ARG DATASETS=dellstore,iso3166,sportsdb,usda,world
 ARG PG_USER=postgres
 ARG PG_HOME=/home/$PG_USER
+ENV POSTGRES_USER docker
+ENV POSTGRES_PASSWORD docker
 
 # Enable psql history.
 RUN mkdir -p $PG_HOME && \
     touch $PG_HOME/.psql_history && \
     chown -R $PG_USER:$PG_USER $PG_HOME
-ENV POSTGRES_USER docker
-ENV POSTGRES_PASSWORD docker
-ENV POSTGRES_DB $DATASET
 
-# Set dataset parameters. Defaults to 'world'. Also, separate populating the database from
-# installation as we want to separate the layer. `export` does not persist across images. So we
-# need to make the conditional statements part of this layer.
 WORKDIR /tmp
+# Data Sources.
+# PG Foundry: http://pgfoundry.org/frs/?group_id=1000150
+# SportsDB:   http://www.sportsdb.org/sd/samples
+#
+# `export` does not persist across images. So we need to make the conditional statements part of 
+# this layer.
 RUN bash -c ' \
     export ALL_DATASETS=(dellstore iso3166 sportsdb usda world) && \
     export SQL=( \

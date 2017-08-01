@@ -1,8 +1,16 @@
 #!/bin/sh
 
-docker build -t aa8y/postgres-dataset:dellstore --build-arg DATASETS=dellstore .
-docker build -t aa8y/postgres-dataset:iso3166 --build-arg DATASETS=iso3166 .
-docker build -t aa8y/postgres-dataset:sportsdb --build-arg DATASETS=sportsdb .
-docker build -t aa8y/postgres-dataset:usda --build-arg DATASETS=usda .
-docker build -t aa8y/postgres-dataset:world --build-arg DATASETS=world .
+PUSH=$1
+DATASETS=(dellstore iso3166 sportsdb usda world)
+
+for DATASET in "${DATASETS[@]}"; do
+  docker build -t aa8y/postgres-dataset:"$DATASET" --build-arg DATASETS="$DATASET" .
+done
 docker build -t aa8y/postgres-dataset:latest .
+
+if [ "$PUSH" == "-p" ]; then
+  for DATASET in "${DATASETS[@]}"; do
+    docker push aa8y/postgres-dataset:"$DATASET"
+  done
+  docker push aa8y/postgres-dataset:latest
+fi
