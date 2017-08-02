@@ -27,25 +27,23 @@ WORKDIR /tmp
 # `export` does not persist across images. So we need to make the conditional statements part of 
 # this layer.
 RUN bash -c ' \
-    export ALL_DATASETS=(dellstore iso3166 sportsdb usda world) && \
-    export SQL=( \
-      dellstore2-normal-1.0/dellstore2-normal-1.0.sql \
-      iso-3166/iso-3166.sql \
-      sportsdb_sample_postgresql_20080304.sql \
-      usda-r18-1.0/usda.sql \
-      dbsamples-0.1/world/world.sql \
+    declare -A SQL=( \
+      [dellstore]=dellstore2-normal-1.0/dellstore2-normal-1.0.sql \
+      [iso3166]=iso-3166/iso-3166.sql \
+      [sportsdb]=sportsdb_sample_postgresql_20080304.sql \
+      [usda]=usda-r18-1.0/usda.sql \
+      [world]=dbsamples-0.1/world/world.sql \
     ) && \
-    export URL=( \
-      http://pgfoundry.org/frs/download.php/543/dellstore2-normal-1.0.tar.gz \
-      http://pgfoundry.org/frs/download.php/711/iso-3166-1.0.tar.gz \
-      http://www.sportsdb.org/modules/sd/assets/downloads/sportsdb_sample_postgresql.zip \
-      http://pgfoundry.org/frs/download.php/555/usda-r18-1.0.tar.gz \
-      http://pgfoundry.org/frs/download.php/527/world-1.0.tar.gz \
+    declare -A URL=( \
+      [dellstore]=http://pgfoundry.org/frs/download.php/543/dellstore2-normal-1.0.tar.gz \
+      [iso3166]=http://pgfoundry.org/frs/download.php/711/iso-3166-1.0.tar.gz \
+      [sportsdb]=http://www.sportsdb.org/modules/sd/assets/downloads/sportsdb_sample_postgresql.zip \
+      [usda]=http://pgfoundry.org/frs/download.php/555/usda-r18-1.0.tar.gz \
+      [world]=http://pgfoundry.org/frs/download.php/527/world-1.0.tar.gz \
     ) && \
-    for i in "${!ALL_DATASETS[@]}"; do \
-      export DATASET="${ALL_DATASETS[$i]}" && \
-      export DATASET_URL="${URL[$i]}" && \
-      export DATASET_SQL="${SQL[$i]}" && \
+    for DATASET in "${!SQL[@]}"; do \
+      export DATASET_URL="${URL[$DATASET]}" && \
+      export DATASET_SQL="${SQL[$DATASET]}" && \
       if [[ $DATASETS == *"$DATASET"* ]]; then \
         echo "Populating dataset: ${DATASET}" && \
         if [ `echo $DATASET_URL | rev | cut -c-7 | rev` == .tar.gz ]; then \
