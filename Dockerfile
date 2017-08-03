@@ -28,11 +28,11 @@ WORKDIR /tmp
 # this layer.
 RUN bash -c ' \
     declare -A SQL=( \
-      [dellstore]=dellstore2-normal-1.0/dellstore2-normal-1.0.sql \
-      [iso3166]=iso-3166/iso-3166.sql \
-      [sportsdb]=sportsdb_sample_postgresql_20080304.sql \
-      [usda]=usda-r18-1.0/usda.sql \
-      [world]=dbsamples-0.1/world/world.sql \
+      [dellstore]="(dellstore2-normal-1.0/dellstore2-normal-1.0.sql)" \
+      [iso3166]="(iso-3166/iso-3166.sql)" \
+      [sportsdb]="(sportsdb_sample_postgresql_20080304.sql)" \
+      [usda]="(usda-r18-1.0/usda.sql)" \
+      [world]="(dbsamples-0.1/world/world.sql)" \
     ) && \
     declare -A URL=( \
       [dellstore]=http://pgfoundry.org/frs/download.php/543/dellstore2-normal-1.0.tar.gz \
@@ -43,7 +43,7 @@ RUN bash -c ' \
     ) && \
     for DATASET in "${!SQL[@]}"; do \
       export DATASET_URL="${URL[$DATASET]}" && \
-      export DATASET_SQL="${SQL[$DATASET]}" && \
+      declare -a DATASET_SQL="${SQL[$DATASET]}" && \
       if [[ $DATASETS == *"$DATASET"* ]]; then \
         echo "Populating dataset: ${DATASET}" && \
         if [ `echo $DATASET_URL | rev | cut -c-7 | rev` == .tar.gz ]; then \
@@ -55,7 +55,9 @@ RUN bash -c ' \
         fi && \
         echo "CREATE DATABASE $DATASET;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
         echo "\c $DATASET;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
-        cat $DATASET_SQL >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
+        for i in "${!DATASET_SQL[@]}"; do \
+          cat "${DATASET_SQL[i]}" >> "/docker-entrypoint-initdb.d/${DATASET}.sql"; \
+        done && \
         rm -rf *; \
       fi; \
     done'
