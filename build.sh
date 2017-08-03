@@ -3,7 +3,7 @@
 PUSH=$1
 
 # Datasets
-DATASETS=(dellstore iso3166 sportsdb usda world)
+DATASETS=(dellstore iso3166 pagila sportsdb usda world)
 # Non-dataset tags
 TAGS=(all latest)
 

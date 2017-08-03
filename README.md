@@ -5,7 +5,7 @@ Have you ever wanted to access pre-populated databases with dummy but valid data
 ## Datasets
 
 So far we have the following datasets which are being used in the images.
-* [pgFoundry](http://pgfoundry.org/projects/dbsamples/): The datasets being used from here are `dellstore2` (tagged `dellstore`), `iso3166`,  `sportsdb`, `usda` and `world`.
+* [pgFoundry](http://pgfoundry.org/projects/dbsamples/): The datasets being used from here are `dellstore2` (tagged `dellstore`), `iso3166`,  `pagila`, `sportsdb`, `usda` and `world`. `pagila` is not being used from the pgFoundry source because it doesn't directly work with the newer version of PostgreSQL we're using. So we're using [this modified version](https://github.com/devrimgunduz/pagila) which seems okay other than the fact that the maintainer changes the dates in the data every year to reflect the new year. I don't care enough about it as of now, but that might change in the future.
 
 ## Databases
 
@@ -13,7 +13,7 @@ The only database supported so far is [PostgreSQL](https://www.postgresql.org/).
 
 ## Tags
 
-Available tags are `dellstore`, `iso3166`,  `sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets.
+Available tags are `dellstore`, `iso3166`,  `pagila`, `sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets.
 
 ## Usage
 
@@ -38,5 +38,5 @@ and then following the same [aforementioned](#usage) steps for using your custom
 ## Future Work
 
 * Images for other popular databases like [MySQL](https://www.mysql.com/).
-* Add `french-towns-communes-francais` and `pagila` datasets from [pgFoundry](http://pgfoundry.org/projects/dbsamples/).
+* Add `french-towns-communes-francais` datasets from [pgFoundry](http://pgfoundry.org/projects/dbsamples/).
 * Find and add more free data sources.
