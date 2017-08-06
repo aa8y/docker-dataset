@@ -15,6 +15,9 @@ ARG PG_USER=postgres
 ARG PG_HOME=/home/$PG_USER
 ENV POSTGRES_USER docker
 ENV POSTGRES_PASSWORD docker
+# Don't override this value. Do not use this value for `POSTGRES_USER`. We're making this change to# to make sure the default database created by the `postgres` base image does not interfere with
+# our database creation while populating data.
+ENV POSTGRES_DB donotuse
 
 # Enable psql history.
 RUN mkdir -p $PG_HOME && \
@@ -26,7 +29,7 @@ WORKDIR /tmp
 # PG Foundry: http://pgfoundry.org/frs/?group_id=1000150
 # SportsDB:   http://www.sportsdb.org/sd/samples
 #
-# `export` does not persist across images. So we need to make the conditional statements part of 
+# `export` does not persist across images. So we need to make the conditional statements part of
 # this layer.
 RUN bash -c ' \
     declare -A SQL=( \
