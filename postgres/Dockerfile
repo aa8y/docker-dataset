@@ -2,14 +2,6 @@ FROM postgres:alpine
 
 MAINTAINER Arun Allamsetty <arun.allamsetty@gmail.com>
 
-# Separate the installation as we can cache it as a layer.
-RUN apk add --update \
-      bash \
-      ca-certificates \
-      git \
-      wget && \
-    rm -rf /var/cache/apk/*
-
 ARG DATASETS=dellstore,iso3166,pagila,sportsdb,usda,world
 ARG PG_USER=postgres
 ARG PG_HOME=/home/$PG_USER
@@ -32,7 +24,12 @@ WORKDIR /tmp
 #
 # `export` does not persist across images. So we need to make the conditional statements part of
 # this layer.
-RUN bash -c ' \
+RUN apk add --update \
+      bash \
+      ca-certificates \
+      git \
+      wget && \
+    bash -c ' \
     declare -A SQL=( \
       [dellstore]="(dellstore2-normal-1.0/dellstore2-normal-1.0.sql)" \
       [iso3166]="(iso-3166/iso-3166.sql)" \
@@ -70,7 +67,13 @@ RUN bash -c ' \
         done && \
         rm -rf *; \
       fi; \
-    done'
+    done' && \
+    apk del --purge \
+      bash \
+      ca-certificates \
+      git \
+      wget && \
+    rm -rf /var/cache/apk/*
 
 USER $PG_USER
 WORKDIR $PG_HOME
