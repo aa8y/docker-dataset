@@ -1,0 +1,20 @@
+defaults:
+  parameters:
+    repository: aa8y/postgres-dataset
+  templates:
+    build: docker build -t {repository}:{tag} --build-arg DATASETS={datasets} {context}
+    push: docker push {repository}:{tag}
+contexts:
+  postgres:
+    key_name: datasets
+    tags:
+      dellstore:
+      iso3166:
+      pagila:
+      sportsdb:
+      usda:
+      world:
+      all:
+        datasets: dellstore,iso3166,pagila,sportsdb,usda,world
+      latest:
+        datasets: dellstore,iso3166,pagila,sportsdb,usda,world
