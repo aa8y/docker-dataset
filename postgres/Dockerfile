@@ -39,12 +39,12 @@ RUN apk add --update \
       [world]="(dbsamples-0.1/world/world.sql)" \
     ) && \
     declare -A URL=( \
-      [dellstore]=http://pgfoundry.org/frs/download.php/543/dellstore2-normal-1.0.tar.gz \
-      [iso3166]=http://pgfoundry.org/frs/download.php/711/iso-3166-1.0.tar.gz \
+      [dellstore]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz \
+      [iso3166]=https://ftp.postgresql.org/ftp/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz \
       [pagila]=https://github.com/devrimgunduz/pagila.git \
       [sportsdb]=http://www.sportsdb.org/modules/sd/assets/downloads/sportsdb_sample_postgresql.zip \
-      [usda]=http://pgfoundry.org/frs/download.php/555/usda-r18-1.0.tar.gz \
-      [world]=http://pgfoundry.org/frs/download.php/527/world-1.0.tar.gz \
+      [usda]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz \
+      [world]=https://ftp.postgresql.org/ftp/projects/pgFoundry/dbsamples/world/world-1.0.tar.gz \
     ) && \
     for DATASET in "${!SQL[@]}"; do \
       export DATASET_URL="${URL[$DATASET]}" && \
