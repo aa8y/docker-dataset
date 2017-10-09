@@ -23,7 +23,7 @@ docker run -d --name pg-ds-<tag> aa8y/postgres-dataset:<tag>
 ```
 and access it by:
 ```
-docker exec -it ds-pg-<tag> psql -d <db_name>
+docker exec -it pg-ds-<tag> psql -d <db_name>
 ```
 where `<tag>` is one of the tags mentioned [here](#tags) and `<db_name>` is the database name which is one of the dataset names mentioned [here](#datasets). You can also use them with `docker-compose`. See [this example](https://github.com/aa8y/data-dude/blob/master/docker-compose.yml) for information on how to use them.
 
