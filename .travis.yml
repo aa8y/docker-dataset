@@ -14,5 +14,8 @@ before_script:
   - dave build
 script:
   - dave test
+after_success:
+  - docker login -u aa8y -p "$DOCKER_PASSWORD"
+  - dave push
 ignore:
   - "*.md"

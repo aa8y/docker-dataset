@@ -1,5 +1,7 @@
 # Docker Dataset
 
+[![Build Status](https://travis-ci.org/aa8y/docker-dataset.svg?branch=master)](https://travis-ci.org/aa8y/docker-dataset)
+
 Have you ever wanted to access pre-populated databases with dummy but valid data? It can be for something as simple as practicing writing SQL queries to running tests on databases. Under such circumstances, you have to either have to create dummy data or utilize some internet-searching skills to find data to populate your database. I think this is a common enough problem/requirement that solution can be Dockerized for reuse. So here is a Docker image for [PostgreSQL](https://www.postgresql.org/) with databases populated with sample data.
 
 ## Datasets
