@@ -1,12 +1,15 @@
-defaults:
-  parameters:
-    repository: aa8y/postgres-dataset
-  templates:
-    build: docker build -t {repository}:{tag} --build-arg DATASETS={datasets} {context}
-    push: docker push {repository}:{tag}
+parameters:
+  repository: aa8y/postgres-dataset
+templates:
+  build: docker build -t {{{repository}}}:{{tag}} --build-arg DATASETS={{datasets}} {{context}}
+  push: docker push {{{repository}}}:{{tag}}
 contexts:
   postgres:
-    key_name: datasets
+    templates:
+      test: >
+        docker run --name ds-pg-{{tag}} -d --rm -it {{{repository}}}:{{tag}} && 
+        docker stop ds-pg-{{tag}}
+    tagKeys: datasets
     tags:
       dellstore:
       iso3166:
