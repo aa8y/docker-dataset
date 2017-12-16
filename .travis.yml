@@ -5,11 +5,9 @@ language: node_js
 node_js:
   - stable
 env:
-  - DAVE_VERSION=0.1.0
-before_install:
-  - wget -q -O- https://github.com/aa8y/dave/archive/v"$DAVE_VERSION".tar.gz | tar -xvz
+  - DAVE_VERSION=0.1.1
 install:
-  - npm install -g dave-"$DAVE_VERSION"
+  - npm install -g dave@"$DAVE_VERSION"
 before_script:
   - dave build
 script:
