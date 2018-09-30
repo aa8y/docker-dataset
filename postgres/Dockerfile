@@ -5,8 +5,8 @@ MAINTAINER Arun Allamsetty <arun.allamsetty@gmail.com>
 ARG DATASETS=dellstore,iso3166,pagila,sportsdb,usda,world
 ARG PG_USER=postgres
 ARG PG_HOME=/home/$PG_USER
-ENV POSTGRES_USER docker
-ENV POSTGRES_PASSWORD docker
+ENV POSTGRES_USER postgres
+ENV POSTGRES_PASSWORD postgres
 # Don't override this value. Do not use this value for `POSTGRES_USER`. We're making this change to
 # to make sure the default database created by the `postgres` base image does not interfere with
 # our database creation while populating data.
