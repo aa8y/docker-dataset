@@ -5,7 +5,7 @@ language: node_js
 node_js:
   - stable
 env:
-  - DAVE_VERSION=0.1.1
+  - DAVE_VERSION=0.2.1
 install:
   - npm install -g dave@"$DAVE_VERSION"
 before_script:

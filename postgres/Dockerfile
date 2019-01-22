@@ -1,8 +1,8 @@
-FROM postgres:alpine
+FROM postgres:11-alpine
 
 MAINTAINER Arun Allamsetty <arun.allamsetty@gmail.com>
 
-ARG DATASETS=dellstore,iso3166,pagila,sportsdb,usda,world
+ARG DATASETS=dellstore,iso3166,sportsdb,usda,world
 ARG PG_USER=postgres
 ARG PG_HOME=/home/$PG_USER
 ENV POSTGRES_USER postgres
@@ -33,7 +33,6 @@ RUN apk add --update \
     declare -A SQL=( \
       [dellstore]="(dellstore2-normal-1.0/dellstore2-normal-1.0.sql)" \
       [iso3166]="(iso-3166/iso-3166.sql)" \
-      [pagila]="(pagila/pagila-schema.sql pagila/pagila-insert-data.sql)" \
       [sportsdb]="(sportsdb_sample_postgresql_20080304.sql)" \
       [usda]="(usda-r18-1.0/usda.sql)" \
       [world]="(dbsamples-0.1/world/world.sql)" \
@@ -41,7 +40,6 @@ RUN apk add --update \
     declare -A URL=( \
       [dellstore]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz \
       [iso3166]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz \
-      [pagila]=https://github.com/devrimgunduz/pagila.git \
       [sportsdb]=http://www.sportsdb.org/modules/sd/assets/downloads/sportsdb_sample_postgresql.zip \
       [usda]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz \
       [world]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz \

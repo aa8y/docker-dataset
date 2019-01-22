@@ -7,7 +7,7 @@ Have you ever wanted to access pre-populated databases with dummy but valid data
 ## Datasets
 
 So far we have the following datasets which are being used in the images.
-* [Postgres Sample Databases](https://wiki.postgresql.org/wiki/Sample_Databases): The datasets being used from here are `dellstore2` (tagged `dellstore`), `iso3166`,  `pagila`, `sportsdb`, `usda` and `world`. `pagila` is not being used from the pgFoundry source because it doesn't directly work with the newer version of PostgreSQL we're using. So we're using [this modified version](https://github.com/devrimgunduz/pagila) which seems okay other than the fact that the maintainer changes the dates in the data every year to reflect the new year. I don't care enough about it as of now, but that might change in the future. pgFoundry has been down for a few days now. Therefore we have switched the URLs to their FTP sources [here](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/).
+* [Postgres Sample Databases](https://wiki.postgresql.org/wiki/Sample_Databases): The datasets being used from here are `dellstore2` (tagged `dellstore`), `iso3166`,  `sportsdb`, `usda` and `world`. pgFoundry has been down for a few days now. Therefore we have switched the URLs to their FTP sources [here](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/).
 
 ## Databases
 
@@ -15,7 +15,11 @@ The only database supported so far is [PostgreSQL](https://www.postgresql.org/).
 
 ## Tags
 
-Available tags are `dellstore`, `iso3166`,  `pagila`, `sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets.
+Available tags are `dellstore`, `iso3166`,  `sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets.
+
+### `pagila` has been removed
+
+The `pagila` tag has been removed due to the fact that it was broken for a while and it also broke the `all` and `latest` tags. This is because the Pagila dataset we were using had a change which was not compatible with any version of Postgres (See [#1](https://github.com/aa8y/docker-dataset/issues/1) and [this issue](https://github.com/devrimgunduz/pagila/issues/6) for context.
 
 ## Usage
 

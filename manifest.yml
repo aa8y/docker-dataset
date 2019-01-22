@@ -7,17 +7,19 @@ contexts:
   postgres:
     templates:
       test: >
-        docker run --name ds-pg-{{tag}} -d --rm -it {{{repository}}}:{{tag}} && 
-        docker stop ds-pg-{{tag}}
+        docker run -d --name pg-ds-{{tag}} {{{repository}}}:{{tag}} &&
+        sleep 10 &&
+        docker exec pg-ds-{{tag}} psql -l &&
+        docker stop pg-ds-{{tag}} &&
+        docker rm pg-ds-{{tag}}
     tagKeys: datasets
     tags:
       dellstore:
       iso3166:
-      pagila:
       sportsdb:
       usda:
       world:
       all:
-        datasets: dellstore,iso3166,pagila,sportsdb,usda,world
+        datasets: dellstore,iso3166,sportsdb,usda,world
       latest:
-        datasets: dellstore,iso3166,pagila,sportsdb,usda,world
+        datasets: dellstore,iso3166,sportsdb,usda,world
