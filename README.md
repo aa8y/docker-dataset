@@ -16,7 +16,9 @@ The only database supported so far is [PostgreSQL](https://www.postgresql.org/).
 
 ## Tags
 
-Available tags are `dellstore`, `iso3166`,  `sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets. All tags are published for `linux/amd64` and `linux/arm64`.
+Available tags are `dellstore`, `iso3166`, `sportsdb`, `yugabyte-sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets. All tags are published for `linux/amd64` and `linux/arm64`.
+
+`sportsdb` and `yugabyte-sportsdb` are currently the same image — the only mirror we ship is Yugabyte's. The mirror-explicit `yugabyte-sportsdb` tag exists so that if we add another sportsdb mirror later (e.g. a hypothetical `pgfoundry-sportsdb`), users can pin to the specific source they want while `sportsdb` continues to track whichever mirror is the current default.
 
 ### `pagila` has been removed
 
