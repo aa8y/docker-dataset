@@ -11,3 +11,15 @@ fileContentTests:
     expectedContents:
       - "CREATE DATABASE iso3166"
       - '\\c iso3166'
+
+  - name: "iso3166 declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "CREATE TABLE country[ (]"
+      - "CREATE TABLE subcountry[ (]"
+
+  - name: "iso3166 loads data into every table"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "COPY country[ (]"
+      - "COPY subcountry[ (]"

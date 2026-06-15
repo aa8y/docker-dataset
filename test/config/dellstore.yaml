@@ -1,8 +1,9 @@
 schemaVersion: "2.0.0"
 
-# The Dockerfile writes /docker-entrypoint-initdb.d/<dataset>.sql per dataset
-# requested via DATASETS; on container start postgres replays these to create
-# and populate the per-dataset database.
+# Static assertions on the per-dataset init script. We can't query a running
+# postgres here, so for each table we expect the dump to contain both a
+# CREATE TABLE (schema present) and a COPY block (dump shipped data, not just
+# schema). If pgFoundry's dump changes substantially, these will fail loudly.
 
 fileExistenceTests:
   - name: "dellstore init script exists"
@@ -15,3 +16,27 @@ fileContentTests:
     expectedContents:
       - "CREATE DATABASE dellstore"
       - '\\c dellstore'
+
+  - name: "dellstore declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "CREATE TABLE categories[ (]"
+      - "CREATE TABLE cust_hist[ (]"
+      - "CREATE TABLE customers[ (]"
+      - "CREATE TABLE inventory[ (]"
+      - "CREATE TABLE orderlines[ (]"
+      - "CREATE TABLE orders[ (]"
+      - "CREATE TABLE products[ (]"
+      - "CREATE TABLE reorder[ (]"
+
+  - name: "dellstore loads data into every table"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "COPY categories[ (]"
+      - "COPY cust_hist[ (]"
+      - "COPY customers[ (]"
+      - "COPY inventory[ (]"
+      - "COPY orderlines[ (]"
+      - "COPY orders[ (]"
+      - "COPY products[ (]"
+      - "COPY reorder[ (]"

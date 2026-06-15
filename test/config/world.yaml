@@ -11,3 +11,17 @@ fileContentTests:
     expectedContents:
       - "CREATE DATABASE world"
       - '\\c world'
+
+  - name: "world declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "CREATE TABLE city[ (]"
+      - "CREATE TABLE country[ (]"
+      - "CREATE TABLE countrylanguage[ (]"
+
+  - name: "world loads data into every table"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "COPY city[ (]"
+      - "COPY country[ (]"
+      - "COPY countrylanguage[ (]"
