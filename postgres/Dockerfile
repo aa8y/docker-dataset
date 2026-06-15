@@ -1,16 +1,22 @@
-FROM postgres:11-alpine
+FROM postgres:18-alpine
 
-MAINTAINER Arun Allamsetty <arun.allamsetty@gmail.com>
+LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
+      org.opencontainers.image.description="PostgreSQL images pre-populated with sample datasets for practice and testing." \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/aa8y/docker-dataset" \
+      org.opencontainers.image.title="aa8y/postgres-dataset" \
+      org.opencontainers.image.url="https://hub.docker.com/r/aa8y/postgres-dataset" \
+      org.opencontainers.image.vendor="https://github.com/aa8y"
 
 ARG DATASETS=dellstore,iso3166,sportsdb,usda,world
 ARG PG_USER=postgres
 ARG PG_HOME=/home/$PG_USER
-ENV POSTGRES_USER postgres
-ENV POSTGRES_PASSWORD postgres
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=postgres
 # Don't override this value. Do not use this value for `POSTGRES_USER`. We're making this change to
 # to make sure the default database created by the `postgres` base image does not interfere with
 # our database creation while populating data.
-ENV POSTGRES_DB donotuse
+ENV POSTGRES_DB=donotuse
 
 # Enable psql history.
 RUN mkdir -p $PG_HOME && \
