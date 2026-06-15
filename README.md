@@ -7,7 +7,8 @@ Have you ever wanted to access pre-populated databases with dummy but valid data
 ## Datasets
 
 So far we have the following datasets which are being used in the images.
-* [Postgres Sample Databases](https://wiki.postgresql.org/wiki/Sample_Databases): The datasets being used from here are `dellstore2` (tagged `dellstore`), `iso3166`,  `sportsdb`, `usda` and `world`. pgFoundry has been down for a few days now. Therefore we have switched the URLs to their FTP sources [here](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/).
+* [Postgres Sample Databases](https://wiki.postgresql.org/wiki/Sample_Databases): The datasets being used from here are `dellstore2` (tagged `dellstore`), `iso3166`, `usda` and `world`, all sourced from PostgreSQL's FTP mirror of [pgFoundry dbsamples](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/).
+* `sportsdb`: the original `www.sportsdb.org` download is no longer available, so we use the mirror Yugabyte ships in [its sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample). This mirror defines all 107 sportsdb tables but only populates data for the generic infrastructure tables (events, persons, teams, seasons, etc.) plus american football, baseball, basketball, and ice hockey stats. Motor racing, soccer, tennis, wagering, and weather tables are schema-only.
 
 ## Databases
 

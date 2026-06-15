@@ -1,5 +1,15 @@
 schemaVersion: "2.0.0"
 
+# The Yugabyte sportsdb mirror ships 107 tables but only populates a subset:
+# generic infrastructure (events, persons, teams, seasons, publishers,
+# affiliations, positions) plus stats for american football, baseball,
+# basketball, and ice hockey. Motor racing, soccer, tennis, wagering, and
+# weather tables are schema-only in this mirror.
+#
+# Tests below spot-check tables that genuinely have both schema AND data, so
+# "non-empty" stays accurate. Bulk data uses INSERT INTO (the Yugabyte dump
+# uses INSERTs instead of COPY blocks).
+
 fileExistenceTests:
   - name: "sportsdb init script exists"
     path: "/docker-entrypoint-initdb.d/sportsdb.sql"
@@ -11,3 +21,33 @@ fileContentTests:
     expectedContents:
       - "CREATE DATABASE sportsdb"
       - '\\c sportsdb'
+
+  - name: "sportsdb declares representative tables across sports"
+    path: "/docker-entrypoint-initdb.d/sportsdb.sql"
+    expectedContents:
+      - "CREATE TABLE affiliations[ (]"
+      - "CREATE TABLE events[ (]"
+      - "CREATE TABLE persons[ (]"
+      - "CREATE TABLE positions[ (]"
+      - "CREATE TABLE publishers[ (]"
+      - "CREATE TABLE seasons[ (]"
+      - "CREATE TABLE teams[ (]"
+      - "CREATE TABLE american_football_passing_stats[ (]"
+      - "CREATE TABLE baseball_pitching_stats[ (]"
+      - "CREATE TABLE basketball_offensive_stats[ (]"
+      - "CREATE TABLE ice_hockey_player_stats[ (]"
+
+  - name: "sportsdb loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/sportsdb.sql"
+    expectedContents:
+      - "INSERT INTO affiliations[ (]"
+      - "INSERT INTO events[ (]"
+      - "INSERT INTO persons[ (]"
+      - "INSERT INTO positions[ (]"
+      - "INSERT INTO publishers[ (]"
+      - "INSERT INTO seasons[ (]"
+      - "INSERT INTO teams[ (]"
+      - "INSERT INTO american_football_passing_stats[ (]"
+      - "INSERT INTO baseball_pitching_stats[ (]"
+      - "INSERT INTO basketball_offensive_stats[ (]"
+      - "INSERT INTO ice_hockey_player_stats[ (]"

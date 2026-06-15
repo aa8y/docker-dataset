@@ -26,7 +26,9 @@ RUN mkdir -p $PG_HOME && \
 WORKDIR /tmp
 # Data Sources.
 # PG Foundry: http://pgfoundry.org/frs/?group_id=1000150
-# SportsDB:   http://www.sportsdb.org/sd/samples
+# SportsDB:   https://github.com/yugabyte/yugabyte-db/tree/master/sample
+#             (Yugabyte's mirror of the original SportsDB sample; the
+#             upstream www.sportsdb.org download is no longer available.)
 #
 # `export` does not persist across images. So we need to make the conditional statements part of
 # this layer.
@@ -39,14 +41,14 @@ RUN apk add --update \
     declare -A SQL=( \
       [dellstore]="(dellstore2-normal-1.0/dellstore2-normal-1.0.sql)" \
       [iso3166]="(iso-3166/iso-3166.sql)" \
-      [sportsdb]="(sportsdb_sample_postgresql_20080304.sql)" \
+      [sportsdb]="(sportsdb_tables.sql sportsdb_inserts.sql sportsdb_indexes.sql sportsdb_constraints.sql sportsdb_fks.sql)" \
       [usda]="(usda-r18-1.0/usda.sql)" \
       [world]="(dbsamples-0.1/world/world.sql)" \
     ) && \
     declare -A URL=( \
       [dellstore]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz \
       [iso3166]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz \
-      [sportsdb]=http://www.sportsdb.org/modules/sd/assets/downloads/sportsdb_sample_postgresql.zip \
+      [sportsdb]="https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_indexes.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_constraints.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_fks.sql" \
       [usda]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz \
       [world]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz \
     ) && \
@@ -63,6 +65,8 @@ RUN apk add --update \
           rm tmp.zip; \
         elif [[ $DATASET_URL == *.git ]]; then \
           git clone $DATASET_URL; \
+        elif [[ $DATASET_URL == *.sql* ]]; then \
+          for u in $DATASET_URL; do wget -q "$u"; done; \
         fi && \
         echo "CREATE DATABASE $DATASET;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
         echo "\c $DATASET;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
