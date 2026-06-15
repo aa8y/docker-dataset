@@ -1,0 +1,13 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "world init script exists"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "world init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "CREATE DATABASE world"
+      - '\\c world'

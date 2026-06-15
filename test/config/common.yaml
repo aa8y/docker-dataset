@@ -1,0 +1,23 @@
+schemaVersion: "2.0.0"
+
+# Shared assertions for every aa8y/postgres-dataset tag: the Postgres env
+# wiring set by the Dockerfile and the init-script directory provided by the
+# upstream postgres image.
+
+metadataTest:
+  envVars:
+    - key: POSTGRES_USER
+      value: postgres
+    - key: POSTGRES_PASSWORD
+      value: postgres
+    - key: POSTGRES_DB
+      value: donotuse
+
+fileExistenceTests:
+  - name: "docker-entrypoint-initdb.d exists"
+    path: "/docker-entrypoint-initdb.d"
+    shouldExist: true
+
+  - name: "psql history file exists"
+    path: "/home/postgres/.psql_history"
+    shouldExist: true

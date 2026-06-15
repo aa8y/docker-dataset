@@ -1,0 +1,13 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "iso3166 init script exists"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "iso3166 init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "CREATE DATABASE iso3166"
+      - '\\c iso3166'

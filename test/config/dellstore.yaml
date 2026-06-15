@@ -1,0 +1,17 @@
+schemaVersion: "2.0.0"
+
+# The Dockerfile writes /docker-entrypoint-initdb.d/<dataset>.sql per dataset
+# requested via DATASETS; on container start postgres replays these to create
+# and populate the per-dataset database.
+
+fileExistenceTests:
+  - name: "dellstore init script exists"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "dellstore init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "CREATE DATABASE dellstore"
+      - '\\c dellstore'
