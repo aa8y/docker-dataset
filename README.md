@@ -15,7 +15,7 @@ The only database supported so far is [PostgreSQL](https://www.postgresql.org/).
 
 ## Tags
 
-Available tags are `dellstore`, `iso3166`,  `sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets.
+Available tags are `dellstore`, `iso3166`,  `sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets. All tags are published for `linux/amd64` and `linux/arm64`.
 
 ### `pagila` has been removed
 
@@ -40,6 +40,24 @@ If you want to build a custom image with not one or all the datasets, but some, 
 docker build -t aa8y/postgres-dataset:some --build-arg DATASETS=dellstore,world .
 ```
 and then following the same [aforementioned](#usage) steps for using your custom image.
+
+## Testing
+
+Image tests are defined as [container-structure-test][cst] configs under
+`test/config/` — a shared `common.yaml` plus one file per dataset. The configs
+to apply per tag are declared in `manifest.yml` under `structureTest:` and run
+natively by `dave structure-test`:
+
+```sh
+brew install container-structure-test     # one-time
+
+dave build
+dave structure-test
+```
+
+CI runs the same commands; see `.github/workflows/ci.yml`.
+
+[cst]: https://github.com/GoogleContainerTools/container-structure-test
 
 ## Future Work
 

@@ -1,25 +1,51 @@
 parameters:
   repository: aa8y/postgres-dataset
+  platforms: linux/amd64,linux/arm64
 templates:
-  build: docker build -t {{{repository}}}:{{tag}} --build-arg DATASETS={{datasets}} {{context}}
-  push: docker push {{{repository}}}:{{tag}}
+  build: docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"} --build-arg DATASETS={{datasets}} -t {{{repository}}}:{{tag}} {{{context}}}
+  push: docker buildx build --push --platform {{{platforms}}} --build-arg DATASETS={{datasets}} -t {{{repository}}}:{{tag}} {{{context}}}
+structureTest:
+  configs:
+    - test/config/common.yaml
 contexts:
   postgres:
-    templates:
-      test: >
-        docker run -d --name pg-ds-{{tag}} {{{repository}}}:{{tag}} &&
-        sleep 10 &&
-        docker exec pg-ds-{{tag}} psql -l &&
-        docker stop pg-ds-{{tag}} &&
-        docker rm pg-ds-{{tag}}
     tagKeys: datasets
     tags:
       dellstore:
+        structureTest:
+          configs:
+            - test/config/dellstore.yaml
       iso3166:
+        structureTest:
+          configs:
+            - test/config/iso3166.yaml
       sportsdb:
+        structureTest:
+          configs:
+            - test/config/sportsdb.yaml
       usda:
+        structureTest:
+          configs:
+            - test/config/usda.yaml
       world:
+        structureTest:
+          configs:
+            - test/config/world.yaml
       all:
         datasets: dellstore,iso3166,sportsdb,usda,world
+        structureTest:
+          configs:
+            - test/config/dellstore.yaml
+            - test/config/iso3166.yaml
+            - test/config/sportsdb.yaml
+            - test/config/usda.yaml
+            - test/config/world.yaml
       latest:
         datasets: dellstore,iso3166,sportsdb,usda,world
+        structureTest:
+          configs:
+            - test/config/dellstore.yaml
+            - test/config/iso3166.yaml
+            - test/config/sportsdb.yaml
+            - test/config/usda.yaml
+            - test/config/world.yaml
