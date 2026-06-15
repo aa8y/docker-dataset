@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+
+env:
+  CST_VERSION: 1.22.1
+  DAVE_VERSION: 0.4.0
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+            cst_arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            cst_arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install dave
+        run: npm install -g dave@"$DAVE_VERSION"
+
+      - name: Install container-structure-test
+        run: |
+          curl -fsSL -o /tmp/cst \
+            "https://github.com/GoogleContainerTools/container-structure-test/releases/download/v${CST_VERSION}/container-structure-test-linux-${{ matrix.cst_arch }}"
+          chmod +x /tmp/cst
+          sudo mv /tmp/cst /usr/local/bin/container-structure-test
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build images
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: dave build
+
+      - name: Test images
+        run: dave structure-test
+
+  push:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install dave
+        run: npm install -g dave@"$DAVE_VERSION"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push images (multi-arch)
+        run: dave push
