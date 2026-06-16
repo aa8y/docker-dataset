@@ -15,6 +15,10 @@ contexts:
         structureTest:
           configs:
             - test/config/dellstore.yaml
+      frenchtowns:
+        structureTest:
+          configs:
+            - test/config/frenchtowns.yaml
       iso3166:
         structureTest:
           configs:
@@ -37,19 +41,21 @@ contexts:
           configs:
             - test/config/world.yaml
       all:
-        datasets: dellstore,iso3166,sportsdb,usda,world
+        datasets: dellstore,frenchtowns,iso3166,sportsdb,usda,world
         structureTest:
           configs:
             - test/config/dellstore.yaml
+            - test/config/frenchtowns.yaml
             - test/config/iso3166.yaml
             - test/config/yugabyte-sportsdb.yaml
             - test/config/usda.yaml
             - test/config/world.yaml
       latest:
-        datasets: dellstore,iso3166,sportsdb,usda,world
+        datasets: dellstore,frenchtowns,iso3166,sportsdb,usda,world
         structureTest:
           configs:
             - test/config/dellstore.yaml
+            - test/config/frenchtowns.yaml
             - test/config/iso3166.yaml
             - test/config/yugabyte-sportsdb.yaml
             - test/config/usda.yaml

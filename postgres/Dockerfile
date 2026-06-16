@@ -8,7 +8,7 @@ LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
       org.opencontainers.image.url="https://hub.docker.com/r/aa8y/postgres-dataset" \
       org.opencontainers.image.vendor="https://github.com/aa8y"
 
-ARG DATASETS=dellstore,iso3166,sportsdb,usda,world
+ARG DATASETS=dellstore,frenchtowns,iso3166,sportsdb,usda,world
 ARG PG_USER=postgres
 ARG PG_HOME=/home/$PG_USER
 ENV POSTGRES_USER=postgres
@@ -40,6 +40,7 @@ RUN apk add --update \
     bash -c ' \
     declare -A SQL=( \
       [dellstore]="(dellstore2-normal-1.0/dellstore2-normal-1.0.sql)" \
+      [frenchtowns]="(french-towns-communes-francaises.sql)" \
       [iso3166]="(iso-3166/iso-3166.sql)" \
       [sportsdb]="(sportsdb_tables.sql sportsdb_inserts.sql sportsdb_indexes.sql sportsdb_constraints.sql sportsdb_fks.sql)" \
       [usda]="(usda-r18-1.0/usda.sql)" \
@@ -47,6 +48,7 @@ RUN apk add --update \
     ) && \
     declare -A URL=( \
       [dellstore]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz \
+      [frenchtowns]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz \
       [iso3166]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz \
       [sportsdb]="https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_indexes.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_constraints.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_fks.sql" \
       [usda]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz \
