@@ -1,0 +1,62 @@
+schemaVersion: "2.0.0"
+
+# AdventureWorks ships CSV data files alongside the init script so the
+# upstream `\copy` directives (which use './X.csv' paths) resolve at psql
+# runtime. Verify the wrapper SQL plus representative tables across the
+# five schemas and a sampling of CSVs.
+
+fileExistenceTests:
+  - name: "adventureworks init script exists"
+    path: "/docker-entrypoint-initdb.d/adventureworks.sql"
+    shouldExist: true
+
+  - name: "adventureworks CSV data directory exists"
+    path: "/docker-entrypoint-initdb.d/adventureworks"
+    shouldExist: true
+
+  - name: "adventureworks Person CSV exists"
+    path: "/docker-entrypoint-initdb.d/adventureworks/Person.csv"
+    shouldExist: true
+
+  - name: "adventureworks Product CSV exists"
+    path: "/docker-entrypoint-initdb.d/adventureworks/Product.csv"
+    shouldExist: true
+
+  - name: "adventureworks SalesOrderDetail CSV exists"
+    path: "/docker-entrypoint-initdb.d/adventureworks/SalesOrderDetail.csv"
+    shouldExist: true
+
+fileContentTests:
+  - name: "adventureworks init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/adventureworks.sql"
+    expectedContents:
+      - "CREATE DATABASE adventureworks"
+      - '\\c adventureworks'
+      - '\\cd /docker-entrypoint-initdb.d/adventureworks'
+
+  - name: "adventureworks declares all five schemas"
+    path: "/docker-entrypoint-initdb.d/adventureworks.sql"
+    expectedContents:
+      - "CREATE SCHEMA Person"
+      - "CREATE SCHEMA HumanResources"
+      - "CREATE SCHEMA Production"
+      - "CREATE SCHEMA Purchasing"
+      - "CREATE SCHEMA Sales"
+
+  - name: "adventureworks declares representative tables"
+    path: "/docker-entrypoint-initdb.d/adventureworks.sql"
+    expectedContents:
+      - "CREATE TABLE Person[ (]"
+      - "CREATE TABLE Employee[ (]"
+      - "CREATE TABLE Product[ (]"
+      - "CREATE TABLE Customer[ (]"
+      - "CREATE TABLE SalesOrderHeader[ (]"
+
+  - name: "adventureworks loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/adventureworks.sql"
+    expectedContents:
+      - '\\copy Person.Person FROM'
+      - '\\copy HumanResources.Employee FROM'
+      - '\\copy Production.Product FROM'
+      - '\\copy Sales.Customer FROM'
+      - '\\copy Sales.SalesOrderHeader FROM'

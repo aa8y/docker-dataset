@@ -8,7 +8,7 @@ LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
       org.opencontainers.image.url="https://hub.docker.com/r/aa8y/postgres-dataset" \
       org.opencontainers.image.vendor="https://github.com/aa8y"
 
-ARG DATASETS=dellstore,frenchtowns,iso3166,omdb,sportsdb,usda,world
+ARG DATASETS=adventureworks,dellstore,frenchtowns,iso3166,omdb,sportsdb,usda,world
 ARG PG_USER=postgres
 ARG PG_HOME=/home/$PG_USER
 ENV POSTGRES_USER=postgres
@@ -24,6 +24,8 @@ RUN mkdir -p $PG_HOME && \
     chown -R $PG_USER:$PG_USER $PG_HOME
 
 WORKDIR /tmp
+COPY preprocess-adventureworks.rb /usr/local/lib/preprocess-adventureworks.rb
+
 # Data Sources.
 # PG Foundry: http://pgfoundry.org/frs/?group_id=1000150
 # SportsDB:   https://github.com/yugabyte/yugabyte-db/tree/master/sample
@@ -32,6 +34,11 @@ WORKDIR /tmp
 # OMDB:       https://github.com/df7cb/omdb-postgresql
 #             (CSV data is fetched from www.omdb.org at build time and
 #             shipped alongside the init script so psql \copy resolves it.)
+# AdventureWorks:
+#             https://github.com/lorint/AdventureWorks-for-Postgres
+#             (CSVs come from Microsoft's AdventureWorks 2014 OLTP zip,
+#             reformatted via the upstream Ruby script, and shipped next
+#             to the init script.)
 #
 # `export` does not persist across images. So we need to make the conditional statements part of
 # this layer.
@@ -40,9 +47,12 @@ RUN apk add --update \
       bzip2 \
       ca-certificates \
       git \
+      ruby \
+      unzip \
       wget && \
     bash -c ' \
     declare -A SQL=( \
+      [adventureworks]="(AdventureWorks-for-Postgres/install.sql)" \
       [dellstore]="(dellstore2-normal-1.0/dellstore2-normal-1.0.sql)" \
       [frenchtowns]="(french-towns-communes-francaises.sql)" \
       [iso3166]="(iso-3166/iso-3166.sql)" \
@@ -52,6 +62,7 @@ RUN apk add --update \
       [world]="(dbsamples-0.1/world/world.sql)" \
     ) && \
     declare -A URL=( \
+      [adventureworks]=https://github.com/lorint/AdventureWorks-for-Postgres.git \
       [dellstore]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz \
       [frenchtowns]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz \
       [iso3166]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz \
@@ -79,6 +90,14 @@ RUN apk add --update \
               bunzip2 --force www.omdb.org/data/*.bz2 && \
               mkdir -p /docker-entrypoint-initdb.d/www.omdb.org && \
               mv www.omdb.org/data /docker-entrypoint-initdb.d/www.omdb.org/data); \
+          elif [[ "$DATASET" == "adventureworks" ]]; then \
+            (cd AdventureWorks-for-Postgres && \
+              wget -q -O ms.zip https://github.com/Microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorks-oltp-install-script.zip && \
+              unzip -q -o ms.zip && \
+              rm ms.zip && \
+              ruby /usr/local/lib/preprocess-adventureworks.rb && \
+              mkdir -p /docker-entrypoint-initdb.d/adventureworks && \
+              mv *.csv /docker-entrypoint-initdb.d/adventureworks/); \
           fi; \
         elif [[ $DATASET_URL == *.sql* ]]; then \
           for u in $DATASET_URL; do wget -q "$u"; done; \
@@ -88,6 +107,8 @@ RUN apk add --update \
         if [[ "$DATASET" == "omdb" ]]; then \
           echo "CREATE EXTENSION IF NOT EXISTS tsm_system_rows;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
           echo "\cd /docker-entrypoint-initdb.d" >> "/docker-entrypoint-initdb.d/${DATASET}.sql"; \
+        elif [[ "$DATASET" == "adventureworks" ]]; then \
+          echo "\cd /docker-entrypoint-initdb.d/adventureworks" >> "/docker-entrypoint-initdb.d/${DATASET}.sql"; \
         fi && \
         for i in "${!DATASET_SQL[@]}"; do \
           cat "${DATASET_SQL[i]}" >> "/docker-entrypoint-initdb.d/${DATASET}.sql"; \
@@ -100,8 +121,10 @@ RUN apk add --update \
       bzip2 \
       ca-certificates \
       git \
+      ruby \
+      unzip \
       wget && \
-    rm -rf /var/cache/apk/*
+    rm -rf /var/cache/apk/* /usr/local/lib/preprocess-adventureworks.rb
 
 USER $PG_USER
 WORKDIR $PG_HOME

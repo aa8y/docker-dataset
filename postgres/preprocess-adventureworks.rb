@@ -1,0 +1,73 @@
+#!/usr/bin/env ruby
+# Reformat the AdventureWorks 2014 OLTP CSV bundle into the layout that
+# AdventureWorks-for-Postgres/install.sql expects (tab-delimited rows
+# with CSV-quoted fields).
+#
+# Microsoft's current bundle ships in two flavors:
+#
+# 1) Pipe format (Person.csv, BusinessEntity.csv, Document.csv, ...).
+#    Fields are separated by `+|`, records by `&|`, with embedded XML
+#    that spans multiple lines and may contain literal double quotes.
+#    Some columns use a literal NUL byte as a NULL placeholder. The
+#    upstream update_csvs.rb expects UTF-16LE with a BOM and is a no-op
+#    on these — so we reimplement the transform here.
+#
+# 2) Tab-delimited (ProductDescription.csv, ProductReview.csv, ...).
+#    Mostly load directly, but a handful contain unescaped double
+#    quotes (e.g. inch marks like `2"`) that fail the upstream
+#    `\copy ... CSV` because they look like CSV opening quotes. The
+#    ProductReview rows additionally span multiple physical lines.
+#
+# Per-file column counts for multi-line tab records (CREATE TABLE in
+# AdventureWorks-for-Postgres/install.sql).
+MULTILINE_TAB_COLS = { 'ProductReview' => 8 }
+
+def csv_escape(field)
+  field.match?(/[\t\r\n"]/) ? %Q("#{field.gsub('"', '""')}") : field
+end
+
+Dir.glob('./*.csv') do |csv_file|
+  content = File.read(csv_file, encoding: 'UTF-8')
+  basename = File.basename(csv_file, '.csv')
+
+  if content.lines.first&.include?('+|')
+    # Pipe format: strip NUL bytes, assemble records by accumulating
+    # lines until one ends in `&|`, split on `+|`, escape, emit.
+    content = content.delete("\x00")
+    records = []
+    buf = String.new
+    content.each_line do |line|
+      buf << line
+      next unless buf.rstrip.end_with?('&|')
+      rec = buf.rstrip.sub(/&\|\z/, '')
+      records << rec.split('+|', -1).map { |f| csv_escape(f) }.join("\t")
+      buf = String.new
+    end
+    output = records.join("\n")
+    output += "\n" unless records.empty?
+    File.write(csv_file, output, encoding: 'UTF-8')
+  elsif (expected = MULTILINE_TAB_COLS[basename])
+    # Tab format with embedded newlines: accumulate lines until the
+    # buffered tab count matches one full record, then re-quote.
+    records = []
+    buf = String.new
+    content.each_line do |line|
+      buf << line
+      next unless buf.count("\t") >= expected - 1
+      fields = buf.chomp.split("\t", -1)
+      records << fields.map { |f| csv_escape(f) }.join("\t")
+      buf = String.new
+    end
+    output = records.join("\n")
+    output += "\n" unless records.empty?
+    File.write(csv_file, output, encoding: 'UTF-8')
+  elsif content.include?('"')
+    # Tab format, single-line records, but at least one field has an
+    # unescaped double quote. Re-quote per row.
+    output = content.each_line.map do |line|
+      line.chomp.split("\t", -1).map { |f| csv_escape(f) }.join("\t")
+    end.join("\n")
+    output += "\n" unless content.empty?
+    File.write(csv_file, output, encoding: 'UTF-8')
+  end
+end
