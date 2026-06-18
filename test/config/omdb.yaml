@@ -1,0 +1,53 @@
+schemaVersion: "2.0.0"
+
+# OMDB ships CSV data files alongside the init script so the upstream
+# `\copy` directives resolve at psql runtime. Verify the wrapper SQL plus
+# representative tables from the normalized schema and a sampling of CSVs.
+
+fileExistenceTests:
+  - name: "omdb init script exists"
+    path: "/docker-entrypoint-initdb.d/omdb.sql"
+    shouldExist: true
+
+  - name: "omdb CSV data directory exists"
+    path: "/docker-entrypoint-initdb.d/www.omdb.org/data"
+    shouldExist: true
+
+  - name: "omdb all_movies CSV exists"
+    path: "/docker-entrypoint-initdb.d/www.omdb.org/data/all_movies.csv"
+    shouldExist: true
+
+  - name: "omdb all_people CSV exists"
+    path: "/docker-entrypoint-initdb.d/www.omdb.org/data/all_people.csv"
+    shouldExist: true
+
+  - name: "omdb all_casts CSV exists"
+    path: "/docker-entrypoint-initdb.d/www.omdb.org/data/all_casts.csv"
+    shouldExist: true
+
+fileContentTests:
+  - name: "omdb init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/omdb.sql"
+    expectedContents:
+      - "CREATE DATABASE omdb"
+      - '\\c omdb'
+      - "CREATE EXTENSION IF NOT EXISTS tsm_system_rows"
+      - '\\cd /docker-entrypoint-initdb.d'
+
+  - name: "omdb declares representative tables"
+    path: "/docker-entrypoint-initdb.d/omdb.sql"
+    expectedContents:
+      - "CREATE TABLE movies[ (]"
+      - "CREATE TABLE people[ (]"
+      - "CREATE TABLE casts[ (]"
+      - "CREATE TABLE categories[ (]"
+      - "CREATE TABLE trailers[ (]"
+
+  - name: "omdb loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/omdb.sql"
+    expectedContents:
+      - '\\copy all_movies'
+      - '\\copy people '
+      - '\\copy casts '
+      - '\\copy categories '
+      - '\\copy trailers '

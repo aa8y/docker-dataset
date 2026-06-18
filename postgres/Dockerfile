@@ -8,7 +8,7 @@ LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
       org.opencontainers.image.url="https://hub.docker.com/r/aa8y/postgres-dataset" \
       org.opencontainers.image.vendor="https://github.com/aa8y"
 
-ARG DATASETS=dellstore,frenchtowns,iso3166,sportsdb,usda,world
+ARG DATASETS=dellstore,frenchtowns,iso3166,omdb,sportsdb,usda,world
 ARG PG_USER=postgres
 ARG PG_HOME=/home/$PG_USER
 ENV POSTGRES_USER=postgres
@@ -29,11 +29,15 @@ WORKDIR /tmp
 # SportsDB:   https://github.com/yugabyte/yugabyte-db/tree/master/sample
 #             (Yugabyte's mirror of the original SportsDB sample; the
 #             upstream www.sportsdb.org download is no longer available.)
+# OMDB:       https://github.com/df7cb/omdb-postgresql
+#             (CSV data is fetched from www.omdb.org at build time and
+#             shipped alongside the init script so psql \copy resolves it.)
 #
 # `export` does not persist across images. So we need to make the conditional statements part of
 # this layer.
 RUN apk add --update \
       bash \
+      bzip2 \
       ca-certificates \
       git \
       wget && \
@@ -42,6 +46,7 @@ RUN apk add --update \
       [dellstore]="(dellstore2-normal-1.0/dellstore2-normal-1.0.sql)" \
       [frenchtowns]="(french-towns-communes-francaises.sql)" \
       [iso3166]="(iso-3166/iso-3166.sql)" \
+      [omdb]="(omdb-postgresql/00-drop-tables.sql omdb-postgresql/12-kind.sql omdb-postgresql/13-schema.sql omdb-postgresql/20-import.sql omdb-postgresql/30-duplicates.sql omdb-postgresql/31-primary-keys.sql omdb-postgresql/40-clean-orphans.sql omdb-postgresql/41-foreign-keys.sql omdb-postgresql/50-views.sql omdb-postgresql/52-category-en.sql omdb-postgresql/55-purge_dirty.sql omdb-postgresql/60-log.sql)" \
       [sportsdb]="(sportsdb_tables.sql sportsdb_inserts.sql sportsdb_indexes.sql sportsdb_constraints.sql sportsdb_fks.sql)" \
       [usda]="(usda-r18-1.0/usda.sql)" \
       [world]="(dbsamples-0.1/world/world.sql)" \
@@ -50,6 +55,7 @@ RUN apk add --update \
       [dellstore]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz \
       [frenchtowns]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz \
       [iso3166]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz \
+      [omdb]=https://github.com/df7cb/omdb-postgresql.git \
       [sportsdb]="https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_indexes.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_constraints.sql https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_fks.sql" \
       [usda]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz \
       [world]=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz \
@@ -67,11 +73,22 @@ RUN apk add --update \
           rm tmp.zip; \
         elif [[ $DATASET_URL == *.git ]]; then \
           git clone $DATASET_URL; \
+          if [[ "$DATASET" == "omdb" ]]; then \
+            (cd omdb-postgresql && \
+              ./download && \
+              bunzip2 --force www.omdb.org/data/*.bz2 && \
+              mkdir -p /docker-entrypoint-initdb.d/www.omdb.org && \
+              mv www.omdb.org/data /docker-entrypoint-initdb.d/www.omdb.org/data); \
+          fi; \
         elif [[ $DATASET_URL == *.sql* ]]; then \
           for u in $DATASET_URL; do wget -q "$u"; done; \
         fi && \
         echo "CREATE DATABASE $DATASET;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
         echo "\c $DATASET;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
+        if [[ "$DATASET" == "omdb" ]]; then \
+          echo "CREATE EXTENSION IF NOT EXISTS tsm_system_rows;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
+          echo "\cd /docker-entrypoint-initdb.d" >> "/docker-entrypoint-initdb.d/${DATASET}.sql"; \
+        fi && \
         for i in "${!DATASET_SQL[@]}"; do \
           cat "${DATASET_SQL[i]}" >> "/docker-entrypoint-initdb.d/${DATASET}.sql"; \
         done && \
@@ -80,6 +97,7 @@ RUN apk add --update \
     done' && \
     apk del --purge \
       bash \
+      bzip2 \
       ca-certificates \
       git \
       wget && \

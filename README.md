@@ -9,6 +9,7 @@ Have you ever wanted to access pre-populated databases with dummy but valid data
 So far we have the following datasets which are being used in the images.
 * [Postgres Sample Databases](https://wiki.postgresql.org/wiki/Sample_Databases): The datasets being used from here are `dellstore2` (tagged `dellstore`), `french-towns-communes-francaises` (tagged `frenchtowns`), `iso3166`, `usda` and `world`, all sourced from PostgreSQL's FTP mirror of [pgFoundry dbsamples](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/).
 * `sportsdb`: the original `www.sportsdb.org` download is no longer available, so we use the mirror Yugabyte ships in [its sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample). This mirror defines all 107 sportsdb tables but only populates data for the generic infrastructure tables (events, persons, teams, seasons, etc.) plus american football, baseball, basketball, and ice hockey stats. Motor racing, soccer, tennis, wagering, and weather tables are schema-only.
+* `omdb`: the [Open Media Database](https://www.omdb.org/) film catalogue, packaged for Postgres at [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql). CSV data is fetched from `www.omdb.org` at build time and shipped inside the image so `\copy` resolves at container start. The init script also creates the `tsm_system_rows` extension that the upstream views rely on. Heads up: this dataset is much larger than the others (~150 MB of CSV + indexes), which makes the `omdb` and `all`/`latest` images noticeably heavier.
 
 ## Databases
 
@@ -16,7 +17,7 @@ The only database supported so far is [PostgreSQL](https://www.postgresql.org/).
 
 ## Tags
 
-Available tags are `dellstore`, `frenchtowns`, `iso3166`, `sportsdb`, `yugabyte-sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets. All tags are published for `linux/amd64` and `linux/arm64`.
+Available tags are `dellstore`, `frenchtowns`, `iso3166`, `omdb`, `sportsdb`, `yugabyte-sportsdb`, `usda`, `world`, `all` and `latest`. `all` and `latest` are the same image with all the datasets in one image. Each of them has been loaded into their own database in the image. The rest of the tags belong to images single datasets. All tags are published for `linux/amd64` and `linux/arm64`.
 
 `sportsdb` and `yugabyte-sportsdb` are currently the same image — the only mirror we ship is Yugabyte's. The mirror-explicit `yugabyte-sportsdb` tag exists so that if we add another sportsdb mirror later (e.g. a hypothetical `pgfoundry-sportsdb`), users can pin to the specific source they want while `sportsdb` continues to track whichever mirror is the current default.
 
