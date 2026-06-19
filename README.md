@@ -27,7 +27,10 @@ So far we have the following datasets which are being used in the images.
 
 ## Databases
 
-The only database supported so far is [PostgreSQL](https://www.postgresql.org/). We use the `alpine` version of the official image as the base image to keep our image slim.
+Two database engines are supported, each published as its own image repository:
+
+* [PostgreSQL](https://www.postgresql.org/) as [`aa8y/postgres-dataset`](https://hub.docker.com/r/aa8y/postgres-dataset). We use the `alpine` version of the official image as the base image to keep our image slim.
+* [MySQL](https://www.mysql.com/) as [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset). There is no official Alpine image for Oracle MySQL (the official `mysql` image is Oracle Linux / Debian based) and Alpine's own package repositories ship [MariaDB](https://mariadb.org/) in place of MySQL, so to keep the "thin, Alpine-based" goal we build on the community [`yobasystems/alpine-mariadb`](https://hub.docker.com/r/yobasystems/alpine-mariadb) image. MariaDB is the MySQL drop-in Alpine substitutes, and its entrypoint honours the same `MYSQL_*` env vars and `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image, so the dataset pattern carries over unchanged. See [MySQL images](#mysql-images) for the datasets and tags available.
 
 ## Tags
 
@@ -46,6 +49,27 @@ The multi-dataset `all` tag (and the all-datasets `latest`) is legacy: images ar
 ### `pagila` was removed and re-added
 
 `pagila` was [removed in 2019](https://github.com/aa8y/docker-dataset/issues/1) because the upstream source shipped a change that wouldn't load on any Postgres version, which back then also took down the combined `all`/`latest` images. Both causes are now gone: the [upstream fork](https://github.com/devrimgunduz/pagila) loads cleanly on modern Postgres (tested against 12+), and images are now one dataset each, so a single dataset can no longer break the others. It is therefore back as a regular tag.
+
+## MySQL images
+
+The MySQL images mirror the PostgreSQL ones: each [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset) image carries exactly one dataset, loaded into its own database, and is built through the same Extract -> Transform -> Load [Dockerfile](mysql/Dockerfile) driven by `manifest.yml`. The engine is MariaDB (see [Databases](#databases) for why); it is wire- and SQL-compatible with MySQL for these samples. Because each image is a single dataset, the build strips any database-level DDL the upstream dump ships (`CREATE`/`DROP DATABASE`/`SCHEMA`, `USE`) and loads everything into one database named after the dataset. All MySQL tags are published for `linux/amd64` and `linux/arm64`.
+
+Where a dataset has a MySQL-native source we use it directly; the canonical Sakila sample (tagged `sakila`) takes the place of PostgreSQL's `pagila`, which is itself a port of Sakila.
+
+Start a container and connect with the `mariadb` (MySQL-compatible) client:
+```
+docker run -d --name my-ds-<tag> aa8y/mysql-dataset:<tag>
+docker exec -it my-ds-<tag> mariadb -uroot -pmysql <db_name>
+```
+where `<tag>` is one of the MySQL tags below and `<db_name>` is the matching dataset name. The root password is `mysql`.
+
+### MySQL datasets
+
+_Datasets are listed here as they are ported._
+
+### MySQL tags
+
+_Tags are listed here as they are added._
 
 ## Usage
 

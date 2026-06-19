@@ -1,0 +1,19 @@
+schemaVersion: "2.0.0"
+
+# Shared assertions for every aa8y/mysql-dataset tag: the MySQL env wiring set
+# by the Dockerfile and the init-script directory the MariaDB entrypoint reads.
+# MYSQL_DATABASE is per-dataset, so we only assert it is set (the entrypoint
+# requires it to be non-empty to process /docker-entrypoint-initdb.d).
+
+metadataTest:
+  envVars:
+    - key: MYSQL_ROOT_PASSWORD
+      value: mysql
+    - key: MYSQL_DATABASE
+      value: ".+"
+      isRegex: true
+
+fileExistenceTests:
+  - name: "docker-entrypoint-initdb.d exists"
+    path: "/docker-entrypoint-initdb.d"
+    shouldExist: true

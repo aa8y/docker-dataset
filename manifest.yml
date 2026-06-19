@@ -26,12 +26,15 @@ templates:
     {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
     {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
     -t {{{repository}}}:{{tag}} {{{context}}}
-structureTest:
-  configs:
-    - test/config/common.yaml
 contexts:
   postgres:
     tagKeys: dataset
+    # Shared assertions for every postgres tag (the POSTGRES_* env wiring and
+    # init-script dir). Scoped to this context -- structureTest configs trickle
+    # down and concatenate, so a global block would wrongly apply to mysql too.
+    structureTest:
+      configs:
+        - test/config/common.yaml
     tags:
       airlines:
         extractUrl: https://edu.postgrespro.ru/demo-20250901-3m.sql.gz
@@ -212,3 +215,32 @@ contexts:
       latest:
         <<: *world
         dataset: world
+  # MySQL images. Built on a thin Alpine MariaDB base (there is no official
+  # Alpine MySQL image; MariaDB is the MySQL drop-in Alpine itself ships) and
+  # published under a separate repository. The build/test/push templates are
+  # the MySQL flavours (fewer build args than postgres; test runs the MySQL
+  # smoke-test script) and override the global postgres ones for this context.
+  mysql:
+    tagKeys: dataset
+    parameters:
+      repository: aa8y/mysql-dataset
+    structureTest:
+      configs:
+        - test/config/mysql/common.yaml
+    templates:
+      build: >
+        docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --build-arg DATASET={{dataset}}
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        --build-arg 'SQL_FILES={{{sqlFiles}}}'
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}} {{{context}}}
+      test: REPOSITORY={{{repository}}} bash test/integration/run-mysql.sh {{tag}} {{dataset}}
+      push: >
+        docker buildx build --push --platform {{{platforms}}}
+        --build-arg DATASET={{dataset}}
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        --build-arg 'SQL_FILES={{{sqlFiles}}}'
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}} {{{context}}}
+    tags: {}
