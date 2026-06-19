@@ -55,8 +55,8 @@ CONTAINER="my-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
 
 GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; RESET=$'\033[0m'
 info() { printf '%s\n' "$*" >&2; }
-pass() { printf '%s\u2713%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
-fail() { printf '%s\u2717%s %s\n' "$RED" "$RESET" "$*" >&2; }
+pass() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
+fail() { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; }
 
 cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT

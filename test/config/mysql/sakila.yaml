@@ -1,0 +1,62 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. We can't query a running
+# server here, so for each base table we expect the assembled script to contain
+# both a CREATE TABLE (schema present) and an INSERT INTO (data shipped). The
+# upstream sakila dump uses unquoted identifiers; the database-level DDL it
+# ships (DROP/CREATE SCHEMA, USE) is stripped by the build and replaced with the
+# CREATE DATABASE / USE header below. film_text is populated by an AFTER INSERT
+# trigger on film rather than a bulk INSERT, so it is asserted for schema only.
+
+fileExistenceTests:
+  - name: "sakila init script exists"
+    path: "/docker-entrypoint-initdb.d/sakila.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "sakila init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/sakila.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `sakila`"
+      - "USE `sakila`"
+
+  - name: "sakila declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/sakila.sql"
+    expectedContents:
+      - "CREATE TABLE actor[ (]"
+      - "CREATE TABLE address[ (]"
+      - "CREATE TABLE category[ (]"
+      - "CREATE TABLE city[ (]"
+      - "CREATE TABLE country[ (]"
+      - "CREATE TABLE customer[ (]"
+      - "CREATE TABLE film[ (]"
+      - "CREATE TABLE film_actor[ (]"
+      - "CREATE TABLE film_category[ (]"
+      - "CREATE TABLE film_text[ (]"
+      - "CREATE TABLE inventory[ (]"
+      - "CREATE TABLE language[ (]"
+      - "CREATE TABLE payment[ (]"
+      - "CREATE TABLE rental[ (]"
+      - "CREATE TABLE staff[ (]"
+      - "CREATE TABLE store[ (]"
+
+  - name: "sakila loads data into every (non-trigger-populated) table"
+    path: "/docker-entrypoint-initdb.d/sakila.sql"
+    # The dump quotes some table names with backticks and leaves others bare,
+    # so the optional backtick makes each pattern match either form.
+    expectedContents:
+      - "INSERT INTO `?actor`?[ (]"
+      - "INSERT INTO `?address`?[ (]"
+      - "INSERT INTO `?category`?[ (]"
+      - "INSERT INTO `?city`?[ (]"
+      - "INSERT INTO `?country`?[ (]"
+      - "INSERT INTO `?customer`?[ (]"
+      - "INSERT INTO `?film`?[ (]"
+      - "INSERT INTO `?film_actor`?[ (]"
+      - "INSERT INTO `?film_category`?[ (]"
+      - "INSERT INTO `?inventory`?[ (]"
+      - "INSERT INTO `?language`?[ (]"
+      - "INSERT INTO `?payment`?[ (]"
+      - "INSERT INTO `?rental`?[ (]"
+      - "INSERT INTO `?staff`?[ (]"
+      - "INSERT INTO `?store`?[ (]"

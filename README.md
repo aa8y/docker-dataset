@@ -65,11 +65,11 @@ where `<tag>` is one of the MySQL tags below and `<db_name>` is the matching dat
 
 ### MySQL datasets
 
-_Datasets are listed here as they are ported._
+* `sakila`: MySQL's own [Sakila sample database](https://dev.mysql.com/doc/sakila/en/) — the canonical "DVD rental store" model (films, actors, customers, inventory, rentals, and payments; 16 base tables in the `sakila` database). This is the original that PostgreSQL's `pagila` ports, so it stands in for `pagila` on MySQL. We source the official `sakila-db.tar.gz` (`sakila-schema.sql` + `sakila-data.sql`). Note: `film_text` is populated by an `AFTER INSERT` trigger on `film` rather than by bulk data, and unlike `pagila` the `payment` table is not partitioned.
 
 ### MySQL tags
 
-_Tags are listed here as they are added._
+Available MySQL tags are `sakila`. Each image carries exactly one dataset, loaded into a database of the same name.
 
 ## Usage
 

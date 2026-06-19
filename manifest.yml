@@ -243,4 +243,12 @@ contexts:
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
         -t {{{repository}}}:{{tag}} {{{context}}}
-    tags: {}
+    tags:
+      # Sakila is MySQL's own sample database (the original of the model pagila
+      # ports to Postgres). Ships schema + data as separate files in a tarball.
+      sakila:
+        extractUrl: https://downloads.mysql.com/docs/sakila-db.tar.gz
+        sqlFiles: sakila-db/sakila-schema.sql sakila-db/sakila-data.sql
+        structureTest:
+          configs:
+            - test/config/mysql/sakila.yaml

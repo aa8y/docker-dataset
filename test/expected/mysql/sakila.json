@@ -1,0 +1,18 @@
+{
+  "sakila.actor": 200,
+  "sakila.address": 603,
+  "sakila.category": 16,
+  "sakila.city": 600,
+  "sakila.country": 109,
+  "sakila.customer": 599,
+  "sakila.film": 1000,
+  "sakila.film_actor": 5462,
+  "sakila.film_category": 1000,
+  "sakila.film_text": 1000,
+  "sakila.inventory": 4581,
+  "sakila.language": 6,
+  "sakila.payment": 16044,
+  "sakila.rental": 16044,
+  "sakila.staff": 2,
+  "sakila.store": 2
+}
