@@ -1,0 +1,33 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. world is MySQL's canonical
+# three-table sample (city, country, countrylanguage), shipped as a mysqldump
+# with backtick-quoted identifiers. The dump's own database-level DDL (DROP/
+# CREATE DATABASE, USE) is stripped by the build and replaced with the header
+# below. The `latest` tag is the same image, so it is covered by this config.
+
+fileExistenceTests:
+  - name: "world init script exists"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "world init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `world`"
+      - "USE `world`"
+
+  - name: "world declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "CREATE TABLE `city`[ (]"
+      - "CREATE TABLE `country`[ (]"
+      - "CREATE TABLE `countrylanguage`[ (]"
+
+  - name: "world loads data into every table"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "INSERT INTO `city`[ (]"
+      - "INSERT INTO `country`[ (]"
+      - "INSERT INTO `countrylanguage`[ (]"

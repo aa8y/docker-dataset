@@ -252,3 +252,15 @@ contexts:
         structureTest:
           configs:
             - test/config/mysql/sakila.yaml
+      # MySQL's canonical `world` sample (city, country, countrylanguage) -- the
+      # same three tables as the Postgres `world` dataset.
+      world: &world
+        extractUrl: https://downloads.mysql.com/docs/world-db.tar.gz
+        sqlFiles: world-db/world.sql
+        structureTest:
+          configs:
+            - test/config/mysql/world.yaml
+      # `latest` tracks a single representative dataset, mirroring postgres.
+      latest:
+        <<: *world
+        dataset: world
