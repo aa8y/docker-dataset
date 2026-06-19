@@ -1,0 +1,10 @@
+{
+  "public.categories": 16,
+  "public.cust_hist": 60350,
+  "public.customers": 20000,
+  "public.inventory": 10000,
+  "public.orderlines": 60350,
+  "public.orders": 12000,
+  "public.products": 10000,
+  "public.reorder": 0
+}

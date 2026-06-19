@@ -51,8 +51,11 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: dave build
 
-      - name: Test images
+      - name: Test images (structure)
         run: dave structure-test
+
+      - name: Test images (integration)
+        run: dave test
 
   push:
     needs: test

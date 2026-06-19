@@ -3,6 +3,7 @@ parameters:
   platforms: linux/amd64,linux/arm64
 templates:
   build: docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"} --build-arg DATASETS={{datasets}} -t {{{repository}}}:{{tag}} {{{context}}}
+  test: REPOSITORY={{{repository}}} bash test/integration/run.sh {{tag}} {{datasets}}
   push: docker buildx build --push --platform {{{platforms}}} --build-arg DATASETS={{datasets}} -t {{{repository}}}:{{tag}} {{{context}}}
 structureTest:
   configs:

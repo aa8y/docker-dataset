@@ -31,6 +31,10 @@ COPY preprocess-adventureworks.rb /usr/local/lib/preprocess-adventureworks.rb
 # SportsDB:   https://github.com/yugabyte/yugabyte-db/tree/master/sample
 #             (Yugabyte's mirror of the original SportsDB sample; the
 #             upstream www.sportsdb.org download is no longer available.)
+#             Yugabyte's dump creates every index with its own `USING lsm`
+#             access method, which vanilla Postgres lacks and which aborts
+#             init; we rewrite `USING lsm` -> `USING btree` (Postgres' default
+#             ordered index, the semantic equivalent) before loading.
 # OMDB:       https://github.com/df7cb/omdb-postgresql
 #             (CSV data is fetched from www.omdb.org at build time and
 #             shipped alongside the init script so psql \copy resolves it.)
@@ -101,6 +105,9 @@ RUN apk add --update \
           fi; \
         elif [[ $DATASET_URL == *.sql* ]]; then \
           for u in $DATASET_URL; do wget -q "$u"; done; \
+          if [[ "$DATASET" == "sportsdb" ]]; then \
+            sed -i "s/USING lsm/USING btree/g" sportsdb_*.sql; \
+          fi; \
         fi && \
         echo "CREATE DATABASE $DATASET;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \
         echo "\c $DATASET;" >> "/docker-entrypoint-initdb.d/${DATASET}.sql" && \

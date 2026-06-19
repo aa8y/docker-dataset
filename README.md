@@ -48,19 +48,59 @@ and then following the same [aforementioned](#usage) steps for using your custom
 
 ## Testing
 
-Image tests are defined as [container-structure-test][cst] configs under
-`test/config/` — a shared `common.yaml` plus one file per dataset. The configs
-to apply per tag are declared in `manifest.yml` under `structureTest:` and run
-natively by `dave structure-test`:
+There are two layers of tests.
 
-```sh
-brew install container-structure-test     # one-time
+**Structure tests** are static [container-structure-test][cst] configs under
+`test/config/` — a shared `common.yaml` plus one file per dataset. They assert
+on the image filesystem and the shipped init scripts without booting Postgres.
+The configs to apply per tag are declared in `manifest.yml` under
+`structureTest:` and run natively by `dave structure-test`.
 
-dave build
-dave structure-test
+**Integration (smoke) tests** actually boot each image and query the live
+database. For every dataset shipped in a tag, `test/integration/run.sh`:
+
+1. waits for Postgres to finish initializing (TCP readiness, so all init
+   scripts have completed),
+2. lists the base tables and asserts the set exactly matches the expected set
+   (no missing tables, no unexpected extras), and
+3. runs `SELECT count(*)` on every table and asserts the row counts match.
+
+Expected tables and counts live per-dataset as JSON under `test/expected/`,
+e.g. `test/expected/iso3166.json`:
+
+```json
+{
+  "public.country": 242,
+  "public.subcountry": 3995
+}
 ```
 
-CI runs the same commands; see `.github/workflows/ci.yml`.
+keyed by schema-qualified table name, with authoritative `count(*)` values.
+These are wired into `dave test` via the `test:` template in `manifest.yml`,
+which renders per tag and passes the image tag plus the comma-separated list
+of datasets baked into it (so multi-dataset tags like `all` are checked across
+every database). The script needs `docker` and `jq` on the host; `psql` runs
+inside the container.
+
+```sh
+brew install container-structure-test jq     # one-time
+
+dave build
+dave structure-test                           # static checks
+dave test                                      # live smoke tests (boots images)
+
+# scope to specific tags locally (note: -c postgres is required with -t):
+dave test -c postgres -t iso3166 -t dellstore
+```
+
+To (re)generate an expected file after an intentional dataset change, run the
+script in update mode against a freshly built image:
+
+```sh
+test/integration/run.sh --update iso3166 iso3166   # <tag> <datasets-csv>
+```
+
+CI runs all three commands; see `.github/workflows/ci.yml`.
 
 [cst]: https://github.com/GoogleContainerTools/container-structure-test
 
