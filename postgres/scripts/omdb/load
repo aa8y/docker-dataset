@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Ship the downloaded CSV data next to the init script so the dump's \copy
+# directives resolve at container start (paired with cdDir in the manifest).
+set -e
+mkdir -p /docker-entrypoint-initdb.d/www.omdb.org
+mv omdb-postgresql/www.omdb.org/data /docker-entrypoint-initdb.d/www.omdb.org/data

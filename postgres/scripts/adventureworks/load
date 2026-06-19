@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Ship the reformatted CSVs next to the init script so install.sql's relative
+# \copy paths resolve at container start (paired with cdDir in the manifest).
+set -e
+mkdir -p /docker-entrypoint-initdb.d/adventureworks
+mv AdventureWorks-for-Postgres/*.csv /docker-entrypoint-initdb.d/adventureworks/

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# OMDB's CSV data isn't in the repo: it's downloaded from www.omdb.org at build
+# time by the upstream ./download script, then decompressed so psql \copy can
+# read it at container start.
+set -e
+(cd omdb-postgresql && ./download)
+bunzip2 --force omdb-postgresql/www.omdb.org/data/*.bz2

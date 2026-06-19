@@ -8,11 +8,16 @@
 # is nothing to purge. The final stage simply COPYs the assembled init
 # artifacts onto the official postgres image.
 #
-# Per-dataset sources/prereqs are declared in manifest.yml and arrive as the
-# ARGs below. Only the handful of datasets with irreducibly bespoke fetch /
-# reformat logic (omdb, adventureworks, sportsdb) need a `case "$DATASET"`
-# branch; the plain pgFoundry datasets are fully described by EXTRACT_URL +
-# SQL_FILES.
+# The Dockerfile is dataset-agnostic: nothing here names a specific dataset.
+# Plain pgFoundry datasets are fully described by EXTRACT_URL + SQL_FILES. The
+# few datasets with bespoke logic plug into the ETL steps without editing this
+# file, via two generic mechanisms:
+#   * INDEX_METHOD - rewrites `USING lsm` index DDL (defaults to a no-op);
+#                    set per-dataset in manifest.yml (the Yugabyte sportsdb dump).
+#   * scripts/<dataset>/{extract,transform,load}.sh - convention-located scripts
+#                    run at the matching stage if present, keyed on $DATASET. No
+#                    manifest wiring needed; just drop the file in (e.g. omdb's
+#                    CSV download, AdventureWorks' data zip + CSV reformat).
 #
 # Data Sources.
 # PG Foundry: http://pgfoundry.org/frs/?group_id=1000150
@@ -21,16 +26,16 @@
 #             upstream www.sportsdb.org download is no longer available.)
 #             Yugabyte's dump creates every index with its own `USING lsm`
 #             access method, which vanilla Postgres lacks and which aborts
-#             init; we rewrite `USING lsm` -> `USING btree` (Postgres' default
-#             ordered index, the semantic equivalent) before loading.
+#             init; we rewrite it to `USING btree` (Postgres' default ordered
+#             index, the semantic equivalent) via INDEX_METHOD before loading.
 # OMDB:       https://github.com/df7cb/omdb-postgresql
 #             (CSV data is fetched from www.omdb.org at build time and
 #             shipped alongside the init script so psql \copy resolves it.)
 # AdventureWorks:
 #             https://github.com/lorint/AdventureWorks-for-Postgres
 #             (CSVs come from Microsoft's AdventureWorks 2014 OLTP zip,
-#             reformatted via the upstream Ruby script, and shipped next
-#             to the init script.)
+#             reformatted via a Ruby script, and shipped next to the init
+#             script.)
 
 # ---------------------------------------------------------------------------
 # Builder: extract, transform, load.
@@ -52,12 +57,21 @@ ARG DB_EXTENSION
 # Optional: emits `\cd <dir>` so the dump's relative \copy paths resolve when
 # psql runs the init script at container start.
 ARG CD_DIR
+# Optional: target access method for `USING lsm` index DDL. Defaults to "lsm"
+# (a no-op); set to "btree" to rewrite Yugabyte's lsm indexes for Postgres.
+ARG INDEX_METHOD=lsm
 
 WORKDIR /tmp/build
-COPY preprocess-adventureworks.rb /usr/local/lib/preprocess-adventureworks.rb
+# Per-dataset ETL hooks, located by convention as scripts/<dataset>/<step>
+# (extract|transform|load) and executed at the matching stage below if present.
+# Hooks are extensionless and run via their shebang, so a hook may be written in
+# any language whose interpreter is in the builder (bash always; others via
+# EXTRA_PREREQS, e.g. ruby for adventureworks).
+COPY scripts/ /usr/local/lib/scripts/
 
-# EXTRACT. Shared tools + per-dataset extras, then fetch by URL type and run
-# any dataset-specific fetch (omdb's CSV download, AdventureWorks' MS zip).
+# EXTRACT. Shared tools + per-dataset extras, then fetch by URL type and run an
+# optional dataset extract hook (e.g. omdb's CSV download, the AdventureWorks
+# data zip).
 RUN apk add --no-cache \
       bash \
       bzip2 \
@@ -73,30 +87,17 @@ RUN apk add --no-cache \
         *.tar.gz) wget -qO- "$EXTRACT_URL" | tar -xzf - ;; \
         *)        for u in $EXTRACT_URL; do wget -q "$u"; done ;; \
       esac; \
-      case "$DATASET" in \
-        omdb) \
-          (cd omdb-postgresql && ./download) ;; \
-        adventureworks) \
-          (cd AdventureWorks-for-Postgres && \
-            wget -q -O ms.zip https://github.com/Microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorks-oltp-install-script.zip && \
-            unzip -q -o ms.zip && \
-            rm ms.zip) ;; \
-      esac'
+      h="/usr/local/lib/scripts/${DATASET}/extract"; if [ -f "$h" ]; then "$h"; fi'
 
-# TRANSFORM. Only the datasets whose raw sources need reformatting before load.
+# TRANSFORM. Optional index-method rewrite (a no-op unless INDEX_METHOD is set)
+# plus an optional dataset transform hook (e.g. AdventureWorks' CSV reformat).
 RUN bash -c ' \
       set -e; \
-      case "$DATASET" in \
-        sportsdb) \
-          sed -i "s/USING lsm/USING btree/g" sportsdb_*.sql ;; \
-        omdb) \
-          bunzip2 --force omdb-postgresql/www.omdb.org/data/*.bz2 ;; \
-        adventureworks) \
-          (cd AdventureWorks-for-Postgres && ruby /usr/local/lib/preprocess-adventureworks.rb) ;; \
-      esac'
+      if [ "$INDEX_METHOD" != "lsm" ]; then sed -i "s/USING lsm/USING ${INDEX_METHOD}/g" *.sql; fi; \
+      h="/usr/local/lib/scripts/${DATASET}/transform"; if [ -f "$h" ]; then "$h"; fi'
 
-# LOAD. Assemble the per-dataset init script and ship any CSV data dirs so the
-# dump's \copy directives resolve at container start.
+# LOAD. Assemble the per-dataset init script, then run an optional dataset load
+# hook to ship CSV data dirs so the dump's \copy directives resolve at start.
 RUN bash -c ' \
       set -e; \
       mkdir -p /docker-entrypoint-initdb.d; \
@@ -106,14 +107,7 @@ RUN bash -c ' \
       [ -n "$DB_EXTENSION" ] && echo "CREATE EXTENSION IF NOT EXISTS ${DB_EXTENSION};" >> "$INIT"; \
       [ -n "$CD_DIR" ] && echo "\cd ${CD_DIR}" >> "$INIT"; \
       for f in $SQL_FILES; do cat "$f" >> "$INIT"; done; \
-      case "$DATASET" in \
-        omdb) \
-          mkdir -p /docker-entrypoint-initdb.d/www.omdb.org && \
-          mv omdb-postgresql/www.omdb.org/data /docker-entrypoint-initdb.d/www.omdb.org/data ;; \
-        adventureworks) \
-          mkdir -p /docker-entrypoint-initdb.d/adventureworks && \
-          mv AdventureWorks-for-Postgres/*.csv /docker-entrypoint-initdb.d/adventureworks/ ;; \
-      esac'
+      h="/usr/local/lib/scripts/${DATASET}/load"; if [ -f "$h" ]; then "$h"; fi'
 
 # ---------------------------------------------------------------------------
 # Final image: official postgres + the assembled init artifacts only.

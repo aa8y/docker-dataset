@@ -13,6 +13,7 @@ templates:
     {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
     {{#dbExtension}}--build-arg DB_EXTENSION={{.}}{{/dbExtension}}
     {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
+    {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
     -t {{{repository}}}:{{tag}} {{{context}}}
   test: REPOSITORY={{{repository}}} bash test/integration/run.sh {{tag}} {{dataset}}
   push: >
@@ -23,6 +24,7 @@ templates:
     {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
     {{#dbExtension}}--build-arg DB_EXTENSION={{.}}{{/dbExtension}}
     {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
+    {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
     -t {{{repository}}}:{{tag}} {{{context}}}
 structureTest:
   configs:
@@ -91,6 +93,7 @@ contexts:
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_constraints.sql
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_fks.sql
         sqlFiles: sportsdb_tables.sql sportsdb_inserts.sql sportsdb_indexes.sql sportsdb_constraints.sql sportsdb_fks.sql
+        indexMethod: btree
         structureTest:
           configs:
             - test/config/yugabyte-sportsdb.yaml

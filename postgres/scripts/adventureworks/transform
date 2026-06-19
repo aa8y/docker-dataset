@@ -18,6 +18,10 @@
 #    `\copy ... CSV` because they look like CSV opening quotes. The
 #    ProductReview rows additionally span multiple physical lines.
 #
+# Run as the adventureworks transform hook (cwd is the build dir); the CSVs
+# live in the cloned loader repo, so we operate there.
+Dir.chdir('AdventureWorks-for-Postgres')
+
 # Per-file column counts for multi-line tab records (CREATE TABLE in
 # AdventureWorks-for-Postgres/install.sql).
 MULTILINE_TAB_COLS = { 'ProductReview' => 8 }
