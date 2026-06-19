@@ -12,6 +12,7 @@ So far we have the following datasets which are being used in the images.
 * `chinook` (tagged `yugabyte-chinook`): a digital media store — artists, albums, tracks, customers, and invoices (11 tables in the `public` schema). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample); tables use quoted CamelCase identifiers (e.g. `"Track"`, `"InvoiceLine"`).
 * `northwind` (tagged `yugabyte-northwind`): the classic Northwind specialty-foods import/export company — customers, orders, products, employees, and suppliers (14 tables in the `public` schema). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample).
 * `pgexercises` (tagged `yugabyte-pgexercises`): the "clubdata" database behind [pgexercises.com](https://pgexercises.com/) — a country club's members, bookable facilities, and bookings (3 tables in a dedicated `cd` schema, not `public`). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample).
+* `pagila`: the classic Sakila/"DVD rental store" sample ported to Postgres — films, actors, customers, inventory, rentals, and payments. We source it from [devrimgunduz/pagila](https://github.com/devrimgunduz/pagila), a maintained fork (pgFoundry's original no longer loads on modern Postgres). Its `payment` table is range-partitioned by month (`payment_p2022_NN`), so row counts are split across the parent and its partitions. Note: the upstream maintainer periodically shifts the data's dates to the then-current year, so absolute dates in the sample may differ between rebuilds.
 * `omdb`: the [Open Media Database](https://www.omdb.org/) film catalogue, packaged for Postgres at [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql). CSV data is fetched from `www.omdb.org` at build time and shipped inside the image so `\copy` resolves at container start. The init script also creates the `tsm_system_rows` extension that the upstream views rely on. Heads up: this dataset is much larger than the others (~150 MB of CSV + indexes), which makes the `omdb` image noticeably heavier.
 * `adventureworks`: the Microsoft AdventureWorks 2014 OLTP sample (a fictitious bicycle parts wholesaler — 68 tables, 5 schemas, ~300 employees, 500 products, 20k customers, 31k sales). We use the [lorint/AdventureWorks-for-Postgres](https://github.com/lorint/AdventureWorks-for-Postgres) port, which pulls Microsoft's CSV bundle and runs a Ruby reformat before loading. CSVs ship alongside the init script so the upstream `\copy ./X.csv` directives resolve at container start. This dataset is also on the heavier side (~90 MB of CSV).
 
@@ -21,7 +22,7 @@ The only database supported so far is [PostgreSQL](https://www.postgresql.org/).
 
 ## Tags
 
-Available tags are `adventureworks`, `dellstore`, `frenchtowns`, `iso3166`, `omdb`, `sportsdb`, `yugabyte-sportsdb`, `yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-pgexercises`, `usda`, `world` and `latest`. Each image carries exactly one dataset, loaded into its own database. `latest` currently tracks the `world` dataset. All tags are published for `linux/amd64` and `linux/arm64`.
+Available tags are `adventureworks`, `dellstore`, `frenchtowns`, `iso3166`, `omdb`, `pagila`, `sportsdb`, `yugabyte-sportsdb`, `yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-pgexercises`, `usda`, `world` and `latest`. Each image carries exactly one dataset, loaded into its own database. `latest` currently tracks the `world` dataset. All tags are published for `linux/amd64` and `linux/arm64`.
 
 `sportsdb` and `yugabyte-sportsdb` are currently the same image — the only mirror we ship is Yugabyte's. `sportsdb` is a special case: it predates the mirror-explicit naming, so we keep the bare `sportsdb` tag working for backwards compatibility while `yugabyte-sportsdb` exists so that if we add another sportsdb mirror later (e.g. a hypothetical `pgfoundry-sportsdb`), users can pin to the specific source they want and `sportsdb` continues to track whichever mirror is the current default.
 
@@ -31,9 +32,9 @@ The other Yugabyte-sourced datasets — `chinook`, `northwind`, and `pgexercises
 
 The multi-dataset `all` tag (and the all-datasets `latest`) is legacy: images are now one dataset each. If you need several datasets together, run one container per dataset (e.g. via `docker-compose`), or build a custom image per dataset.
 
-### `pagila` has been removed
+### `pagila` was removed and re-added
 
-The `pagila` tag has been removed due to the fact that it was broken for a while and it also broke the `all` and `latest` tags. This is because the Pagila dataset we were using had a change which was not compatible with any version of Postgres (See [#1](https://github.com/aa8y/docker-dataset/issues/1) and [this issue](https://github.com/devrimgunduz/pagila/issues/6) for context.
+`pagila` was [removed in 2019](https://github.com/aa8y/docker-dataset/issues/1) because the upstream source shipped a change that wouldn't load on any Postgres version, which back then also took down the combined `all`/`latest` images. Both causes are now gone: the [upstream fork](https://github.com/devrimgunduz/pagila) loads cleanly on modern Postgres (tested against 12+), and images are now one dataset each, so a single dataset can no longer break the others. It is therefore back as a regular tag.
 
 ## Usage
 

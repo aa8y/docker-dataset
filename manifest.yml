@@ -77,6 +77,12 @@ contexts:
         structureTest:
           configs:
             - test/config/omdb.yaml
+      pagila:
+        extractUrl: https://github.com/devrimgunduz/pagila.git
+        sqlFiles: pagila/pagila-schema.sql pagila/pagila-data.sql
+        structureTest:
+          configs:
+            - test/config/pagila.yaml
       sportsdb: &sportsdb
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql

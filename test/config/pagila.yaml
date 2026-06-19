@@ -1,0 +1,63 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. We can't query a running
+# postgres here, so for each table we expect the dump to contain both a
+# CREATE TABLE (schema present) and a COPY block (dump shipped data, not just
+# schema). If the upstream dump changes substantially, these will fail loudly.
+#
+# pagila is sourced from https://github.com/devrimgunduz/pagila (a maintained
+# fork; pgFoundry's original no longer loads on modern Postgres). Its `payment`
+# table is range-partitioned by month, so data is COPYed into the partitions
+# (payment_p2022_NN), not the parent. We assert the partitioned parent exists
+# and that at least the first partition is created and loaded.
+
+fileExistenceTests:
+  - name: "pagila init script exists"
+    path: "/docker-entrypoint-initdb.d/pagila.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "pagila init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/pagila.sql"
+    expectedContents:
+      - "CREATE DATABASE pagila"
+      - '\\c pagila'
+
+  - name: "pagila declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/pagila.sql"
+    expectedContents:
+      - "CREATE TABLE public.actor[ (]"
+      - "CREATE TABLE public.address[ (]"
+      - "CREATE TABLE public.category[ (]"
+      - "CREATE TABLE public.city[ (]"
+      - "CREATE TABLE public.country[ (]"
+      - "CREATE TABLE public.customer[ (]"
+      - "CREATE TABLE public.film[ (]"
+      - "CREATE TABLE public.film_actor[ (]"
+      - "CREATE TABLE public.film_category[ (]"
+      - "CREATE TABLE public.inventory[ (]"
+      - "CREATE TABLE public.language[ (]"
+      - "CREATE TABLE public.payment[ (]"
+      - "CREATE TABLE public.payment_p2022_01[ (]"
+      - "CREATE TABLE public.rental[ (]"
+      - "CREATE TABLE public.staff[ (]"
+      - "CREATE TABLE public.store[ (]"
+
+  - name: "pagila loads data into every table"
+    path: "/docker-entrypoint-initdb.d/pagila.sql"
+    expectedContents:
+      - "COPY public.actor[ (]"
+      - "COPY public.address[ (]"
+      - "COPY public.category[ (]"
+      - "COPY public.city[ (]"
+      - "COPY public.country[ (]"
+      - "COPY public.customer[ (]"
+      - "COPY public.film[ (]"
+      - "COPY public.film_actor[ (]"
+      - "COPY public.film_category[ (]"
+      - "COPY public.inventory[ (]"
+      - "COPY public.language[ (]"
+      - "COPY public.payment_p2022_01[ (]"
+      - "COPY public.rental[ (]"
+      - "COPY public.staff[ (]"
+      - "COPY public.store[ (]"
