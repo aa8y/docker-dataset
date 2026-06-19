@@ -17,6 +17,7 @@ So far we have the following datasets which are being used in the images.
 * `adventureworks`: the Microsoft AdventureWorks 2014 OLTP sample (a fictitious bicycle parts wholesaler — 68 tables, 5 schemas, ~300 employees, 500 products, 20k customers, 31k sales). We use the [lorint/AdventureWorks-for-Postgres](https://github.com/lorint/AdventureWorks-for-Postgres) port, which pulls Microsoft's CSV bundle and runs a Ruby reformat before loading. CSVs ship alongside the init script so the upstream `\copy ./X.csv` directives resolve at container start. This dataset is also on the heavier side (~90 MB of CSV).
 * `airlines`: the [postgrespro "airlines" demo database](https://postgrespro.com/education/demodb) — a flight-booking model (airports, flights, tickets, bookings, boarding passes, seats; 9 tables in a `bookings` schema, with `search_path` defaulting to it). We ship the smallest ("3 months") English snapshot. Upstream distributes it as a single gzipped `pg_dump` that manages its own `demo` database, so the build decompresses it and strips the `DROP/CREATE DATABASE demo` / `\connect` directives (retargeting the `ALTER DATABASE` options) so it loads into the `airlines` database. Heads up: this is the largest dataset — the dump inlines several million rows (boarding passes, segments, tickets), so the image is heavy. The snapshot URL is date-stamped, so it may need bumping if postgrespro retires the pinned file.
 * `moma`: the [Museum of Modern Art research collection](https://github.com/MuseumofModernArt/collection) — ~160k catalogued artworks and ~16k artists (2 tables in the `public` schema). MoMA publishes only CSV/JSON (no SQL), so the schema is authored in-repo (`postgres/scripts/moma/schema.sql`, every column `text` since the data is free-form) and the CSVs ship alongside the init script so `\copy` resolves at container start. Note: MoMA refreshes the published CSVs periodically, so exact row counts drift over time.
+* `beer` (tagged `stackexchange-beer`): the [Beer Stack Exchange](https://beer.stackexchange.com/) Q&A site — posts, comments, users, votes, badges, tags, post links, and post history (8 tables in the `public` schema). Sourced from the [Stack Exchange data dump on archive.org](https://archive.org/details/stackexchange), which ships only per-table XML. Adapting the schema, column mapping, and indexes from [stackexchange-dump-to-postgres](https://github.com/Human-Centric-Machine-Learning/stackexchange-dump-to-postgres), a build hook (`postgres/scripts/beer/transform`) converts the XML into SQL — `CREATE TABLE` + inline `COPY` + indexes — rather than running the upstream importer against a live server, which keeps the dataset within our extract/transform/load build (no database running at build time). Unknown attributes from newer dumps are ignored, and since the upstream dump is refreshed periodically, counts are recorded as floors.
 
 ## Databases
 
@@ -24,11 +25,13 @@ The only database supported so far is [PostgreSQL](https://www.postgresql.org/).
 
 ## Tags
 
-Available tags are `adventureworks`, `airlines`, `dellstore`, `frenchtowns`, `iso3166`, `moma`, `omdb`, `pagila`, `sportsdb`, `yugabyte-sportsdb`, `yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-pgexercises`, `usda`, `world` and `latest`. Each image carries exactly one dataset, loaded into its own database. `latest` currently tracks the `world` dataset. All tags are published for `linux/amd64` and `linux/arm64`.
+Available tags are `adventureworks`, `airlines`, `dellstore`, `frenchtowns`, `iso3166`, `moma`, `omdb`, `pagila`, `stackexchange-beer`, `sportsdb`, `yugabyte-sportsdb`, `yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-pgexercises`, `usda`, `world` and `latest`. Each image carries exactly one dataset, loaded into its own database. `latest` currently tracks the `world` dataset. All tags are published for `linux/amd64` and `linux/arm64`.
 
 `sportsdb` and `yugabyte-sportsdb` are currently the same image — the only mirror we ship is Yugabyte's. `sportsdb` is a special case: it predates the mirror-explicit naming, so we keep the bare `sportsdb` tag working for backwards compatibility while `yugabyte-sportsdb` exists so that if we add another sportsdb mirror later (e.g. a hypothetical `pgfoundry-sportsdb`), users can pin to the specific source they want and `sportsdb` continues to track whichever mirror is the current default.
 
 The other Yugabyte-sourced datasets — `chinook`, `northwind`, and `pgexercises` — have no legacy bare tags to preserve, so they ship under their `yugabyte-`prefixed tags only (`yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-pgexercises`). The database name inside each image is still the bare dataset name (`chinook`, `northwind`, `pgexercises`). If we ever add a second mirror for one of these, the prefixed tag already disambiguates the source.
+
+Stack Exchange is a family of sites rather than a single dataset, so — like the `yugabyte-` tags — its tag carries the source-and-site prefix: `stackexchange-beer`. The database inside is the bare site name (`beer`). Adding another site later is just another `stackexchange-<site>` tag built by the same hook.
 
 ### `all` has been retired
 
@@ -96,9 +99,9 @@ e.g. `test/expected/iso3166.json`:
 
 keyed by schema-qualified table name, with authoritative `count(*)` values.
 A value is normally an exact count. For datasets whose data is fetched from a
-live upstream at build time and so drifts between builds (`omdb`, sourced
-from `www.omdb.org`, and `moma`, sourced from MoMA's CSV exports), the value
-is instead a floor like
+live upstream at build time and so drifts between builds (`omdb` from
+`www.omdb.org`, `moma` from MoMA's CSV exports, and `beer` from the
+Stack Exchange data dump), the value is instead a floor like
 `">=59274"` and the test asserts `count(*) >=` that number. `--update` writes
 floors automatically for such datasets.
 
