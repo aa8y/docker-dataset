@@ -8,6 +8,11 @@ hook converts each table that is present into ``CREATE TABLE`` + an inline
 appends the indexes, assembling a single ``<dataset>.sql`` that our ETL cats
 into the init script.
 
+Every StackExchange site shares this identical schema, so this hook is
+site-agnostic: each site's dataset directory (e.g. scripts/beer,
+scripts/coffee) is a symlink to scripts/stackexchange, and the only thing that
+varies per site is $DATASET (the database/output-file name).
+
 The schema, the XML-attribute -> column mapping, and the indexes are adapted
 from the stackexchange-dump-to-postgres tool
 (https://github.com/Human-Centric-Machine-Learning/stackexchange-dump-to-postgres).
@@ -148,11 +153,11 @@ def main():
     dataset = os.environ.get("DATASET", "stackexchange")
     present = [t for t in TABLES if os.path.exists(t[0])]
     if not present:
-        sys.exit("beer transform: no StackExchange XML files found")
+        sys.exit("stackexchange transform: no StackExchange XML files found")
 
     with open("{}.sql".format(dataset), "w", encoding="utf-8") as out:
         out.write("-- StackExchange data dump, converted from XML at build time.\n")
-        out.write("-- See postgres/scripts/beer/transform.\n\n")
+        out.write("-- See postgres/scripts/stackexchange/transform.\n\n")
         for xml_file, table, columns, _ in present:
             out.write(ddl(table, columns))
             col_list = ", ".join(col for _, col, _ in columns)

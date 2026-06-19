@@ -18,7 +18,8 @@
 #   - a number  -> assert count(*) == N exactly (deterministic datasets), or
 #   - ">=N"     -> assert count(*) >= N (a floor), used for datasets whose
 #                  data is fetched from a live upstream at build time and so
-#                  drifts between builds (currently omdb, moma and beer).
+#                  drifts between builds (omdb, moma, and any `stackexchange-`
+#                  tagged site, whose archive.org dump is refreshed over time).
 #
 # Usage:
 #   run.sh <tag> <datasets-csv>            # assert against expected/*.json
@@ -44,8 +45,27 @@ IMAGE="${REPOSITORY}:${TAG}"
 # Datasets whose row data is fetched from a live upstream at build time, so
 # exact counts drift between builds. For these, --update records a floor
 # (">=<count-at-build-time>") instead of an exact count.
-VOLATILE_DATASETS="omdb moma beer"
-is_volatile() { case " $VOLATILE_DATASETS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+#
+# Volatility is detected two ways so we don't hand-maintain a flat list:
+#   * VOLATILE_DATASETS - explicit per-dataset names (one-off live sources), and
+#   * VOLATILE_TAG_PREFIXES - tag prefixes whose datasets are all volatile. Every
+#     StackExchange site ships under a `stackexchange-` tag and is built from a
+#     periodically refreshed archive.org dump, so the whole family is volatile
+#     by prefix and a new site needs no edit here.
+VOLATILE_DATASETS="omdb moma"
+VOLATILE_TAG_PREFIXES="stackexchange-"
+is_volatile() {
+  # is_volatile <db> — true if this dataset's counts drift between builds,
+  # either because the dataset is explicitly listed or because $TAG matches a
+  # volatile prefix (each image carries a single dataset, so the tag decides).
+  local db="$1"
+  case " $VOLATILE_DATASETS " in *" $db "*) return 0 ;; esac
+  local prefix
+  for prefix in $VOLATILE_TAG_PREFIXES; do
+    case "$TAG" in "$prefix"*) return 0 ;; esac
+  done
+  return 1
+}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_DIR="${SCRIPT_DIR}/../expected"
 CONTAINER="pg-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
