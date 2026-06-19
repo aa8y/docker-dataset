@@ -11,7 +11,7 @@ on:
 
 env:
   CST_VERSION: 1.22.1
-  DAVE_VERSION: 0.4.0
+  DAVE_VERSION: 0.4.1
 
 jobs:
   test:

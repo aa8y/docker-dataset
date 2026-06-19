@@ -1,0 +1,16 @@
+{
+  "public.categories": 8,
+  "public.customer_customer_demo": 0,
+  "public.customer_demographics": 0,
+  "public.customers": 91,
+  "public.employee_territories": 49,
+  "public.employees": 9,
+  "public.order_details": 2155,
+  "public.orders": 830,
+  "public.products": 77,
+  "public.region": 4,
+  "public.shippers": 6,
+  "public.suppliers": 29,
+  "public.territories": 53,
+  "public.us_states": 51
+}

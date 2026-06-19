@@ -1,0 +1,40 @@
+schemaVersion: "2.0.0"
+
+# Chinook is a digital media store sample database (artists, albums, tracks,
+# customers, invoices). Sourced from Yugabyte's sample data mirror. Tables use
+# quoted CamelCase identifiers; data is loaded via INSERT statements.
+
+fileExistenceTests:
+  - name: "chinook init script exists"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "chinook init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - "CREATE DATABASE chinook"
+      - '\\c chinook'
+
+  - name: "chinook declares representative tables"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    # Quoted CamelCase identifiers are self-delimiting (the closing quote bounds
+    # the name) and the opening paren sits on the next line, so no trailing
+    # `[ (]` boundary is needed here.
+    expectedContents:
+      - 'CREATE TABLE "Artist"'
+      - 'CREATE TABLE "Album"'
+      - 'CREATE TABLE "Track"'
+      - 'CREATE TABLE "Genre"'
+      - 'CREATE TABLE "Customer"'
+      - 'CREATE TABLE "Invoice"'
+      - 'CREATE TABLE "InvoiceLine"'
+      - 'CREATE TABLE "Playlist"'
+
+  - name: "chinook loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - 'INSERT INTO "Artist"[ (]'
+      - 'INSERT INTO "Album"[ (]'
+      - 'INSERT INTO "Track"[ (]'
+      - 'INSERT INTO "Genre"[ (]'

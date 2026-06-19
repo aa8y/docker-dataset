@@ -1,0 +1,33 @@
+schemaVersion: "2.0.0"
+
+# PgExercises is the "clubdata" sample database behind pgexercises.com: a country
+# club's members, bookable facilities, and bookings. Sourced from Yugabyte's
+# sample data mirror. Its three tables live in a dedicated `cd` schema (not
+# public), and data is loaded via INSERT statements.
+
+fileExistenceTests:
+  - name: "pgexercises init script exists"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "pgexercises init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "CREATE DATABASE pgexercises"
+      - '\\c pgexercises'
+
+  - name: "pgexercises creates the cd schema and its tables"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "CREATE SCHEMA cd"
+      - "CREATE TABLE facilities[ (]"
+      - "CREATE TABLE members[ (]"
+      - "CREATE TABLE bookings[ (]"
+
+  - name: "pgexercises loads data into its tables"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "INSERT INTO facilities[ (]"
+      - "INSERT INTO members[ (]"
+      - "INSERT INTO bookings[ (]"

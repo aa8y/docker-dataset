@@ -91,6 +91,34 @@ contexts:
       yugabyte-sportsdb:
         <<: *sportsdb
         dataset: sportsdb
+      yugabyte-chinook:
+        dataset: chinook
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_genres_artists_albums.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_songs.sql
+        sqlFiles: chinook_ddl.sql chinook_genres_artists_albums.sql chinook_songs.sql
+        structureTest:
+          configs:
+            - test/config/yugabyte-chinook.yaml
+      yugabyte-northwind:
+        dataset: northwind
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_data.sql
+        sqlFiles: northwind_ddl.sql northwind_data.sql
+        structureTest:
+          configs:
+            - test/config/yugabyte-northwind.yaml
+      yugabyte-pgexercises:
+        dataset: pgexercises
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_data.sql
+        sqlFiles: clubdata_ddl.sql clubdata_data.sql
+        structureTest:
+          configs:
+            - test/config/yugabyte-pgexercises.yaml
       usda:
         extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
         sqlFiles: usda-r18-1.0/usda.sql

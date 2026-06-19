@@ -1,0 +1,38 @@
+schemaVersion: "2.0.0"
+
+# Northwind is the classic sample database for a specialty foods import/export
+# company (customers, orders, products, employees, suppliers). Sourced from
+# Yugabyte's sample data mirror. Data is loaded via INSERT statements into the
+# public schema.
+
+fileExistenceTests:
+  - name: "northwind init script exists"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "northwind init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    expectedContents:
+      - "CREATE DATABASE northwind"
+      - '\\c northwind'
+
+  - name: "northwind declares representative tables"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    expectedContents:
+      - "CREATE TABLE categories[ (]"
+      - "CREATE TABLE customers[ (]"
+      - "CREATE TABLE employees[ (]"
+      - "CREATE TABLE orders[ (]"
+      - "CREATE TABLE order_details[ (]"
+      - "CREATE TABLE products[ (]"
+      - "CREATE TABLE suppliers[ (]"
+
+  - name: "northwind loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    expectedContents:
+      - "INSERT INTO public.categories[ (]"
+      - "INSERT INTO public.customers[ (]"
+      - "INSERT INTO public.employees[ (]"
+      - "INSERT INTO public.orders[ (]"
+      - "INSERT INTO public.products[ (]"
