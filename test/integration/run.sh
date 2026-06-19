@@ -14,7 +14,11 @@
 #     { "public.country": 242, "public.subcountry": 3995 }
 #
 # keyed by schema-qualified table name. Counts are authoritative count(*),
-# not the approximate pg_stat n_live_tup.
+# not the approximate pg_stat n_live_tup. A value can be either:
+#   - a number  -> assert count(*) == N exactly (deterministic datasets), or
+#   - ">=N"     -> assert count(*) >= N (a floor), used for datasets whose
+#                  data is fetched from a live upstream at build time and so
+#                  drifts between builds (currently only omdb).
 #
 # Usage:
 #   run.sh <tag> <datasets-csv>            # assert against expected/*.json
@@ -36,6 +40,12 @@ DATASETS_CSV="${2:?usage: run.sh [--update] <tag> <datasets-csv>}"
 
 REPOSITORY="${REPOSITORY:-aa8y/postgres-dataset}"
 IMAGE="${REPOSITORY}:${TAG}"
+
+# Datasets whose row data is fetched from a live upstream at build time, so
+# exact counts drift between builds. For these, --update records a floor
+# (">=<count-at-build-time>") instead of an exact count.
+VOLATILE_DATASETS="omdb"
+is_volatile() { case " $VOLATILE_DATASETS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_DIR="${SCRIPT_DIR}/../expected"
 CONTAINER="pg-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
@@ -106,7 +116,11 @@ for db in "${DATASETS[@]}"; do
 
   if [[ "$UPDATE" -eq 1 ]]; then
     mkdir -p "$EXPECTED_DIR"
-    printf '%s\n' "$actual" | jq -S . > "$expected_file"
+    if is_volatile "$db"; then
+      printf '%s\n' "$actual" | jq -S 'map_values(">=" + tostring)' > "$expected_file"
+    else
+      printf '%s\n' "$actual" | jq -S . > "$expected_file"
+    fi
     pass "${db}: wrote $(jq 'length' <<<"$actual") tables to expected/${db}.json"
     continue
   fi
@@ -122,10 +136,23 @@ for db in "${DATASETS[@]}"; do
     '($e|keys_unsorted) - ($a|keys_unsorted) | .[]')"
   extra="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
     '($a|keys_unsorted) - ($e|keys_unsorted) | .[]')"
-  # Count mismatches on tables present in both.
-  mismatch="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
-    '($e|keys_unsorted) as $ek | $ek - (($ek) - ($a|keys_unsorted))
-     | map(select($e[.] != $a[.]) | "\(.): expected \($e[.]) got \($a[.])") | .[]')"
+  # Count check on tables present in both: a number means exact match, a
+  # ">=N" / ">N" string means a floor.
+  mismatch="$(jq -rn --argjson e "$expected" --argjson a "$actual" '
+    ($e|keys_unsorted) as $ek
+    | ($ek - ($ek - ($a|keys_unsorted)))[] as $k
+    | $e[$k] as $ev | $a[$k] as $av
+    | if ($ev|type) == "number" then
+        (if $av != $ev then "\($k): expected \($ev) got \($av)" else empty end)
+      else
+        ($ev | capture("^(?<op>>=|>)(?<n>[0-9]+)$")) as $m
+        | if $m == null then "\($k): invalid expected spec \"\($ev)\""
+          else ($m.n | tonumber) as $n
+            | if   ($m.op == ">"  and $av >  $n) then empty
+              elif ($m.op == ">=" and $av >= $n) then empty
+              else "\($k): expected \($ev) got \($av)" end
+          end
+      end')"
 
   db_ok=1
   if [[ -n "$missing" ]]; then

@@ -76,6 +76,12 @@ e.g. `test/expected/iso3166.json`:
 ```
 
 keyed by schema-qualified table name, with authoritative `count(*)` values.
+A value is normally an exact count. For datasets whose data is fetched from a
+live upstream at build time and so drifts between builds (currently only
+`omdb`, sourced from `www.omdb.org`), the value is instead a floor like
+`">=59274"` and the test asserts `count(*) >=` that number. `--update` writes
+floors automatically for such datasets.
+
 These are wired into `dave test` via the `test:` template in `manifest.yml`,
 which renders per tag and passes the image tag plus the comma-separated list
 of datasets baked into it (so multi-dataset tags like `all` are checked across
