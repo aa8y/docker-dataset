@@ -2,74 +2,109 @@ parameters:
   repository: aa8y/postgres-dataset
   platforms: linux/amd64,linux/arm64
 templates:
-  build: docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"} --build-arg DATASETS={{datasets}} -t {{{repository}}}:{{tag}} {{{context}}}
-  test: REPOSITORY={{{repository}}} bash test/integration/run.sh {{tag}} {{datasets}}
-  push: docker buildx build --push --platform {{{platforms}}} --build-arg DATASETS={{datasets}} -t {{{repository}}}:{{tag}} {{{context}}}
+  # Each image carries exactly one dataset. Per-dataset sources/prereqs are
+  # declared per tag below and passed to the Dockerfile as build args; optional
+  # ones are emitted only when the tag defines them (Mustache sections).
+  build: >
+    docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+    --build-arg DATASET={{dataset}}
+    --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+    --build-arg 'SQL_FILES={{{sqlFiles}}}'
+    {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+    {{#dbExtension}}--build-arg DB_EXTENSION={{.}}{{/dbExtension}}
+    {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
+    -t {{{repository}}}:{{tag}} {{{context}}}
+  test: REPOSITORY={{{repository}}} bash test/integration/run.sh {{tag}} {{dataset}}
+  push: >
+    docker buildx build --push --platform {{{platforms}}}
+    --build-arg DATASET={{dataset}}
+    --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+    --build-arg 'SQL_FILES={{{sqlFiles}}}'
+    {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+    {{#dbExtension}}--build-arg DB_EXTENSION={{.}}{{/dbExtension}}
+    {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
+    -t {{{repository}}}:{{tag}} {{{context}}}
 structureTest:
   configs:
     - test/config/common.yaml
 contexts:
   postgres:
-    tagKeys: datasets
+    tagKeys: dataset
     tags:
       adventureworks:
+        extractUrl: https://github.com/lorint/AdventureWorks-for-Postgres.git
+        sqlFiles: AdventureWorks-for-Postgres/install.sql
+        extraPrereqs: ruby
+        cdDir: /docker-entrypoint-initdb.d/adventureworks
         structureTest:
           configs:
             - test/config/adventureworks.yaml
       dellstore:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz
+        sqlFiles: dellstore2-normal-1.0/dellstore2-normal-1.0.sql
         structureTest:
           configs:
             - test/config/dellstore.yaml
       frenchtowns:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz
+        sqlFiles: french-towns-communes-francaises.sql
         structureTest:
           configs:
             - test/config/frenchtowns.yaml
       iso3166:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz
+        sqlFiles: iso-3166/iso-3166.sql
         structureTest:
           configs:
             - test/config/iso3166.yaml
       omdb:
+        extractUrl: https://github.com/df7cb/omdb-postgresql.git
+        sqlFiles: >-
+          omdb-postgresql/00-drop-tables.sql
+          omdb-postgresql/12-kind.sql
+          omdb-postgresql/13-schema.sql
+          omdb-postgresql/20-import.sql
+          omdb-postgresql/30-duplicates.sql
+          omdb-postgresql/31-primary-keys.sql
+          omdb-postgresql/40-clean-orphans.sql
+          omdb-postgresql/41-foreign-keys.sql
+          omdb-postgresql/50-views.sql
+          omdb-postgresql/52-category-en.sql
+          omdb-postgresql/55-purge_dirty.sql
+          omdb-postgresql/60-log.sql
+        dbExtension: tsm_system_rows
+        cdDir: /docker-entrypoint-initdb.d
         structureTest:
           configs:
             - test/config/omdb.yaml
-      sportsdb:
+      sportsdb: &sportsdb
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_indexes.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_constraints.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_fks.sql
+        sqlFiles: sportsdb_tables.sql sportsdb_inserts.sql sportsdb_indexes.sql sportsdb_constraints.sql sportsdb_fks.sql
         structureTest:
           configs:
             - test/config/yugabyte-sportsdb.yaml
       yugabyte-sportsdb:
-        datasets: sportsdb
-        structureTest:
-          configs:
-            - test/config/yugabyte-sportsdb.yaml
+        <<: *sportsdb
+        dataset: sportsdb
       usda:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
+        sqlFiles: usda-r18-1.0/usda.sql
         structureTest:
           configs:
             - test/config/usda.yaml
-      world:
+      world: &world
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz
+        sqlFiles: dbsamples-0.1/world/world.sql
         structureTest:
           configs:
             - test/config/world.yaml
-      all:
-        datasets: adventureworks,dellstore,frenchtowns,iso3166,omdb,sportsdb,usda,world
-        structureTest:
-          configs:
-            - test/config/adventureworks.yaml
-            - test/config/dellstore.yaml
-            - test/config/frenchtowns.yaml
-            - test/config/iso3166.yaml
-            - test/config/omdb.yaml
-            - test/config/yugabyte-sportsdb.yaml
-            - test/config/usda.yaml
-            - test/config/world.yaml
+      # `all` is retired (multi-dataset images are legacy). `latest` now tracks a
+      # single representative dataset.
       latest:
-        datasets: adventureworks,dellstore,frenchtowns,iso3166,omdb,sportsdb,usda,world
-        structureTest:
-          configs:
-            - test/config/adventureworks.yaml
-            - test/config/dellstore.yaml
-            - test/config/frenchtowns.yaml
-            - test/config/iso3166.yaml
-            - test/config/omdb.yaml
-            - test/config/yugabyte-sportsdb.yaml
-            - test/config/usda.yaml
-            - test/config/world.yaml
+        <<: *world
+        dataset: world
