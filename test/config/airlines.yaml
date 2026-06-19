@@ -1,0 +1,36 @@
+schemaVersion: "2.0.0"
+
+# The airlines demo is an upstream pg_dump that manages its own `demo`
+# database. The transform hook strips those directives so the dump loads into
+# our ${DATASET} database. Verify the wrapper SQL, the bookings schema and a
+# representative table/COPY, and that the upstream DB-management directives
+# were removed.
+
+fileExistenceTests:
+  - name: "airlines init script exists"
+    path: "/docker-entrypoint-initdb.d/airlines.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "airlines init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/airlines.sql"
+    expectedContents:
+      - "CREATE DATABASE airlines"
+      - '\\c airlines'
+    excludedContents:
+      - "DROP DATABASE demo"
+      - "CREATE DATABASE demo "
+      - '\\connect demo'
+
+  - name: "airlines declares the bookings schema and representative tables"
+    path: "/docker-entrypoint-initdb.d/airlines.sql"
+    expectedContents:
+      - "CREATE SCHEMA bookings"
+      - "CREATE TABLE bookings.flights[ (]"
+      - "CREATE TABLE bookings.tickets[ (]"
+
+  - name: "airlines loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/airlines.sql"
+    expectedContents:
+      - "COPY bookings.flights[ (]"
+      - "COPY bookings.tickets[ (]"

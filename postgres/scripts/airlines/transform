@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# The upstream pg_dump manages its own database: it DROPs and CREATEs a
+# database named `demo` and \connects to it before loading. Our ETL has
+# already created and connected to the ${DATASET} database, so strip those
+# directives and let the dump load into it. The dump also sets two
+# database-scoped options (search_path -> bookings, bookings.lang -> en) via
+# ALTER DATABASE demo; retarget those to ${DATASET} so they take effect.
+set -e
+sed -i \
+  -e '/^DROP DATABASE demo;/d' \
+  -e '/^CREATE DATABASE demo /d' \
+  -e '/^COMMENT ON DATABASE demo /d' \
+  -e '/^\\connect demo$/d' \
+  -e "s/^ALTER DATABASE demo /ALTER DATABASE ${DATASET:?DATASET is unset} /" \
+  airlines.sql

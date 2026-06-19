@@ -1,0 +1,11 @@
+{
+  "bookings.airplanes_data": 10,
+  "bookings.airports_data": 5501,
+  "bookings.boarding_passes": 2463832,
+  "bookings.bookings": 1292893,
+  "bookings.flights": 21758,
+  "bookings.routes": 1162,
+  "bookings.seats": 1741,
+  "bookings.segments": 3941249,
+  "bookings.tickets": 2973937
+}

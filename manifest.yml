@@ -33,6 +33,12 @@ contexts:
   postgres:
     tagKeys: dataset
     tags:
+      airlines:
+        extractUrl: https://edu.postgrespro.ru/demo-20250901-3m.sql.gz
+        sqlFiles: airlines.sql
+        structureTest:
+          configs:
+            - test/config/airlines.yaml
       adventureworks:
         extractUrl: https://github.com/lorint/AdventureWorks-for-Postgres.git
         sqlFiles: AdventureWorks-for-Postgres/install.sql
