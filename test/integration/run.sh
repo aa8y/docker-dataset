@@ -18,7 +18,7 @@
 #   - a number  -> assert count(*) == N exactly (deterministic datasets), or
 #   - ">=N"     -> assert count(*) >= N (a floor), used for datasets whose
 #                  data is fetched from a live upstream at build time and so
-#                  drifts between builds (currently only omdb).
+#                  drifts between builds (currently omdb and moma).
 #
 # Usage:
 #   run.sh <tag> <datasets-csv>            # assert against expected/*.json
@@ -44,7 +44,7 @@ IMAGE="${REPOSITORY}:${TAG}"
 # Datasets whose row data is fetched from a live upstream at build time, so
 # exact counts drift between builds. For these, --update records a floor
 # (">=<count-at-build-time>") instead of an exact count.
-VOLATILE_DATASETS="omdb"
+VOLATILE_DATASETS="omdb moma"
 is_volatile() { case " $VOLATILE_DATASETS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_DIR="${SCRIPT_DIR}/../expected"

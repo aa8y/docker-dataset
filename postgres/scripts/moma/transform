@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# MoMA publishes no SQL, so stage the authored schema (shipped alongside these
+# build scripts) into the build dir as the dataset's SQL file. SQL_FILES then
+# resolves it relative to the build dir, exactly like an upstream dump.
+set -e
+cp /usr/local/lib/scripts/moma/schema.sql moma.sql

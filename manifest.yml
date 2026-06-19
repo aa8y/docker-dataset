@@ -59,6 +59,15 @@ contexts:
         structureTest:
           configs:
             - test/config/iso3166.yaml
+      moma:
+        extractUrl: >-
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artworks.csv
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artists.csv
+        sqlFiles: moma.sql
+        cdDir: /docker-entrypoint-initdb.d/moma
+        structureTest:
+          configs:
+            - test/config/moma.yaml
       omdb:
         extractUrl: https://github.com/df7cb/omdb-postgresql.git
         sqlFiles: >-

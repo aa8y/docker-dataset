@@ -15,6 +15,7 @@ So far we have the following datasets which are being used in the images.
 * `pagila`: the classic Sakila/"DVD rental store" sample ported to Postgres — films, actors, customers, inventory, rentals, and payments. We source it from [devrimgunduz/pagila](https://github.com/devrimgunduz/pagila), a maintained fork (pgFoundry's original no longer loads on modern Postgres). Its `payment` table is range-partitioned by month (`payment_p2022_NN`), so row counts are split across the parent and its partitions. Note: the upstream maintainer periodically shifts the data's dates to the then-current year, so absolute dates in the sample may differ between rebuilds.
 * `omdb`: the [Open Media Database](https://www.omdb.org/) film catalogue, packaged for Postgres at [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql). CSV data is fetched from `www.omdb.org` at build time and shipped inside the image so `\copy` resolves at container start. The init script also creates the `tsm_system_rows` extension that the upstream views rely on. Heads up: this dataset is much larger than the others (~150 MB of CSV + indexes), which makes the `omdb` image noticeably heavier.
 * `adventureworks`: the Microsoft AdventureWorks 2014 OLTP sample (a fictitious bicycle parts wholesaler — 68 tables, 5 schemas, ~300 employees, 500 products, 20k customers, 31k sales). We use the [lorint/AdventureWorks-for-Postgres](https://github.com/lorint/AdventureWorks-for-Postgres) port, which pulls Microsoft's CSV bundle and runs a Ruby reformat before loading. CSVs ship alongside the init script so the upstream `\copy ./X.csv` directives resolve at container start. This dataset is also on the heavier side (~90 MB of CSV).
+* `moma`: the [Museum of Modern Art research collection](https://github.com/MuseumofModernArt/collection) — ~160k catalogued artworks and ~16k artists (2 tables in the `public` schema). MoMA publishes only CSV/JSON (no SQL), so the schema is authored in-repo (`postgres/scripts/moma/schema.sql`, every column `text` since the data is free-form) and the CSVs ship alongside the init script so `\copy` resolves at container start. Note: MoMA refreshes the published CSVs periodically, so exact row counts drift over time.
 
 ## Databases
 
@@ -22,7 +23,7 @@ The only database supported so far is [PostgreSQL](https://www.postgresql.org/).
 
 ## Tags
 
-Available tags are `adventureworks`, `dellstore`, `frenchtowns`, `iso3166`, `omdb`, `pagila`, `sportsdb`, `yugabyte-sportsdb`, `yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-pgexercises`, `usda`, `world` and `latest`. Each image carries exactly one dataset, loaded into its own database. `latest` currently tracks the `world` dataset. All tags are published for `linux/amd64` and `linux/arm64`.
+Available tags are `adventureworks`, `dellstore`, `frenchtowns`, `iso3166`, `moma`, `omdb`, `pagila`, `sportsdb`, `yugabyte-sportsdb`, `yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-pgexercises`, `usda`, `world` and `latest`. Each image carries exactly one dataset, loaded into its own database. `latest` currently tracks the `world` dataset. All tags are published for `linux/amd64` and `linux/arm64`.
 
 `sportsdb` and `yugabyte-sportsdb` are currently the same image — the only mirror we ship is Yugabyte's. `sportsdb` is a special case: it predates the mirror-explicit naming, so we keep the bare `sportsdb` tag working for backwards compatibility while `yugabyte-sportsdb` exists so that if we add another sportsdb mirror later (e.g. a hypothetical `pgfoundry-sportsdb`), users can pin to the specific source they want and `sportsdb` continues to track whichever mirror is the current default.
 
@@ -94,8 +95,9 @@ e.g. `test/expected/iso3166.json`:
 
 keyed by schema-qualified table name, with authoritative `count(*)` values.
 A value is normally an exact count. For datasets whose data is fetched from a
-live upstream at build time and so drifts between builds (currently only
-`omdb`, sourced from `www.omdb.org`), the value is instead a floor like
+live upstream at build time and so drifts between builds (`omdb`, sourced
+from `www.omdb.org`, and `moma`, sourced from MoMA's CSV exports), the value
+is instead a floor like
 `">=59274"` and the test asserts `count(*) >=` that number. `--update` writes
 floors automatically for such datasets.
 

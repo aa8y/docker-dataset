@@ -1,0 +1,43 @@
+schemaVersion: "2.0.0"
+
+# MoMA publishes no SQL, so the schema is authored in-repo
+# (postgres/scripts/moma/schema.sql) and the CSV data ships alongside the init
+# script so the \copy directives resolve at psql runtime. Verify the wrapper
+# SQL, the authored tables, the \copy load, and the shipped CSVs.
+
+fileExistenceTests:
+  - name: "moma init script exists"
+    path: "/docker-entrypoint-initdb.d/moma.sql"
+    shouldExist: true
+
+  - name: "moma CSV data directory exists"
+    path: "/docker-entrypoint-initdb.d/moma"
+    shouldExist: true
+
+  - name: "moma Artworks CSV exists"
+    path: "/docker-entrypoint-initdb.d/moma/Artworks.csv"
+    shouldExist: true
+
+  - name: "moma Artists CSV exists"
+    path: "/docker-entrypoint-initdb.d/moma/Artists.csv"
+    shouldExist: true
+
+fileContentTests:
+  - name: "moma init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/moma.sql"
+    expectedContents:
+      - "CREATE DATABASE moma"
+      - '\\c moma'
+      - '\\cd /docker-entrypoint-initdb.d/moma'
+
+  - name: "moma declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/moma.sql"
+    expectedContents:
+      - "CREATE TABLE artists[ (]"
+      - "CREATE TABLE artworks[ (]"
+
+  - name: "moma loads data into every table"
+    path: "/docker-entrypoint-initdb.d/moma.sql"
+    expectedContents:
+      - '\\copy artists '
+      - '\\copy artworks '
