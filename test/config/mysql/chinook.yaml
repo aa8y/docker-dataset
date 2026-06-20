@@ -1,0 +1,50 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. chinook is the vendor's
+# MySQL script with backtick-quoted CamelCase identifiers (e.g. `Track`,
+# `InvoiceLine`). Its own `CREATE DATABASE Chinook` / `USE` is stripped by the
+# build and replaced with the lowercase `chinook` header below. The script puts
+# the opening paren on its own line, so the backtick-delimited name (which can
+# only end at the closing backtick) is assertion enough on its own.
+
+fileExistenceTests:
+  - name: "chinook init script exists"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "chinook init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `chinook`"
+      - "USE `chinook`"
+
+  - name: "chinook declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - "CREATE TABLE `Album`"
+      - "CREATE TABLE `Artist`"
+      - "CREATE TABLE `Customer`"
+      - "CREATE TABLE `Employee`"
+      - "CREATE TABLE `Genre`"
+      - "CREATE TABLE `Invoice`"
+      - "CREATE TABLE `InvoiceLine`"
+      - "CREATE TABLE `MediaType`"
+      - "CREATE TABLE `Playlist`"
+      - "CREATE TABLE `PlaylistTrack`"
+      - "CREATE TABLE `Track`"
+
+  - name: "chinook loads data into every table"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - "INSERT INTO `Album`"
+      - "INSERT INTO `Artist`"
+      - "INSERT INTO `Customer`"
+      - "INSERT INTO `Employee`"
+      - "INSERT INTO `Genre`"
+      - "INSERT INTO `Invoice`"
+      - "INSERT INTO `InvoiceLine`"
+      - "INSERT INTO `MediaType`"
+      - "INSERT INTO `Playlist`"
+      - "INSERT INTO `PlaylistTrack`"
+      - "INSERT INTO `Track`"

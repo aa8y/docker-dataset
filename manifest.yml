@@ -260,6 +260,15 @@ contexts:
         structureTest:
           configs:
             - test/config/mysql/world.yaml
+      # Chinook digital-media store. The vendor ships a MySQL-specific script as
+      # a GitHub release asset; the build strips its `CREATE DATABASE Chinook` /
+      # `USE` so it loads into the lowercase `chinook` database.
+      chinook:
+        extractUrl: https://github.com/lerocha/chinook-database/releases/download/v1.4.5/Chinook_MySql.sql
+        sqlFiles: Chinook_MySql.sql
+        structureTest:
+          configs:
+            - test/config/mysql/chinook.yaml
       # `latest` tracks a single representative dataset, mirroring postgres.
       latest:
         <<: *world
