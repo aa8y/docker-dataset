@@ -291,6 +291,62 @@ contexts:
         structureTest:
           configs:
             - test/config/mysql/moma.yaml
+      # StackExchange sites. Each ships as per-table XML in a 7z archive (no
+      # SQL), so -- exactly like the postgres side -- every site builds through
+      # the shared scripts/stackexchange hooks (each site's scripts/<site> dir
+      # is a symlink to it): the extract hook un-7z's the dump and the transform
+      # hook converts the XML to a MySQL init script (CREATE TABLE + batched
+      # INSERTs + indexes). The transform is the MySQL-emitting counterpart of
+      # the postgres one; adding a site is just a tag here + a structure-test
+      # config + an expected/mysql/<site>.json floor file.
+      stackexchange-beer:
+        dataset: beer
+        extractUrl: https://archive.org/download/stackexchange/beer.stackexchange.com.7z
+        sqlFiles: beer.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/mysql/stackexchange-beer.yaml
+      stackexchange-coffee:
+        dataset: coffee
+        extractUrl: https://archive.org/download/stackexchange/coffee.stackexchange.com.7z
+        sqlFiles: coffee.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/mysql/stackexchange-coffee.yaml
+      stackexchange-poker:
+        dataset: poker
+        extractUrl: https://archive.org/download/stackexchange/poker.stackexchange.com.7z
+        sqlFiles: poker.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/mysql/stackexchange-poker.yaml
+      stackexchange-woodworking:
+        dataset: woodworking
+        extractUrl: https://archive.org/download/stackexchange/woodworking.stackexchange.com.7z
+        sqlFiles: woodworking.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/mysql/stackexchange-woodworking.yaml
+      stackexchange-chess:
+        dataset: chess
+        extractUrl: https://archive.org/download/stackexchange/chess.stackexchange.com.7z
+        sqlFiles: chess.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/mysql/stackexchange-chess.yaml
+      stackexchange-cooking:
+        dataset: cooking
+        extractUrl: https://archive.org/download/stackexchange/cooking.stackexchange.com.7z
+        sqlFiles: cooking.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/mysql/stackexchange-cooking.yaml
       # `latest` tracks a single representative dataset, mirroring postgres.
       latest:
         <<: *world

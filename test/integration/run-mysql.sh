@@ -42,10 +42,23 @@ ROOT_PW="${MYSQL_ROOT_PASSWORD:-mysql}"
 # Datasets whose row data is fetched from a live upstream at build time, so
 # exact counts drift between builds. For these, --update records a floor
 # (">=<count-at-build-time>") instead of an exact count.
+#
+# Mirrors run.sh: volatility is detected two ways so we don't hand-maintain a
+# flat list:
+#   * VOLATILE_DATASETS - explicit per-dataset names (one-off live sources), and
+#   * VOLATILE_TAG_PREFIXES - tag prefixes whose datasets are all volatile. Every
+#     StackExchange site ships under a `stackexchange-` tag and is built from a
+#     periodically refreshed archive.org dump, so the whole family is volatile
+#     by prefix and a new site needs no edit here.
 VOLATILE_DATASETS="moma"
+VOLATILE_TAG_PREFIXES="stackexchange-"
 is_volatile() {
   local db="$1"
   case " $VOLATILE_DATASETS " in *" $db "*) return 0 ;; esac
+  local prefix
+  for prefix in $VOLATILE_TAG_PREFIXES; do
+    case "$TAG" in "$prefix"*) return 0 ;; esac
+  done
   return 1
 }
 

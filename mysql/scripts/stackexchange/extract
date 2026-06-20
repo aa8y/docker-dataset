@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# A StackExchange site data dump ships as a single 7z archive of per-table XML
+# files (Posts.xml, Users.xml, Comments.xml, ...). The generic EXTRACT_URL
+# fetch downloads the .7z; here we unpack the XMLs in place so the transform
+# hook can convert them to SQL, then drop the archive.
+#
+# This hook is shared by every StackExchange site: each site's dataset
+# directory (e.g. scripts/beer, scripts/coffee) is a symlink to
+# scripts/stackexchange, so the same extract/transform run for all of them,
+# keyed only on $DATASET. It mirrors the postgres extract hook -- only the
+# transform differs between the two engines.
+set -e
+sevenz="$(command -v 7z || command -v 7za || command -v 7zr)"
+for archive in ./*.7z; do
+  "$sevenz" x -y "$archive" >/dev/null
+  rm -f "$archive"
+done
