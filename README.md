@@ -75,6 +75,20 @@ where `<tag>` is one of the MySQL tags below and `<db_name>` is the matching dat
 
 Available MySQL tags are `sakila`, `world`, `chinook`, `northwind`, `moma` and `latest`. Each image carries exactly one dataset, loaded into a database of the same name. `latest` currently tracks the `world` dataset (mirroring the PostgreSQL `latest`).
 
+### Datasets not ported to MySQL
+
+Most of the PostgreSQL datasets are sourced from PostgreSQL-specific dumps or PostgreSQL-only upstreams, so there is no clean MySQL-native equivalent to ship. They are intentionally omitted (rather than hand-translated, which would no longer be the upstream dataset) for the reasons below:
+
+* `pagila`: not omitted but *replaced* — `pagila` is a port of Sakila to PostgreSQL, and MySQL uses the original Sakila directly (tag `sakila`, above).
+* `adventureworks`: the only maintained open port ([lorint/AdventureWorks-for-Postgres](https://github.com/lorint/AdventureWorks-for-Postgres)) targets PostgreSQL. AdventureWorks is a Microsoft SQL Server sample with no comparable, maintained MySQL port.
+* `airlines`: the [postgrespro demo](https://postgrespro.com/education/demodb) is distributed as a PostgreSQL `pg_dump` and is PostgreSQL-only.
+* `omdb`: [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql) is PostgreSQL-specific — it relies on the `tsm_system_rows` extension and psql `\copy`, with no MySQL packaging.
+* `dellstore`, `frenchtowns`, `iso3166`, `usda`: these are [pgFoundry dbsamples](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) shipped as PostgreSQL `COPY`/DDL dumps; the FTP mirror we use carries only the PostgreSQL tarballs (no MySQL variants).
+* `sportsdb` / `yugabyte-sportsdb`: SportsDB was once published for MySQL too, but `www.sportsdb.org` is offline and the only live mirror we have ([Yugabyte's](https://github.com/yugabyte/yugabyte-db/tree/master/sample)) ships PostgreSQL-only SQL.
+* `yugabyte-pgexercises`: the "clubdata" database behind [pgexercises.com](https://pgexercises.com/) is authored specifically for PostgreSQL.
+* `yugabyte-chinook`, `yugabyte-northwind`: superseded on MySQL by the native `chinook` and `northwind` tags above (the Yugabyte SQL is PostgreSQL dialect, so it is not reused here).
+* **Stack Exchange sites** (`stackexchange-*`): the shared build hook converts the archive.org XML dumps into PostgreSQL SQL (`COPY` + PostgreSQL types). Porting the family to MySQL needs a MySQL-emitting variant of that hook (`INSERT`/`LOAD DATA` + MySQL types); it is tracked under [Future Work](#future-work) rather than included here.
+
 ## Usage
 
 You can start the container by running:
@@ -169,5 +183,6 @@ CI runs all three commands; see `.github/workflows/ci.yml`.
 
 ## Future Work
 
-* Images for other popular databases like [MySQL](https://www.mysql.com/).
+* [MySQL](https://www.mysql.com/) images are now shipped (see [MySQL images](#mysql-images)). Remaining MySQL work: port more of the PostgreSQL datasets where a MySQL-native source can be found (see [Datasets not ported to MySQL](#datasets-not-ported-to-mysql)) — in particular, add a MySQL-emitting variant of the Stack Exchange build hook so the `stackexchange-*` family can ship for MySQL too.
+* Images for other popular databases.
 * Find and add more free data sources.
