@@ -1,0 +1,29 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. chinook is the Chinook
+# digital-media store sourced from Yugabyte's PostgreSQL-dialect dump (quoted
+# CamelCase identifiers, plain DDL + INSERT data). CockroachDB creates the
+# database (COCKROACH_DATABASE) and runs this script against it, so unlike the
+# postgres/mysql scripts there is no CREATE DATABASE header. The `latest` tag is
+# the same image, so it is covered by this config.
+
+fileExistenceTests:
+  - name: "chinook init script exists"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "chinook declares expected tables"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - 'CREATE TABLE "Album"'
+      - 'CREATE TABLE "Artist"'
+      - 'CREATE TABLE "Track"'
+      - 'CREATE TABLE "Invoice"'
+
+  - name: "chinook loads data into its tables"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - 'INSERT INTO "Album"'
+      - 'INSERT INTO "Artist"'
+      - 'INSERT INTO "Track"'

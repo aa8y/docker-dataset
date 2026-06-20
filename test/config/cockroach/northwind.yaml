@@ -1,0 +1,28 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. northwind is the Northwind
+# specialty-foods sample sourced from Yugabyte's PostgreSQL-dialect dump
+# (snake_case identifiers; CREATE TABLE is unqualified, data is INSERTed into
+# public.<table>). CockroachDB creates the database (COCKROACH_DATABASE) and
+# runs this script against it, so there is no CREATE DATABASE header.
+
+fileExistenceTests:
+  - name: "northwind init script exists"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "northwind declares expected tables"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    expectedContents:
+      - "CREATE TABLE categories"
+      - "CREATE TABLE customers"
+      - "CREATE TABLE orders"
+      - "CREATE TABLE products"
+
+  - name: "northwind loads data into its tables"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    expectedContents:
+      - "INSERT INTO public.categories"
+      - "INSERT INTO public.customers"
+      - "INSERT INTO public.orders"
