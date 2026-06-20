@@ -14,7 +14,27 @@ env:
   DAVE_VERSION: 0.4.1
 
 jobs:
+  unit:
+    # Fast Python-level tests for the transform hooks. Runs first and gates the
+    # image build below, so a logic regression fails in seconds rather than
+    # after the multi-arch build. Pin to the interpreter the alpine:3.21 builder
+    # ships (python3 3.12) so tests exercise the same behavior as production.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: pip install -r test/requirements-dev.txt
+
+      - name: Run unit tests
+        run: python -m pytest test/unit -q
+
   test:
+    needs: unit
     strategy:
       fail-fast: false
       matrix:
