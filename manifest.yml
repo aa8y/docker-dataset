@@ -279,6 +279,18 @@ contexts:
         structureTest:
           configs:
             - test/config/mysql/northwind.yaml
+      # MoMA research collection. Published only as CSV, so the schema is
+      # authored in-repo (mysql/scripts/moma) and the CSVs are bulk-loaded at
+      # start with server-side LOAD DATA INFILE. Counts drift between builds (the
+      # CSVs are refreshed upstream), so the smoke test records floors.
+      moma:
+        extractUrl: >-
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artworks.csv
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artists.csv
+        sqlFiles: moma.sql
+        structureTest:
+          configs:
+            - test/config/mysql/moma.yaml
       # `latest` tracks a single representative dataset, mirroring postgres.
       latest:
         <<: *world

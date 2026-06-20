@@ -87,6 +87,7 @@ RUN apk add --no-cache \
 RUN bash -c ' \
       set -e; \
       for f in $SQL_FILES; do \
+        [ -f "$f" ] || continue; \
         grep -ivE "^[[:space:]]*((/\*![0-9]+[[:space:]]+)?(CREATE|DROP)[[:space:]]+(DATABASE|SCHEMA)|USE[[:space:]])" "$f" > "$f.tmp"; \
         mv "$f.tmp" "$f"; \
       done; \

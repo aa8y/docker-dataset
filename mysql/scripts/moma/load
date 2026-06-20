@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Ship MoMA's CSV data next to the init script so the authored schema's
+# LOAD DATA INFILE directives resolve at container start.
+set -e
+mkdir -p /docker-entrypoint-initdb.d/moma
+mv Artworks.csv Artists.csv /docker-entrypoint-initdb.d/moma/
