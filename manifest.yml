@@ -45,7 +45,7 @@ contexts:
       adventureworks:
         extractUrl: https://github.com/lorint/AdventureWorks-for-Postgres.git
         sqlFiles: AdventureWorks-for-Postgres/install.sql
-        extraPrereqs: ruby
+        extraPrereqs: python3
         cdDir: /docker-entrypoint-initdb.d/adventureworks
         structureTest:
           configs:

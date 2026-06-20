@@ -34,7 +34,7 @@
 # AdventureWorks:
 #             https://github.com/lorint/AdventureWorks-for-Postgres
 #             (CSVs come from Microsoft's AdventureWorks 2014 OLTP zip,
-#             reformatted via a Ruby script, and shipped next to the init
+#             reformatted via a Python script, and shipped next to the init
 #             script.)
 
 # ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ ARG EXTRACT_URL
 # Ordered, space-separated paths (relative to the build dir) cat'd into the
 # init script after extract/transform.
 ARG SQL_FILES
-# apk packages beyond the shared set (e.g. "ruby" for adventureworks).
+# apk packages beyond the shared set (e.g. "python3" for adventureworks).
 ARG EXTRA_PREREQS
 # Optional: emits `CREATE EXTENSION IF NOT EXISTS <name>;` into the init script.
 ARG DB_EXTENSION
@@ -66,7 +66,7 @@ WORKDIR /tmp/build
 # (extract|transform|load) and executed at the matching stage below if present.
 # Hooks are extensionless and run via their shebang, so a hook may be written in
 # any language whose interpreter is in the builder (bash always; others via
-# EXTRA_PREREQS, e.g. ruby for adventureworks).
+# EXTRA_PREREQS, e.g. python3 for adventureworks).
 COPY scripts/ /usr/local/lib/scripts/
 
 # EXTRACT. Shared tools + per-dataset extras, then fetch by URL type and run an
