@@ -1,0 +1,32 @@
+schemaVersion: "2.0.0"
+
+# usda ships only as a (Latin-1) PostgreSQL dump; the shared pgsql transform
+# transcodes it to UTF-8 and hand-translates it to MySQL (COPY -> INSERT,
+# character(n) -> char(n), double precision -> double). Verify the wrapper SQL
+# and a few representative tables and loads (25 tables total).
+
+fileExistenceTests:
+  - name: "usda init script exists"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "usda init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `usda`"
+      - "USE `usda`"
+
+  - name: "usda declares representative tables"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    expectedContents:
+      - "CREATE TABLE food_des[ (]"
+      - "CREATE TABLE nut_data[ (]"
+      - "CREATE TABLE nutr_def[ (]"
+      - "CREATE TABLE data_src[ (]"
+
+  - name: "usda loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    expectedContents:
+      - "INSERT INTO food_des[ (]"
+      - "INSERT INTO nut_data[ (]"

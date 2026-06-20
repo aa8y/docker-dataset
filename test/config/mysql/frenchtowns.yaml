@@ -1,0 +1,32 @@
+schemaVersion: "2.0.0"
+
+# frenchtowns ships only as a PostgreSQL dump; the shared pgsql transform
+# hand-translates it to MySQL (COPY -> INSERT, SERIAL -> int, and lower-casing
+# the CamelCase table names so the lower-case COPY targets resolve). Verify the
+# wrapper SQL, the three tables, and the loads.
+
+fileExistenceTests:
+  - name: "frenchtowns init script exists"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "frenchtowns init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `frenchtowns`"
+      - "USE `frenchtowns`"
+
+  - name: "frenchtowns declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    expectedContents:
+      - "CREATE TABLE regions[ (]"
+      - "CREATE TABLE departments[ (]"
+      - "CREATE TABLE towns[ (]"
+
+  - name: "frenchtowns loads data into every table"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    expectedContents:
+      - "INSERT INTO regions[ (]"
+      - "INSERT INTO departments[ (]"
+      - "INSERT INTO towns[ (]"

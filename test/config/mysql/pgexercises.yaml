@@ -1,0 +1,33 @@
+schemaVersion: "2.0.0"
+
+# pgexercises (the pgexercises.com "clubdata" database) ships only as a
+# PostgreSQL dump in a dedicated `cd` schema with INSERT data; the shared pgsql
+# transform hand-translates it to MySQL (cd. schema stripped, numeric ->
+# decimal, timestamp -> datetime, USING btree dropped). Verify the wrapper SQL,
+# the three tables, and the loads.
+
+fileExistenceTests:
+  - name: "pgexercises init script exists"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "pgexercises init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `pgexercises`"
+      - "USE `pgexercises`"
+
+  - name: "pgexercises declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "CREATE TABLE facilities[ (]"
+      - "CREATE TABLE members[ (]"
+      - "CREATE TABLE bookings[ (]"
+
+  - name: "pgexercises loads data into every table"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "INSERT INTO facilities[ (]"
+      - "INSERT INTO members[ (]"
+      - "INSERT INTO bookings[ (]"

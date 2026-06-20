@@ -1,0 +1,29 @@
+schemaVersion: "2.0.0"
+
+# iso3166 ships only as a PostgreSQL dump (COPY + DDL); the shared pgsql
+# transform hand-translates it to MySQL (COPY -> INSERT, TEXT -> varchar so the
+# two_letter key works). Verify the wrapper SQL, the two tables, and the loads.
+
+fileExistenceTests:
+  - name: "iso3166 init script exists"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "iso3166 init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `iso3166`"
+      - "USE `iso3166`"
+
+  - name: "iso3166 declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "CREATE TABLE country[ (]"
+      - "CREATE TABLE subcountry[ (]"
+
+  - name: "iso3166 loads data into every table"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "INSERT INTO country[ (]"
+      - "INSERT INTO subcountry[ (]"
