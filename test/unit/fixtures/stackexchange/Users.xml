@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<users>
+  <row Id="1" Reputation="100" CreationDate="2014-01-21T20:26:05.043" DisplayName="Alice" AboutMe="line1&#10;it's &quot;great&quot;" UpVotes="5" />
+  <row Id="2" DisplayName="Bob" />
+</users>
