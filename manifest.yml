@@ -269,6 +269,16 @@ contexts:
         structureTest:
           configs:
             - test/config/mysql/chinook.yaml
+      # Northwind: the classic Microsoft small-business sample, ported to MySQL
+      # by dalers/mywind. The build strips its `CREATE SCHEMA northwind` / `USE`
+      # (the table DDL is schema-qualified to `northwind`, which the header
+      # creates).
+      northwind:
+        extractUrl: https://github.com/dalers/mywind.git
+        sqlFiles: mywind/northwind.sql mywind/northwind-data.sql
+        structureTest:
+          configs:
+            - test/config/mysql/northwind.yaml
       # `latest` tracks a single representative dataset, mirroring postgres.
       latest:
         <<: *world

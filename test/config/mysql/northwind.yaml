@@ -1,0 +1,68 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. northwind is dalers/mywind's
+# MySQL port of the Microsoft Access Northwind sample. Its table DDL is
+# schema-qualified (`northwind`.`<table>`) while its INSERTs are unqualified; the
+# upstream `CREATE SCHEMA northwind` / `USE` is stripped by the build and
+# replaced with the header below (which creates the `northwind` database the
+# qualified DDL targets).
+
+fileExistenceTests:
+  - name: "northwind init script exists"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "northwind init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `northwind`"
+      - "USE `northwind`"
+
+  - name: "northwind declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    expectedContents:
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`customers`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`employees`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`employee_privileges`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`inventory_transaction_types`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`inventory_transactions`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`invoices`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`order_details`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`order_details_status`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`orders`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`orders_status`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`orders_tax_status`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`privileges`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`products`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`purchase_order_details`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`purchase_order_status`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`purchase_orders`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`sales_reports`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`shippers`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`strings`"
+      - "CREATE TABLE IF NOT EXISTS `northwind`.`suppliers`"
+
+  - name: "northwind loads data into every table"
+    path: "/docker-entrypoint-initdb.d/northwind.sql"
+    expectedContents:
+      - "INSERT INTO `customers`"
+      - "INSERT INTO `employees`"
+      - "INSERT INTO `employee_privileges`"
+      - "INSERT INTO `inventory_transaction_types`"
+      - "INSERT INTO `inventory_transactions`"
+      - "INSERT INTO `invoices`"
+      - "INSERT INTO `order_details`"
+      - "INSERT INTO `order_details_status`"
+      - "INSERT INTO `orders`"
+      - "INSERT INTO `orders_status`"
+      - "INSERT INTO `orders_tax_status`"
+      - "INSERT INTO `privileges`"
+      - "INSERT INTO `products`"
+      - "INSERT INTO `purchase_order_details`"
+      - "INSERT INTO `purchase_order_status`"
+      - "INSERT INTO `purchase_orders`"
+      - "INSERT INTO `sales_reports`"
+      - "INSERT INTO `shippers`"
+      - "INSERT INTO `strings`"
+      - "INSERT INTO `suppliers`"

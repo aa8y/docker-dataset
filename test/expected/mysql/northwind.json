@@ -1,0 +1,22 @@
+{
+  "northwind.customers": 29,
+  "northwind.employee_privileges": 1,
+  "northwind.employees": 9,
+  "northwind.inventory_transaction_types": 4,
+  "northwind.inventory_transactions": 102,
+  "northwind.invoices": 35,
+  "northwind.order_details": 58,
+  "northwind.order_details_status": 6,
+  "northwind.orders": 48,
+  "northwind.orders_status": 4,
+  "northwind.orders_tax_status": 2,
+  "northwind.privileges": 1,
+  "northwind.products": 45,
+  "northwind.purchase_order_details": 55,
+  "northwind.purchase_order_status": 4,
+  "northwind.purchase_orders": 28,
+  "northwind.sales_reports": 5,
+  "northwind.shippers": 3,
+  "northwind.strings": 62,
+  "northwind.suppliers": 10
+}
