@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Stable, cheap fingerprint of upstream dataset source(s) so the Docker layer
+# cache busts only on real upstream change. Cheap: a JSON metadata API where one
+# exists (archive.org exposes real md5/sha1 per file), HTTP HEAD headers for
+# other file URLs, and the ls-remote SHA for git -- no full download. Fail-open:
+# on metadata failure emit a stable marker so a flaky upstream does not force a
+# spurious full rebuild.
+#
+# Usage: dataset-checksum "<space-separated EXTRACT_URL list>"
+# Output: a 16-char hex fingerprint on stdout.
+set -euo pipefail
+
+# Cheap HTTP fingerprint: HEAD headers (ETag/Last-Modified/Content-Length), with
+# a ranged-GET fallback for servers that reject HEAD. Echoes "" on failure.
+http_meta() {
+  local u="$1" v
+  v="$(curl -fsSLI "$u" 2>/dev/null | tr -d '\r' \
+        | awk -F': ' 'tolower($1)~/^(etag|last-modified|content-length)$/{print tolower($1)"="$2}' \
+        | sort)" || v=""
+  if [ -z "$v" ]; then
+    v="$(curl -fsSL -r 0-0 -D - -o /dev/null "$u" 2>/dev/null | tr -d '\r' \
+          | awk -F': ' 'tolower($1)~/^(etag|last-modified|content-range)$/{print tolower($1)"="$2}' \
+          | sort)" || v=""
+  fi
+  printf '%s' "$v"
+}
+
+# archive.org content fingerprint via its JSON metadata API: map the /download/
+# URL to /metadata/<id>/files/<path> and jq out the file's real md5/sha1/size.
+# Echoes "" on failure so the caller can fall back to HTTP headers.
+archive_meta() {
+  local rest id file v
+  rest="${1#https://archive.org/download/}"
+  id="${rest%%/*}"
+  file="${rest#*/}"
+  v="$(curl -fsSL "https://archive.org/metadata/${id}/files/${file}" 2>/dev/null \
+        | jq -r 'if .result then [.result.md5, .result.sha1, .result.size] | @tsv else empty end' 2>/dev/null)" || v=""
+  printf '%s' "$v"
+}
+
+acc=""
+for u in ${1:-}; do
+  case "$u" in
+    *.git)
+      v="$(git ls-remote "$u" HEAD 2>/dev/null | awk '{print $1}')" || v="" ;;
+    https://archive.org/download/*)
+      v="$(archive_meta "$u")"
+      [ -n "$v" ] || v="$(http_meta "$u")" ;;
+    *)
+      v="$(http_meta "$u")" ;;
+  esac
+  acc="${acc}${u}|${v:-unknown}"$'\n'
+done
+printf '%s' "$acc" | sha256sum | cut -c1-16

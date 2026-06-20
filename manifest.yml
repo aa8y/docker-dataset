@@ -5,9 +5,27 @@ templates:
   # Each image carries exactly one dataset. Per-dataset sources/prereqs are
   # declared per tag below and passed to the Dockerfile as build args; optional
   # ones are emitted only when the tag defines them (Mustache sections).
+  #
+  # Registry build cache (always on, for every tag): import a mode=max build
+  # cache from the registry so the EXTRACT layer -- and thus the upstream
+  # download -- is reused when nothing relevant changed. The push template below
+  # writes the cache, this one only reads it (the CI test job isn't logged in,
+  # but the repo is public so the import is anonymous). A missing ref is a cache
+  # miss, not an error.
+  #
+  # Correctness is gated by DATASET_CHECKSUM: bin/dataset-checksum fingerprints
+  # the tag's upstream source(s) from cheap metadata (archive.org's JSON
+  # metadata API md5/sha1 where available, otherwise HTTP HEAD headers, or the
+  # git ls-remote SHA) on the host, and the value is passed as a build arg the
+  # builder references just before EXTRACT. When upstream content changes the
+  # fingerprint changes, busting EXTRACT -> TRANSFORM -> LOAD; otherwise the
+  # cached layers are reused. Computed live via $(...) command substitution, so
+  # it stays per-tag without committing anything to this file.
   build: >
     docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+    --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}
     --build-arg DATASET={{dataset}}
+    --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
     --build-arg 'EXTRACT_URL={{{extractUrl}}}'
     --build-arg 'SQL_FILES={{{sqlFiles}}}'
     {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
@@ -18,7 +36,9 @@ templates:
   test: REPOSITORY={{{repository}}} bash test/integration/run.sh {{tag}} {{dataset}}
   push: >
     docker buildx build --push --platform {{{platforms}}}
+    --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}},mode=max,image-manifest=true
     --build-arg DATASET={{dataset}}
+    --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
     --build-arg 'EXTRACT_URL={{{extractUrl}}}'
     --build-arg 'SQL_FILES={{{sqlFiles}}}'
     {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
@@ -228,9 +248,13 @@ contexts:
       configs:
         - test/config/mysql/common.yaml
     templates:
+      # Mirrors the global templates (see top of file), including the always-on
+      # registry build cache gated by the DATASET_CHECKSUM fingerprint.
       build: >
         docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}
         --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
@@ -238,7 +262,9 @@ contexts:
       test: REPOSITORY={{{repository}}} bash test/integration/run-mysql.sh {{tag}} {{dataset}}
       push: >
         docker buildx build --push --platform {{{platforms}}}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}

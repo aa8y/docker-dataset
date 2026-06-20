@@ -187,6 +187,39 @@ CI runs all three commands; see `.github/workflows/ci.yml`.
 
 [cst]: https://github.com/GoogleContainerTools/container-structure-test
 
+## Build caching
+
+Every tag uses a [registry build cache](https://docs.docker.com/build/cache/backends/registry/)
+so the expensive `EXTRACT` layer (the upstream download) and the
+`TRANSFORM`/`LOAD` layers after it are reused across builds instead of being
+redone from scratch on every CI run. The cache is read on `dave build`
+(`--cache-from`) and written on `dave push` (`--cache-to ... mode=max`),
+stored per tag as `<repository>:buildcache-<tag>`. A missing cache ref is a
+cache miss, not an error, so the first build of a new tag simply populates it.
+
+Correctness is gated on the dataset's actual upstream content. Before each
+build, `bin/dataset-checksum` computes a cheap, stable fingerprint of the
+tag's source(s) — the `git ls-remote` HEAD SHA for `*.git` sources, the real
+`md5`/`sha1` from [archive.org's JSON metadata API](https://archive.org/developers/md-read.html)
+(via `jq`) for the Stack Exchange dumps, or the
+`ETag`/`Last-Modified`/`Content-Length` from an HTTP `HEAD` (with a ranged-GET
+fallback) for other file URLs — without downloading the data. The fingerprint is
+passed to the build as the `DATASET_CHECKSUM` build arg, which the builder
+references just before `EXTRACT`:
+
+* when the upstream is unchanged, the fingerprint is identical and the cached
+  layers are reused (fast);
+* when the upstream changes, the fingerprint changes, busting `EXTRACT` and
+  cascading a rebuild through `TRANSFORM` and `LOAD` (fresh).
+
+The fingerprint is recorded on the final image as the
+`org.opencontainers.image.revision` label (`docker inspect`). The computation
+is fail-open: a source that exposes no usable metadata (or is momentarily
+unreachable) collapses to a stable marker and caches as before rather than
+forcing a spurious full rebuild. The script needs `curl`, `jq`, and `git` on
+the host (all present on the CI runners; `jq` is already required by the
+integration tests).
+
 ## Future Work
 
 * [MySQL](https://www.mysql.com/) images are now shipped (see [MySQL images](#mysql-images)), including the full Stack Exchange family. Remaining MySQL work: port more of the PostgreSQL datasets where a MySQL-native source can be found or the upstream is format-neutral enough to hand-translate faithfully (see [Datasets not ported to MySQL](#datasets-not-ported-to-mysql)).

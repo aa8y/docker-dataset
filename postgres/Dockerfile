@@ -77,6 +77,15 @@ COPY scripts/ /usr/local/lib/scripts/
 # final image.
 ENV WGET_OPTS="--tries=5 --waitretry=10 --timeout=30 --retry-connrefused --retry-on-host-error --retry-on-http-error=429,500,502,503,504"
 
+# Upstream-content fingerprint, computed on the host from cheap source metadata
+# (HTTP HEAD ETag/Last-Modified/Content-Length, or the git ls-remote SHA) by
+# bin/dataset-checksum and passed in as a build arg. Referenced in the RUN below
+# so a real upstream change busts this layer and cascades a rebuild through
+# EXTRACT -> TRANSFORM -> LOAD, while an unchanged dataset reuses the registry
+# cache. Builder-only, so it never leaks into the final image.
+ARG DATASET_CHECKSUM=
+RUN echo "dataset checksum: ${DATASET_CHECKSUM}"
+
 # EXTRACT. Shared tools + per-dataset extras, then fetch by URL type and run an
 # optional dataset extract hook (e.g. omdb's CSV download, the AdventureWorks
 # data zip).
@@ -122,9 +131,13 @@ RUN bash -c ' \
 # ---------------------------------------------------------------------------
 FROM postgres:18-alpine
 
+# Re-declared in this stage so the upstream-content fingerprint can be recorded
+# on the final image (visible via `docker inspect`) for observability.
+ARG DATASET_CHECKSUM=
 LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
       org.opencontainers.image.description="PostgreSQL images pre-populated with sample datasets for practice and testing." \
       org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.revision="${DATASET_CHECKSUM}" \
       org.opencontainers.image.source="https://github.com/aa8y/docker-dataset" \
       org.opencontainers.image.title="aa8y/postgres-dataset" \
       org.opencontainers.image.url="https://hub.docker.com/r/aa8y/postgres-dataset" \
