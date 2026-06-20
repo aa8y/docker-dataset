@@ -1,0 +1,11 @@
+# Python bytecode from running the transform-hook unit tests (test/unit). The
+# hooks are imported by source loader, which writes .pyc files next to them.
+__pycache__/
+*.pyc
+
+# Local virtualenvs for the dev/test deps (test/requirements-dev.txt).
+.venv/
+venv/
+
+# pytest
+.pytest_cache/

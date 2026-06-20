@@ -1,0 +1,6 @@
+# Dev/test-only dependencies for the Python transform unit tests (test/unit).
+# Not installed into any image; the build installs interpreters per-dataset via
+# EXTRA_PREREQS. lxml is only needed by the stackexchange transform tests; the
+# pgsql and adventureworks suites are stdlib-only.
+pytest==9.1.1
+lxml==6.1.1
