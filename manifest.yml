@@ -438,3 +438,72 @@ contexts:
       latest:
         <<: *world
         dataset: world
+  # CockroachDB images. Built on the official cockroachdb/cockroach image and
+  # published under a separate repository. There is no official Alpine image,
+  # but the official one is slim (UBI-minimal, ~170 MB) and multi-arch, and its
+  # entrypoint honours the same /docker-entrypoint-initdb.d/*.sql convention the
+  # official postgres image uses (when started with `start-single-node`). Since
+  # CockroachDB is PostgreSQL wire- and SQL-compatible, these reuse the same
+  # PostgreSQL-dialect sample dumps the Yugabyte postgres tags do. The build
+  # templates are the CockroachDB flavours (fewer build args than postgres; test
+  # runs the CockroachDB smoke-test script) and override the global postgres
+  # ones for this context.
+  cockroach:
+    tagKeys: dataset
+    parameters:
+      repository: aa8y/cockroach-dataset
+    structureTest:
+      configs:
+        - test/config/cockroach/common.yaml
+    templates:
+      # Mirrors the global templates (see top of file), including the always-on
+      # registry build cache gated by the DATASET_CHECKSUM fingerprint.
+      build: >
+        docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        --build-arg 'SQL_FILES={{{sqlFiles}}}'
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
+        -t {{{repository}}}:{{tag}} {{{context}}}
+      test: REPOSITORY={{{repository}}} bash test/integration/run-cockroach.sh {{tag}} {{dataset}}
+      push: >
+        docker buildx build --push --platform {{{platforms}}}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}},mode=max,image-manifest=true
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        --build-arg 'SQL_FILES={{{sqlFiles}}}'
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
+        -t {{{repository}}}:{{tag}} {{{context}}}
+    tags:
+      # Chinook digital-media store, sourced from Yugabyte's PostgreSQL-dialect
+      # mirror (the same dump behind the postgres `yugabyte-chinook` tag): plain
+      # DDL + INSERT data with quoted CamelCase identifiers, which load on
+      # CockroachDB unchanged.
+      chinook: &chinook
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_genres_artists_albums.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_songs.sql
+        sqlFiles: chinook_ddl.sql chinook_genres_artists_albums.sql chinook_songs.sql
+        structureTest:
+          configs:
+            - test/config/cockroach/chinook.yaml
+      # Northwind specialty-foods sample, same Yugabyte PostgreSQL-dialect dump
+      # behind the postgres `yugabyte-northwind` tag (DDL + INSERT data).
+      northwind:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_data.sql
+        sqlFiles: northwind_ddl.sql northwind_data.sql
+        structureTest:
+          configs:
+            - test/config/cockroach/northwind.yaml
+      # `latest` tracks a single representative dataset, mirroring postgres/mysql.
+      latest:
+        <<: *chinook
+        dataset: chinook
