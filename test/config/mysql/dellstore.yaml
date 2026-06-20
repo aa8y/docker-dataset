@@ -1,0 +1,44 @@
+schemaVersion: "2.0.0"
+
+# dellstore ships only as a PostgreSQL dump (the pgFoundry dellstore2 sample):
+# COPY data + a PL/pgSQL stored function. The shared pgsql transform
+# hand-translates it to MySQL (COPY -> INSERT, type fixes, USING btree dropped)
+# and drops the PL/pgSQL function (no mechanical MySQL translation; the schema
+# and all data still load). Verify the wrapper SQL, the tables, and the loads.
+
+fileExistenceTests:
+  - name: "dellstore init script exists"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "dellstore init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `dellstore`"
+      - "USE `dellstore`"
+
+  - name: "dellstore declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "CREATE TABLE categories[ (]"
+      - "CREATE TABLE customers[ (]"
+      - "CREATE TABLE orders[ (]"
+      - "CREATE TABLE orderlines[ (]"
+      - "CREATE TABLE products[ (]"
+      - "CREATE TABLE inventory[ (]"
+      - "CREATE TABLE cust_hist[ (]"
+      - "CREATE TABLE reorder[ (]"
+
+  - name: "dellstore loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "INSERT INTO customers[ (]"
+      - "INSERT INTO orders[ (]"
+      - "INSERT INTO products[ (]"
+
+  - name: "dellstore drops the PL/pgSQL function (no MySQL translation)"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    excludedContents:
+      - "LANGUAGE plpgsql"
+      - "CREATE FUNCTION"

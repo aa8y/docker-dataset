@@ -327,6 +327,31 @@ contexts:
         structureTest:
           configs:
             - test/config/mysql/pgexercises.yaml
+      # Tier 2 hand-translated PostgreSQL datasets. Larger / slightly more
+      # involved than tier 1 but still handled by the shared scripts/pgsql hook:
+      # sportsdb is INSERT-based across five files with sequences, constraints,
+      # FKs and Yugabyte `USING lsm` indexes; dellstore2 is COPY-based plus a
+      # PL/pgSQL stored function, which the hook drops (no mechanical MySQL
+      # translation -- the schema and all data still load faithfully).
+      dellstore:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz
+        sqlFiles: dellstore2-normal-1.0/dellstore2-normal-1.0.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/mysql/dellstore.yaml
+      sportsdb:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_indexes.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_constraints.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_fks.sql
+        sqlFiles: sportsdb_tables.sql sportsdb_inserts.sql sportsdb_indexes.sql sportsdb_constraints.sql sportsdb_fks.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/mysql/sportsdb.yaml
       # StackExchange sites. Each ships as per-table XML in a 7z archive (no
       # SQL), so -- exactly like the postgres side -- every site builds through
       # the shared scripts/stackexchange hooks (each site's scripts/<site> dir

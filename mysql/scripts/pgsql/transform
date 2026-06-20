@@ -59,15 +59,27 @@ COPY_RE = re.compile(
     re.IGNORECASE)
 
 # Whole DDL lines that are Postgres-only and have no MySQL equivalent we need.
+# USING <method> covers btree/hash (pg_dump) and lsm (the Yugabyte dumps).
 DROP_LINE_RE = re.compile(
     r"^\s*(SET\s|SELECT\s+pg_catalog\.setval|GRANT\s|REVOKE\s|COMMENT\s+ON|"
-    r"WITHOUT\s+OIDS|USING\s+(btree|hash)\b|\\connect|\\c\s|\\\.)",
+    r"WITHOUT\s+OIDS|USING\s+(btree|hash|lsm)\b|\\connect|\\c\s|\\\.)",
     re.IGNORECASE)
 
 # Multi-line statements to drop wholesale (from this keyword until the line that
-# ends the statement with ';').
-DROP_BLOCK_RE = re.compile(r"^\s*(CREATE\s+SEQUENCE|ALTER\s+SEQUENCE)\b",
+# ends the statement with ';'). Sequences are folded into the column type
+# (serial->int) and their explicit values come from the data; DOMAIN/TYPE are
+# Postgres-only custom types (sportsdb defines an unused `primary_id` domain).
+DROP_BLOCK_RE = re.compile(
+    r"^\s*(CREATE\s+SEQUENCE|ALTER\s+SEQUENCE|CREATE\s+DOMAIN|CREATE\s+TYPE)\b",
+    re.IGNORECASE)
+
+# PL/pgSQL (and other) stored functions have no mechanical MySQL translation, so
+# they are dropped wholesale. A function runs from CREATE [OR REPLACE] FUNCTION
+# until its trailing `LANGUAGE <lang>;`; its body contains semicolons, so the
+# generic ';' terminator can't be used.
+FUNC_START_RE = re.compile(r"^\s*CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b",
                            re.IGNORECASE)
+FUNC_END_RE = re.compile(r"\bLANGUAGE\s+\w+\s*;\s*$", re.IGNORECASE)
 
 
 def transcode(path):
@@ -100,7 +112,7 @@ def clean_ddl(line):
     line = convert_type(line)
     line = re.sub(r"(?i)\bdefault\s+nextval\([^)]*\)", "", line)
     line = re.sub(r"(?i)\balter\s+table\s+only\b", "ALTER TABLE", line)
-    line = re.sub(r"(?i)\busing\s+(btree|hash)\b", "", line)
+    line = re.sub(r"(?i)\busing\s+(btree|hash|lsm)\b", "", line)
     line = re.sub(r"(?i)\bwith\s*\(\s*oids[^)]*\)", "", line)
     line = re.sub(r"(?i)\b(public|cd)\.", "", line)
     # Lower-case table identifiers (Postgres folded unquoted names to lower
@@ -147,10 +159,14 @@ def copy_value(field):
 def convert_file(text, out):
     lines = text.split("\n")
     i, n = 0, len(lines)
-    drop_block = False
+    drop_block = drop_func = False
     while i < n:
         line = lines[i]
 
+        if drop_func:
+            if FUNC_END_RE.search(line):
+                drop_func = False
+            i += 1; continue
         if drop_block:
             if ";" in line:
                 drop_block = False
@@ -175,6 +191,9 @@ def convert_file(text, out):
             i += 1  # skip the \. terminator
             continue
 
+        if FUNC_START_RE.match(line):
+            drop_func = not FUNC_END_RE.search(line)
+            i += 1; continue
         if DROP_BLOCK_RE.match(line):
             drop_block = ";" not in line
             i += 1; continue

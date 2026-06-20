@@ -1,0 +1,40 @@
+schemaVersion: "2.0.0"
+
+# sportsdb ships only as PostgreSQL SQL (Yugabyte's mirror), across five files:
+# tables, INSERT data, indexes, constraints, and FKs. The shared pgsql transform
+# hand-translates the dialect to MySQL (serial -> int, USING lsm dropped, ALTER
+# TABLE ONLY -> ALTER TABLE, type fixes). 107 tables; verify the wrapper SQL,
+# representative tables, a populated table's data, and that the constraints/FKs
+# survive the translation.
+
+fileExistenceTests:
+  - name: "sportsdb init script exists"
+    path: "/docker-entrypoint-initdb.d/sportsdb.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "sportsdb init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/sportsdb.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `sportsdb`"
+      - "USE `sportsdb`"
+
+  - name: "sportsdb declares representative tables"
+    path: "/docker-entrypoint-initdb.d/sportsdb.sql"
+    expectedContents:
+      - "CREATE TABLE addresses[ (]"
+      - "CREATE TABLE teams[ (]"
+      - "CREATE TABLE persons[ (]"
+      - "CREATE TABLE events[ (]"
+
+  - name: "sportsdb loads data and keeps constraints/FKs"
+    path: "/docker-entrypoint-initdb.d/sportsdb.sql"
+    expectedContents:
+      - "INSERT INTO persons[ (]"
+      - "ADD CONSTRAINT"
+      - "FOREIGN KEY"
+
+  - name: "sportsdb strips Yugabyte USING lsm index access method"
+    path: "/docker-entrypoint-initdb.d/sportsdb.sql"
+    excludedContents:
+      - "USING lsm"
