@@ -69,6 +69,14 @@ WORKDIR /tmp/build
 # EXTRA_PREREQS, e.g. python3 for adventureworks).
 COPY scripts/ /usr/local/lib/scripts/
 
+# Resilient download options shared by the extract step and any dataset extract
+# hook (inherited via the environment). Upstreams (archive.org, GitHub release
+# assets, ftp.postgresql.org) return transient 5xx/429s under load; retry with
+# backoff so a momentary hiccup doesn't fail the whole build. GNU wget (Alpine
+# 3.21 ships 1.25) honours these flags. Builder-only, so it never leaks into the
+# final image.
+ENV WGET_OPTS="--tries=5 --waitretry=10 --timeout=30 --retry-connrefused --retry-on-host-error --retry-on-http-error=429,500,502,503,504"
+
 # EXTRACT. Shared tools + per-dataset extras, then fetch by URL type and run an
 # optional dataset extract hook (e.g. omdb's CSV download, the AdventureWorks
 # data zip).
@@ -84,8 +92,8 @@ RUN apk add --no-cache \
       set -e; \
       case "$EXTRACT_URL" in \
         *.git)    git clone "$EXTRACT_URL" ;; \
-        *.tar.gz) wget -qO- "$EXTRACT_URL" | tar -xzf - ;; \
-        *)        for u in $EXTRACT_URL; do wget -q "$u"; done ;; \
+        *.tar.gz) wget $WGET_OPTS -qO- "$EXTRACT_URL" | tar -xzf - ;; \
+        *)        for u in $EXTRACT_URL; do wget $WGET_OPTS -q "$u"; done ;; \
       esac; \
       h="/usr/local/lib/scripts/${DATASET}/extract"; if [ -f "$h" ]; then "$h"; fi'
 

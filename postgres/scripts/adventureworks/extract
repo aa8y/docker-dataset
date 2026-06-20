@@ -4,6 +4,6 @@
 # Microsoft's AdventureWorks 2014 OLTP release zip, fetched here.
 set -e
 cd AdventureWorks-for-Postgres
-wget -q -O ms.zip https://github.com/Microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorks-oltp-install-script.zip
+wget $WGET_OPTS -q -O ms.zip https://github.com/Microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorks-oltp-install-script.zip
 unzip -q -o ms.zip
 rm ms.zip
