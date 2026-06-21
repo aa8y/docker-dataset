@@ -1,0 +1,17 @@
+# Speed up the one-time dataset import the MariaDB entrypoint runs at first
+# container start (every dataset's /docker-entrypoint-initdb.d/*.sql).
+#
+# Sample dumps such as sportsdb are tens of thousands of individual,
+# autocommitted INSERTs. With MariaDB's defaults each commit fsyncs the redo
+# log and routes pages through the doublewrite buffer, so the import is
+# fsync-bound and far slower than the equivalent Postgres load -- slow enough
+# that on CI runners it overran the test harness's readiness wait.
+#
+# The data here is disposable and fully reproducible from the image's init
+# scripts, so durability across a crash is irrelevant: relaxing these two knobs
+# trades crash-safety we don't need for a large drop in fsync traffic, cutting
+# import time markedly. Named `zz-` so it is the last file !includedir reads and
+# thus wins over the base mariadb-server.cnf.
+[mysqld]
+innodb_flush_log_at_trx_commit=0
+innodb_doublewrite=0

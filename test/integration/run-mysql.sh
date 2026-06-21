@@ -103,8 +103,13 @@ docker run -d --name "$CONTAINER" "$IMAGE" >/dev/null
 # reachable on the socket), so a bare ping can succeed mid-init. It prints
 # "Ready for start up." only after every init script has run and just before it
 # execs the real server -- so we wait for that marker first, then for ping.
+#
+# The marker wait has to cover the full init-script import, which for the larger
+# INSERT-based datasets (sportsdb) is the slow part and runs noticeably slower on
+# CI runners than locally. conf/zz-dataset-fast-import.cnf cuts that time, but we
+# still allow a generous budget here so a slow runner doesn't spuriously fail.
 ready=0
-for _ in $(seq 1 180); do
+for _ in $(seq 1 300); do
   if docker logs "$CONTAINER" 2>&1 | grep -q "Ready for start up"; then
     ready=1; break
   fi
