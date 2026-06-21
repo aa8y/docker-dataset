@@ -146,4 +146,10 @@ ARG DATASET
 ENV MYSQL_ROOT_PASSWORD=mysql
 ENV MYSQL_DATABASE=${DATASET}
 
+# Server tuning that makes the entrypoint's one-time init-script import (run at
+# first container start) much faster; see conf/zz-dataset-fast-import.cnf. The
+# base image's my.cnf does `!includedir /etc/my.cnf.d`, so dropping the file
+# there is all that's needed.
+COPY conf/ /etc/my.cnf.d/
+
 COPY --from=builder /docker-entrypoint-initdb.d /docker-entrypoint-initdb.d

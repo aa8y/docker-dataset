@@ -1,0 +1,13 @@
+{
+  "chinook.Album": 347,
+  "chinook.Artist": 275,
+  "chinook.Customer": 59,
+  "chinook.Employee": 8,
+  "chinook.Genre": 25,
+  "chinook.Invoice": 412,
+  "chinook.InvoiceLine": 2240,
+  "chinook.MediaType": 5,
+  "chinook.Playlist": 18,
+  "chinook.PlaylistTrack": 8715,
+  "chinook.Track": 3503
+}

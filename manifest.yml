@@ -484,7 +484,7 @@ contexts:
       # mirror (the same dump behind the postgres `yugabyte-chinook` tag): plain
       # DDL + INSERT data with quoted CamelCase identifiers, which load on
       # CockroachDB unchanged.
-      chinook: &chinook
+      chinook: &cockroach-chinook
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_ddl.sql
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_genres_artists_albums.sql
@@ -505,5 +505,68 @@ contexts:
             - test/config/cockroach/northwind.yaml
       # `latest` tracks a single representative dataset, mirroring postgres/mysql.
       latest:
-        <<: *chinook
+        <<: *cockroach-chinook
+        dataset: chinook
+  # SQLite images. Built on the Alpine, statically-linked keinos/sqlite3 image
+  # and published under a separate repository. SQLite is serverless -- a
+  # database is just a file -- so the build *builds the database file* rather
+  # than shipping init scripts: a dataset is described either by a text SQL
+  # source (sqlFiles, fed to the sqlite3 CLI to build the database) or by a
+  # prebuilt SQLite database file (dbFile, shipped as-is). The build templates
+  # are the SQLite flavours (no init-script assembly; test runs the SQLite
+  # smoke-test script) and override the global postgres ones for this context.
+  sqlite:
+    tagKeys: dataset
+    parameters:
+      repository: aa8y/sqlite-dataset
+    structureTest:
+      configs:
+        - test/config/sqlite/common.yaml
+    templates:
+      # Mirrors the global templates (see top of file), including the always-on
+      # registry build cache gated by the DATASET_CHECKSUM fingerprint. Emits
+      # SQL_FILES or DB_FILE per tag (Mustache sections), never both.
+      build: >
+        docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
+        {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}} {{{context}}}
+      test: REPOSITORY={{{repository}}} bash test/integration/run-sqlite.sh {{tag}} {{dataset}}
+      push: >
+        docker buildx build --push --platform {{{platforms}}}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}},mode=max,image-manifest=true
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
+        {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}} {{{context}}}
+    tags:
+      # Chinook digital-media store. The vendor ships a native SQLite SQL script
+      # (release v1.4.5), which the build runs through the sqlite3 CLI to create
+      # /data/chinook.db. Same CamelCase identifiers as the other chinook tags.
+      chinook: &sqlite-chinook
+        extractUrl: https://github.com/lerocha/chinook-database/releases/download/v1.4.5/Chinook_Sqlite.sql
+        sqlFiles: Chinook_Sqlite.sql
+        structureTest:
+          configs:
+            - test/config/sqlite/chinook.yaml
+      # Northwind specialty-foods sample. The jpwhite3/northwind-SQLite3 port
+      # publishes a prebuilt database (dist/northwind.db), shipped as-is. This is
+      # the expanded edition of the sample (a large Order Details table).
+      northwind:
+        extractUrl: https://raw.githubusercontent.com/jpwhite3/northwind-SQLite3/main/dist/northwind.db
+        dbFile: northwind.db
+        structureTest:
+          configs:
+            - test/config/sqlite/northwind.yaml
+      # `latest` tracks a single representative dataset, mirroring postgres/mysql.
+      latest:
+        <<: *sqlite-chinook
         dataset: chinook

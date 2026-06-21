@@ -27,11 +27,12 @@ So far we have the following datasets which are being used in the images.
 
 ## Databases
 
-Two database engines are supported, each published as its own image repository:
+Four database engines are supported, each published as its own image repository:
 
 * [PostgreSQL](https://www.postgresql.org/) as [`aa8y/postgres-dataset`](https://hub.docker.com/r/aa8y/postgres-dataset). We use the `alpine` version of the official image as the base image to keep our image slim.
 * [MySQL](https://www.mysql.com/) as [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset). There is no official Alpine image for Oracle MySQL (the official `mysql` image is Oracle Linux / Debian based) and Alpine's own package repositories ship [MariaDB](https://mariadb.org/) in place of MySQL, so to keep the "thin, Alpine-based" goal we build on the community [`yobasystems/alpine-mariadb`](https://hub.docker.com/r/yobasystems/alpine-mariadb) image. MariaDB is the MySQL drop-in Alpine substitutes, and its entrypoint honours the same `MYSQL_*` env vars and `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image, so the dataset pattern carries over unchanged. See [MySQL images](#mysql-images) for the datasets and tags available.
 * [CockroachDB](https://www.cockroachlabs.com/) as [`aa8y/cockroach-dataset`](https://hub.docker.com/r/aa8y/cockroach-dataset). There is no official Alpine image (the official [`cockroachdb/cockroach`](https://hub.docker.com/r/cockroachdb/cockroach) image is UBI-minimal), but it is slim (~170 MB) and multi-arch, and its entrypoint honours the same `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image (plus a `COCKROACH_DATABASE` env var) when the container is started with `start-single-node`. CockroachDB is PostgreSQL wire- and SQL-compatible, so the dataset pattern carries over and these reuse the same PostgreSQL-dialect sample dumps. See [CockroachDB images](#cockroachdb-images) for the datasets and tags available.
+* [SQLite](https://www.sqlite.org/) as [`aa8y/sqlite-dataset`](https://hub.docker.com/r/aa8y/sqlite-dataset). SQLite is serverless — a database is just a file — so there is no server to boot and no init scripts; the build assembles the database file and the image ships it. We use the Alpine, statically-linked [`keinos/sqlite3`](https://hub.docker.com/r/keinos/sqlite3) image (multi-arch) as the base, keeping the image genuinely thin and Alpine-based. See [SQLite images](#sqlite-images) for the datasets and tags available.
 
 ## Tags
 
@@ -115,6 +116,29 @@ where `<tag>` is one of the CockroachDB tags below and `<db_name>` is the matchi
 ### CockroachDB tags
 
 Available CockroachDB tags are `chinook`, `northwind` and `latest`. Each image carries exactly one dataset, loaded into a database of the same name. `latest` currently tracks the `chinook` dataset.
+
+## SQLite images
+
+The SQLite images follow the same one-dataset-per-image model, but since SQLite is serverless the build inverts: rather than shipping init scripts that run at container start, the build assembles the database file and the final image carries it. Each [`aa8y/sqlite-dataset`](https://hub.docker.com/r/aa8y/sqlite-dataset) image carries exactly one dataset as `/data/<dataset>.db`, built through the [Dockerfile](sqlite/Dockerfile) driven by `manifest.yml`: a dataset is described either by a native SQLite SQL script (fed to the `sqlite3` CLI to build the database) or by a prebuilt SQLite database file (shipped as-is). All SQLite tags are published for `linux/amd64` and `linux/arm64`.
+
+Start a container and open the database with the bundled `sqlite3` shell:
+```
+docker run -it --rm aa8y/sqlite-dataset:<tag>
+```
+which opens `/data/<db_name>.db` directly. You can also run a one-off query:
+```
+docker run --rm aa8y/sqlite-dataset:<tag> /usr/bin/sqlite3 /data/<db_name>.db "SELECT count(*) FROM ..."
+```
+where `<tag>` is one of the SQLite tags below and `<db_name>` is the matching dataset name.
+
+### SQLite datasets
+
+* `chinook`: the [Chinook](https://github.com/lerocha/chinook-database) digital-media store — artists, albums, tracks, customers, and invoices (11 tables; quoted CamelCase identifiers like `Track`, `InvoiceLine`). Built at image-build time from the vendor's native `Chinook_Sqlite.sql` script (release `v1.4.5`), so row counts match the other `chinook` tags exactly.
+* `northwind`: the classic Northwind specialty-foods import/export company — customers, orders, products, employees, and suppliers (13 tables). We ship the prebuilt database from [jpwhite3/northwind-SQLite3](https://github.com/jpwhite3/northwind-SQLite3), a SQLite3 port of the Microsoft Access Northwind sample. Note this is the port's *expanded* edition — the `Orders` and especially `"Order Details"` tables carry far more rows than the classic sample, so this image is heavier than the others.
+
+### SQLite tags
+
+Available SQLite tags are `chinook`, `northwind` and `latest`. Each image carries exactly one dataset as a database file of the same name. `latest` currently tracks the `chinook` dataset.
 
 ## Usage
 
@@ -245,5 +269,6 @@ integration tests).
 
 * [MySQL](https://www.mysql.com/) images are now shipped (see [MySQL images](#mysql-images)), including the full Stack Exchange family. Remaining MySQL work: port more of the PostgreSQL datasets where a MySQL-native source can be found or the upstream is format-neutral enough to hand-translate faithfully (see [Datasets not ported to MySQL](#datasets-not-ported-to-mysql)).
 * [CockroachDB](https://www.cockroachlabs.com/) images are now shipped (see [CockroachDB images](#cockroachdb-images)), starting with the PostgreSQL-dialect `chinook` and `northwind` datasets. Remaining CockroachDB work: extend the dataset set (most plain DDL + data PostgreSQL dumps should load with little or no change).
+* [SQLite](https://www.sqlite.org/) images are now shipped (see [SQLite images](#sqlite-images)), starting with the `chinook` and `northwind` datasets. Remaining SQLite work: add more datasets from native SQLite sources or by building from format-neutral SQL.
 * Images for other popular databases.
 * Find and add more free data sources.

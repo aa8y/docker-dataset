@@ -1,0 +1,12 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. chinook is built at image
+# build time from the vendor's native Chinook_Sqlite.sql script into
+# /data/chinook.db. The `latest` tag is the same image, so it is covered by
+# this config. (Row counts are asserted by the integration smoke test, since
+# the database is a binary file the structure test cannot introspect.)
+
+fileExistenceTests:
+  - name: "chinook database file exists"
+    path: "/data/chinook.db"
+    shouldExist: true

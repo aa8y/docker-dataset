@@ -1,0 +1,21 @@
+schemaVersion: "2.0.0"
+
+# Shared assertions for every aa8y/sqlite-dataset tag. SQLite is serverless, so
+# there is no env wiring or init-script dir to assert; instead we check that the
+# data directory and the sqlite3 CLI (used to open the shipped database) are
+# present. DATASET is per-dataset, so we only assert it is set (non-empty).
+
+metadataTest:
+  envVars:
+    - key: DATASET
+      value: ".+"
+      isRegex: true
+
+fileExistenceTests:
+  - name: "data directory exists"
+    path: "/data"
+    shouldExist: true
+
+  - name: "sqlite3 CLI exists"
+    path: "/usr/bin/sqlite3"
+    shouldExist: true
