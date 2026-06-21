@@ -1,0 +1,11 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. northwind ships the prebuilt
+# jpwhite3/northwind-SQLite3 database as /data/northwind.db. (Row counts are
+# asserted by the integration smoke test, since the database is a binary file
+# the structure test cannot introspect.)
+
+fileExistenceTests:
+  - name: "northwind database file exists"
+    path: "/data/northwind.db"
+    shouldExist: true

@@ -1,0 +1,15 @@
+{
+  "northwind.Categories": 8,
+  "northwind.CustomerCustomerDemo": 0,
+  "northwind.CustomerDemographics": 0,
+  "northwind.Customers": 93,
+  "northwind.EmployeeTerritories": 49,
+  "northwind.Employees": 9,
+  "northwind.Order Details": 609283,
+  "northwind.Orders": 16282,
+  "northwind.Products": 77,
+  "northwind.Regions": 4,
+  "northwind.Shippers": 3,
+  "northwind.Suppliers": 29,
+  "northwind.Territories": 53
+}
