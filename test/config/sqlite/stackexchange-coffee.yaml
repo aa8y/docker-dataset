@@ -1,0 +1,11 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. The StackExchange "coffee" site
+# dump is converted from XML at build time into /data/coffee.db. Counts drift
+# (the archive.org dump is refreshed over time), so the integration smoke test
+# records floors.
+
+fileExistenceTests:
+  - name: "coffee database file exists"
+    path: "/data/coffee.db"
+    shouldExist: true

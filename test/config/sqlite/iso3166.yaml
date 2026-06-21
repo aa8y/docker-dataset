@@ -1,0 +1,11 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. iso3166 is built at image
+# build time into /data/iso3166.db. (Row counts are asserted by the integration
+# smoke test, since the database is a binary file the structure test cannot
+# introspect.)
+
+fileExistenceTests:
+  - name: "iso3166 database file exists"
+    path: "/data/iso3166.db"
+    shouldExist: true

@@ -43,7 +43,7 @@ IMAGE="${REPOSITORY}:${TAG}"
 # exact counts drift between builds. For these, --update records a floor
 # (">=<count-at-build-time>") instead of an exact count. Mirrors the other
 # run scripts.
-VOLATILE_DATASETS=""
+VOLATILE_DATASETS="moma"
 VOLATILE_TAG_PREFIXES="stackexchange-"
 is_volatile() {
   local db="$1"

@@ -1,0 +1,11 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. The StackExchange "poker" site
+# dump is converted from XML at build time into /data/poker.db. Counts drift
+# (the archive.org dump is refreshed over time), so the integration smoke test
+# records floors.
+
+fileExistenceTests:
+  - name: "poker database file exists"
+    path: "/data/poker.db"
+    shouldExist: true

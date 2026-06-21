@@ -29,18 +29,18 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | [AdventureWorks](https://github.com/lorint/AdventureWorks-for-Postgres) | `adventureworks` | — | — | — |
 | [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | — |
 | Chinook | [`yugabyte-chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) |
-| [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | — | — |
-| [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | — | — |
-| [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | — | — |
-| [MoMA](https://github.com/MuseumofModernArt/collection) | `moma` | `moma` | — | — |
+| [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | — | `dellstore` |
+| [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | — | `frenchtowns` |
+| [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | — | `iso3166` |
+| [MoMA](https://github.com/MuseumofModernArt/collection) | `moma` | `moma` | — | `moma` |
 | Northwind | [`yugabyte-northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/dalers/mywind) | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/jpwhite3/northwind-SQLite3) |
 | [OMDb](https://github.com/df7cb/omdb-postgresql) | `omdb` | — | — | — |
-| [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `yugabyte-pgexercises` | `pgexercises` | — | — |
-| Sakila / Pagila | [`pagila`](https://github.com/devrimgunduz/pagila) | [`sakila`](https://dev.mysql.com/doc/sakila/en/) | — | — |
-| [SportsDB](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `sportsdb`, `yugabyte-sportsdb` | `sportsdb` | — | — |
-| [Stack Exchange](https://archive.org/details/stackexchange)¹ | `stackexchange-<site>` | `stackexchange-<site>` | — | — |
-| [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | — | — |
-| World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | — | — |
+| [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `yugabyte-pgexercises` | `pgexercises` | — | `pgexercises` |
+| Sakila / Pagila | [`pagila`](https://github.com/devrimgunduz/pagila) | [`sakila`](https://dev.mysql.com/doc/sakila/en/) | — | [`sakila`](https://github.com/bradleygrant/sakila-sqlite3) |
+| [SportsDB](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `sportsdb`, `yugabyte-sportsdb` | `sportsdb` | — | `sportsdb` |
+| [Stack Exchange](https://archive.org/details/stackexchange)¹ | `stackexchange-<site>` | `stackexchange-<site>` | — | `stackexchange-<site>` |
+| [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | — | `usda` |
+| World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | — | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) |
 
 ¹ `<site>` is one of `beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking` (e.g. `stackexchange-chess`).
 
@@ -149,6 +149,20 @@ Sources are in the [matrix](#dataset-support-matrix); the notes below are SQLite
 
 * `chinook`: built at image-build time from the vendor's native `Chinook_Sqlite.sql` script (release `v1.4.5`); CamelCase identifiers (`Track`, `InvoiceLine`), with row counts matching the other `chinook` tags exactly.
 * `northwind`: the prebuilt jpwhite3/northwind-SQLite3 database shipped as-is — the port's *expanded* edition, whose `Orders` and especially `"Order Details"` tables carry far more rows than the classic sample, so this image is heavier than the others.
+* `world`: the pgFoundry PostgreSQL `world` dump hand-translated at build time through the shared `sqlite/scripts/pgsql` transform hook (`COPY` → batched `INSERT`s, Postgres-only noise stripped); three tables (`city`, `country`, `countrylanguage`) with row counts matching the other `world` tags exactly.
+* `iso3166`, `frenchtowns`, `usda`, `pgexercises`, `dellstore`, `sportsdb`: same shared `sqlite/scripts/pgsql` hook as `world` — plain PostgreSQL DDL + data dumps rewritten for SQLite at build time. SQLite cannot add constraints via `ALTER TABLE`, so PK/FK/unique constraints from the dump are dropped; tables and row counts still load faithfully (matching the MySQL tags for these datasets).
+* `sakila`: the bradleygrant/sakila-sqlite3 port's prebuilt `sakila_master.db` shipped as-is — stands in for PostgreSQL's `pagila` (16 base tables, MySQL-compatible row counts).
+* `moma`: schema authored in-repo (`sqlite/scripts/moma/schema.sql`, every column `text`); CSVs bulk-loaded at build time with the sqlite3 CLI's `.import` dot-command. Counts drift as MoMA refreshes its exports (recorded as floors).
+* `stackexchange-<site>`: per-table XML converted at build time by a shared hook (`sqlite/scripts/stackexchange`) to `CREATE TABLE` + batched `INSERT`s + indexes (double-quoted CamelCase identifiers). `cooking` is the largest; counts are recorded as floors.
+
+### Datasets not ported to SQLite
+
+The remaining datasets are either sourced from PostgreSQL-only upstreams or rely on PostgreSQL-specific features that can't be hand-translated without diverging from the upstream dataset. Plain DDL + data dumps are instead hand-translated (see the group above); these are the ones that remain PostgreSQL-only:
+
+* `pagila`: not omitted but *replaced* — `pagila` is a port of Sakila to PostgreSQL, and SQLite uses a native Sakila port directly (tag `sakila`, above).
+* `adventureworks`: the only maintained open port targets PostgreSQL; AdventureWorks is a Microsoft SQL Server sample with no comparable, maintained SQLite port, and its build relies on a Python reformat plus multiple schemas and materialized views — too much PostgreSQL-specific machinery to hand-translate faithfully.
+* `airlines`: the [postgrespro demo](https://postgrespro.com/education/demodb) is distributed as a binary-ish PostgreSQL `pg_dump` and leans on PostgreSQL features (`jsonb`, several million inlined rows); it is PostgreSQL-only.
+* `omdb`: [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql) is PostgreSQL-specific — its views rely on the `tsm_system_rows` extension (no SQLite equivalent), so a port would have to drop them and would no longer be the upstream dataset.
 
 ## Usage
 
@@ -279,6 +293,5 @@ integration tests).
 
 * More MySQL datasets: port additional PostgreSQL datasets where a MySQL-native source exists or the upstream is format-neutral enough to hand-translate faithfully (see [Datasets not ported to MySQL](#datasets-not-ported-to-mysql)).
 * More CockroachDB datasets: most plain DDL + data PostgreSQL dumps should load with little or no change.
-* More SQLite datasets: from native SQLite sources or by building from format-neutral SQL.
 * Images for other popular databases.
 * Find and add more free data sources.
