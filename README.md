@@ -2,90 +2,111 @@
 
 [![CI](https://github.com/aa8y/docker-dataset/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/aa8y/docker-dataset/actions/workflows/ci.yml)
 
-Have you ever wanted to access pre-populated databases with dummy but valid data? It can be for something as simple as practicing writing SQL queries to running tests on databases. Under such circumstances, you have to either have to create dummy data or utilize some internet-searching skills to find data to populate your database. I think this is a common enough problem/requirement that solution can be Dockerized for reuse. So here is a Docker image for [PostgreSQL](https://www.postgresql.org/) with databases populated with sample data.
+**Pre-populated sample databases as Docker images** — ready-to-run [PostgreSQL](https://www.postgresql.org/), [MySQL](https://www.mysql.com/), [CockroachDB](https://www.cockroachlabs.com/), and [SQLite](https://www.sqlite.org/) containers loaded with real, valid sample data (Chinook, Northwind, Sakila/Pagila, World, AdventureWorks, Stack Exchange, and more).
 
-## Datasets
+Ever needed a database already populated with valid data — to practice SQL, run tests, demo an app, or benchmark — without hand-crafting rows or hunting for a usable dump? Every image ships exactly one dataset in its own database, so you just `docker run` and connect.
 
-So far we have the following datasets which are being used in the images.
-* [Postgres Sample Databases](https://wiki.postgresql.org/wiki/Sample_Databases): The datasets being used from here are `dellstore2` (tagged `dellstore`), `french-towns-communes-francaises` (tagged `frenchtowns`), `iso3166`, `usda` and `world`, all sourced from PostgreSQL's FTP mirror of [pgFoundry dbsamples](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/).
-* `sportsdb`: the original `www.sportsdb.org` download is no longer available, so we use the mirror Yugabyte ships in [its sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample). This mirror defines all 107 sportsdb tables but only populates data for the generic infrastructure tables (events, persons, teams, seasons, etc.) plus american football, baseball, basketball, and ice hockey stats. Motor racing, soccer, tennis, wagering, and weather tables are schema-only.
-* `chinook` (tagged `yugabyte-chinook`): a digital media store — artists, albums, tracks, customers, and invoices (11 tables in the `public` schema). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample); tables use quoted CamelCase identifiers (e.g. `"Track"`, `"InvoiceLine"`).
-* `northwind` (tagged `yugabyte-northwind`): the classic Northwind specialty-foods import/export company — customers, orders, products, employees, and suppliers (14 tables in the `public` schema). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample).
-* `pgexercises` (tagged `yugabyte-pgexercises`): the "clubdata" database behind [pgexercises.com](https://pgexercises.com/) — a country club's members, bookable facilities, and bookings (3 tables in a dedicated `cd` schema, not `public`). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample).
-* `pagila`: the classic Sakila/"DVD rental store" sample ported to Postgres — films, actors, customers, inventory, rentals, and payments. We source it from [devrimgunduz/pagila](https://github.com/devrimgunduz/pagila), a maintained fork (pgFoundry's original no longer loads on modern Postgres). Its `payment` table is range-partitioned by month (`payment_p2022_NN`), so row counts are split across the parent and its partitions. Note: the upstream maintainer periodically shifts the data's dates to the then-current year, so absolute dates in the sample may differ between rebuilds.
-* `omdb`: the [Open Media Database](https://www.omdb.org/) film catalogue, packaged for Postgres at [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql). CSV data is fetched from `www.omdb.org` at build time and shipped inside the image so `\copy` resolves at container start. The init script also creates the `tsm_system_rows` extension that the upstream views rely on. Heads up: this dataset is much larger than the others (~150 MB of CSV + indexes), which makes the `omdb` image noticeably heavier.
-* `adventureworks`: the Microsoft AdventureWorks 2014 OLTP sample (a fictitious bicycle parts wholesaler — 68 tables, 5 schemas, ~300 employees, 500 products, 20k customers, 31k sales). We use the [lorint/AdventureWorks-for-Postgres](https://github.com/lorint/AdventureWorks-for-Postgres) port, which pulls Microsoft's CSV bundle and runs a Python reformat before loading. CSVs ship alongside the init script so the upstream `\copy ./X.csv` directives resolve at container start. This dataset is also on the heavier side (~90 MB of CSV).
-* `airlines`: the [postgrespro "airlines" demo database](https://postgrespro.com/education/demodb) — a flight-booking model (airports, flights, tickets, bookings, boarding passes, seats; 9 tables in a `bookings` schema, with `search_path` defaulting to it). We ship the smallest ("3 months") English snapshot. Upstream distributes it as a single gzipped `pg_dump` that manages its own `demo` database, so the build decompresses it and strips the `DROP/CREATE DATABASE demo` / `\connect` directives (retargeting the `ALTER DATABASE` options) so it loads into the `airlines` database. Heads up: this is the largest dataset — the dump inlines several million rows (boarding passes, segments, tickets), so the image is heavy. The snapshot URL is date-stamped, so it may need bumping if postgrespro retires the pinned file.
-* `moma`: the [Museum of Modern Art research collection](https://github.com/MuseumofModernArt/collection) — ~160k catalogued artworks and ~16k artists (2 tables in the `public` schema). MoMA publishes only CSV/JSON (no SQL), so the schema is authored in-repo (`postgres/scripts/moma/schema.sql`, every column `text` since the data is free-form) and the CSVs ship alongside the init script so `\copy` resolves at container start. Note: MoMA refreshes the published CSVs periodically, so exact row counts drift over time.
-* **Stack Exchange sites** (tagged `stackexchange-<site>`): Q&A site dumps — posts, comments, users, votes, badges, tags, post links, and post history (8 tables in the `public` schema). Each is sourced from the [Stack Exchange data dump on archive.org](https://archive.org/details/stackexchange), which ships only per-table XML. Adapting the schema, column mapping, and indexes from [stackexchange-dump-to-postgres](https://github.com/Human-Centric-Machine-Learning/stackexchange-dump-to-postgres), a shared build hook (`postgres/scripts/stackexchange/transform`) converts the XML into SQL — `CREATE TABLE` + inline `COPY` + indexes — rather than running the upstream importer against a live server, which keeps the dataset within our extract/transform/load build (no database running at build time). Every Stack Exchange site shares one schema, so they all build through that single hook (each site's `postgres/scripts/<site>` directory is a symlink to `postgres/scripts/stackexchange`); adding a site is just a tag in `manifest.yml`, a structure-test config, and an expected-counts file. Unknown attributes from newer dumps are ignored, and since the upstream dumps are refreshed periodically, counts are recorded as floors. The sites currently shipped (database name in parentheses):
-  * [Beer](https://beer.stackexchange.com/) — `stackexchange-beer` (db `beer`)
-  * [Coffee](https://coffee.stackexchange.com/) — `stackexchange-coffee` (db `coffee`)
-  * [Poker](https://poker.stackexchange.com/) — `stackexchange-poker` (db `poker`)
-  * [Woodworking](https://woodworking.stackexchange.com/) — `stackexchange-woodworking` (db `woodworking`)
-  * [Chess](https://chess.stackexchange.com/) — `stackexchange-chess` (db `chess`)
-  * [Seasoned Advice (Cooking)](https://cooking.stackexchange.com/) — `stackexchange-cooking` (db `cooking`). This is the largest Stack Exchange image we ship (~500k votes, ~230k post-history rows); the others are comparatively light.
+## Contents
+
+* [Dataset support matrix](#dataset-support-matrix)
+* [Databases](#databases)
+* [PostgreSQL images](#postgresql-images)
+* [MySQL images](#mysql-images)
+* [CockroachDB images](#cockroachdb-images)
+* [SQLite images](#sqlite-images)
+* [Usage](#usage)
+* [Custom images](#custom-images)
+* [Testing](#testing)
+* [Build caching](#build-caching)
+* [Future Work](#future-work)
+
+## Dataset support matrix
+
+Each cell is the image tag to pull for that dataset on that engine; **—** means it isn't shipped there (yet). The dataset name links to its upstream source when every engine pulls from the same one; where engines use different upstreams, the source link is on the individual tag instead. All images are published for `linux/amd64` and `linux/arm64`.
+
+| Dataset | [PostgreSQL](#postgresql-images) | [MySQL](#mysql-images) | [CockroachDB](#cockroachdb-images) | [SQLite](#sqlite-images) |
+| --- | --- | --- | --- | --- |
+| [AdventureWorks](https://github.com/lorint/AdventureWorks-for-Postgres) | `adventureworks` | — | — | — |
+| [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | — |
+| Chinook | [`yugabyte-chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) |
+| [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | — | — |
+| [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | — | — |
+| [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | — | — |
+| [MoMA](https://github.com/MuseumofModernArt/collection) | `moma` | `moma` | — | — |
+| Northwind | [`yugabyte-northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/dalers/mywind) | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/jpwhite3/northwind-SQLite3) |
+| [OMDb](https://github.com/df7cb/omdb-postgresql) | `omdb` | — | — | — |
+| [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `yugabyte-pgexercises` | `pgexercises` | — | — |
+| Sakila / Pagila | [`pagila`](https://github.com/devrimgunduz/pagila) | [`sakila`](https://dev.mysql.com/doc/sakila/en/) | — | — |
+| [SportsDB](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `sportsdb`, `yugabyte-sportsdb` | `sportsdb` | — | — |
+| [Stack Exchange](https://archive.org/details/stackexchange)¹ | `stackexchange-<site>` | `stackexchange-<site>` | — | — |
+| [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | — | — |
+| World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | — | — |
+
+¹ `<site>` is one of `beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking` (e.g. `stackexchange-chess`).
+
+Every engine also publishes a `latest` tag: it tracks `world` on PostgreSQL and MySQL, and `chinook` on CockroachDB and SQLite.
 
 ## Databases
 
 Four database engines are supported, each published as its own image repository:
 
 * [PostgreSQL](https://www.postgresql.org/) as [`aa8y/postgres-dataset`](https://hub.docker.com/r/aa8y/postgres-dataset). We use the `alpine` version of the official image as the base image to keep our image slim.
-* [MySQL](https://www.mysql.com/) as [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset). There is no official Alpine image for Oracle MySQL (the official `mysql` image is Oracle Linux / Debian based) and Alpine's own package repositories ship [MariaDB](https://mariadb.org/) in place of MySQL, so to keep the "thin, Alpine-based" goal we build on the community [`yobasystems/alpine-mariadb`](https://hub.docker.com/r/yobasystems/alpine-mariadb) image. MariaDB is the MySQL drop-in Alpine substitutes, and its entrypoint honours the same `MYSQL_*` env vars and `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image, so the dataset pattern carries over unchanged. See [MySQL images](#mysql-images) for the datasets and tags available.
-* [CockroachDB](https://www.cockroachlabs.com/) as [`aa8y/cockroach-dataset`](https://hub.docker.com/r/aa8y/cockroach-dataset). There is no official Alpine image (the official [`cockroachdb/cockroach`](https://hub.docker.com/r/cockroachdb/cockroach) image is UBI-minimal), but it is slim (~170 MB) and multi-arch, and its entrypoint honours the same `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image (plus a `COCKROACH_DATABASE` env var) when the container is started with `start-single-node`. CockroachDB is PostgreSQL wire- and SQL-compatible, so the dataset pattern carries over and these reuse the same PostgreSQL-dialect sample dumps. See [CockroachDB images](#cockroachdb-images) for the datasets and tags available.
-* [SQLite](https://www.sqlite.org/) as [`aa8y/sqlite-dataset`](https://hub.docker.com/r/aa8y/sqlite-dataset). SQLite is serverless — a database is just a file — so there is no server to boot and no init scripts; the build assembles the database file and the image ships it. We use the Alpine, statically-linked [`keinos/sqlite3`](https://hub.docker.com/r/keinos/sqlite3) image (multi-arch) as the base, keeping the image genuinely thin and Alpine-based. See [SQLite images](#sqlite-images) for the datasets and tags available.
+* [MySQL](https://www.mysql.com/) as [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset). There is no official Alpine image for Oracle MySQL (the official `mysql` image is Oracle Linux / Debian based) and Alpine's own package repositories ship [MariaDB](https://mariadb.org/) in place of MySQL, so to keep the "thin, Alpine-based" goal we build on the community [`yobasystems/alpine-mariadb`](https://hub.docker.com/r/yobasystems/alpine-mariadb) image. MariaDB is the MySQL drop-in Alpine substitutes, and its entrypoint honours the same `MYSQL_*` env vars and `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image, so the dataset pattern carries over unchanged.
+* [CockroachDB](https://www.cockroachlabs.com/) as [`aa8y/cockroach-dataset`](https://hub.docker.com/r/aa8y/cockroach-dataset). There is no official Alpine image (the official [`cockroachdb/cockroach`](https://hub.docker.com/r/cockroachdb/cockroach) image is UBI-minimal), but it is slim (~170 MB) and multi-arch, and its entrypoint honours the same `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image (plus a `COCKROACH_DATABASE` env var) when the container is started with `start-single-node`. CockroachDB is PostgreSQL wire- and SQL-compatible, so the dataset pattern carries over and these reuse the same PostgreSQL-dialect sample dumps.
+* [SQLite](https://www.sqlite.org/) as [`aa8y/sqlite-dataset`](https://hub.docker.com/r/aa8y/sqlite-dataset). SQLite is serverless — a database is just a file — so there is no server to boot and no init scripts; the build assembles the database file and the image ships it. We use the Alpine, statically-linked [`keinos/sqlite3`](https://hub.docker.com/r/keinos/sqlite3) image (multi-arch) as the base, keeping the image genuinely thin and Alpine-based.
 
-## Tags
+## PostgreSQL images
 
-Available tags are `adventureworks`, `airlines`, `dellstore`, `frenchtowns`, `iso3166`, `moma`, `omdb`, `pagila`, `stackexchange-beer`, `stackexchange-coffee`, `stackexchange-poker`, `stackexchange-woodworking`, `stackexchange-chess`, `stackexchange-cooking`, `sportsdb`, `yugabyte-sportsdb`, `yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-pgexercises`, `usda`, `world` and `latest`. Each image carries exactly one dataset, loaded into its own database. `latest` currently tracks the `world` dataset. All tags are published for `linux/amd64` and `linux/arm64`.
+The original images: each [`aa8y/postgres-dataset`](https://hub.docker.com/r/aa8y/postgres-dataset) image carries exactly one dataset, loaded into a database named after the dataset, and is built through an Extract -> Transform -> Load [Dockerfile](postgres/Dockerfile) driven by `manifest.yml`. (Sources are in the [matrix](#dataset-support-matrix); the notes below are PostgreSQL-specific.)
 
-`sportsdb` and `yugabyte-sportsdb` are currently the same image — the only mirror we ship is Yugabyte's. `sportsdb` is a special case: it predates the mirror-explicit naming, so we keep the bare `sportsdb` tag working for backwards compatibility while `yugabyte-sportsdb` exists so that if we add another sportsdb mirror later (e.g. a hypothetical `pgfoundry-sportsdb`), users can pin to the specific source they want and `sportsdb` continues to track whichever mirror is the current default.
+* `yugabyte-chinook` (db `chinook`): 11 tables in the `public` schema, quoted CamelCase identifiers (e.g. `"Track"`, `"InvoiceLine"`).
+* `yugabyte-pgexercises` (db `pgexercises`): 3 tables in a dedicated `cd` schema (not `public`).
+* `sportsdb` / `yugabyte-sportsdb`: all 107 tables are created, but only the generic infrastructure tables plus American football, baseball, basketball, and ice hockey carry data — motor racing, soccer, tennis, wagering, and weather are schema-only.
+* `pagila`: the `payment` table is range-partitioned by month (`payment_p2022_NN`), so row counts split across the parent and its partitions; upstream periodically shifts the sample dates to the current year, so absolute dates change between rebuilds.
+* `omdb`: CSVs are fetched at build time and shipped in the image so `\copy` resolves at start; the init script creates the `tsm_system_rows` extension the upstream views rely on. Heavy (~150 MB of CSV + indexes).
+* `adventureworks`: the upstream port pulls Microsoft's CSV bundle and runs a Python reformat before loading (68 tables across 5 schemas). Heavy (~90 MB of CSV).
+* `airlines`: 9 tables in a `bookings` schema (`search_path` defaults to it). Upstream ships a single gzipped `pg_dump` of its own `demo` database, so the build decompresses it and strips the `DROP/CREATE DATABASE` / `\connect` directives so it loads into the `airlines` database. The heaviest dataset (several million inlined rows); the snapshot URL is date-stamped and may need bumping if postgrespro retires the pinned file.
+* `moma`: MoMA ships only CSV/JSON, so the schema is authored in-repo (`postgres/scripts/moma/schema.sql`, every column `text`) and the CSVs ship alongside the init script; counts drift as MoMA refreshes its exports (recorded as floors).
+* `stackexchange-<site>` (db = bare site name): the dump ships only per-table XML, so a shared build hook (`postgres/scripts/stackexchange/transform`) converts it to `CREATE TABLE` + inline `COPY` + indexes at build time (8 tables in `public`). Every site shares one schema and builds through that one hook, so adding a site is just another tag; counts are recorded as floors. `cooking` is the largest (~500k votes, ~230k post-history rows).
 
-The other Yugabyte-sourced datasets — `chinook`, `northwind`, and `pgexercises` — have no legacy bare tags to preserve, so they ship under their `yugabyte-`prefixed tags only (`yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-pgexercises`). The database name inside each image is still the bare dataset name (`chinook`, `northwind`, `pgexercises`). If we ever add a second mirror for one of these, the prefixed tag already disambiguates the source.
+### Tag naming
 
-Stack Exchange is a family of sites rather than a single dataset, so — like the `yugabyte-` tags — each tag carries the source-and-site prefix: `stackexchange-beer`, `stackexchange-coffee`, `stackexchange-poker`, `stackexchange-woodworking`, `stackexchange-chess`, `stackexchange-cooking`. The database inside each is the bare site name (`beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking`). Because every Stack Exchange dump shares one schema, all sites build through the same shared hook (`postgres/scripts/stackexchange`), so adding another site is just another `stackexchange-<site>` tag.
+The database inside each image is the bare dataset name — the tag minus any `yugabyte-`/`stackexchange-` prefix. Those source prefixes exist so a dataset could ship from a second mirror later; `sportsdb` and `yugabyte-sportsdb` are the same image today, with the unprefixed `sportsdb` kept as a backwards-compatible alias.
 
-### `all` has been retired
+### History
 
-The multi-dataset `all` tag (and the all-datasets `latest`) is legacy: images are now one dataset each. If you need several datasets together, run one container per dataset (e.g. via `docker-compose`), or build a custom image per dataset.
-
-### `pagila` was removed and re-added
-
-`pagila` was [removed in 2019](https://github.com/aa8y/docker-dataset/issues/1) because the upstream source shipped a change that wouldn't load on any Postgres version, which back then also took down the combined `all`/`latest` images. Both causes are now gone: the [upstream fork](https://github.com/devrimgunduz/pagila) loads cleanly on modern Postgres (tested against 12+), and images are now one dataset each, so a single dataset can no longer break the others. It is therefore back as a regular tag.
+There is no multi-dataset `all` image anymore — each image is one dataset; for several at once, run one container per dataset (e.g. via `docker-compose`). `pagila` was [removed in 2019](https://github.com/aa8y/docker-dataset/issues/1) over an upstream breakage and is back as a regular tag, since the [fork](https://github.com/devrimgunduz/pagila) loads cleanly on modern Postgres and one dataset can no longer break the others.
 
 ## MySQL images
 
-The MySQL images mirror the PostgreSQL ones: each [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset) image carries exactly one dataset, loaded into its own database, and is built through the same Extract -> Transform -> Load [Dockerfile](mysql/Dockerfile) driven by `manifest.yml`. The engine is MariaDB (see [Databases](#databases) for why); it is wire- and SQL-compatible with MySQL for these samples. Because each image is a single dataset, the build strips any database-level DDL the upstream dump ships (`CREATE`/`DROP DATABASE`/`SCHEMA`, `USE`) and loads everything into one database named after the dataset. All MySQL tags are published for `linux/amd64` and `linux/arm64`.
-
-Where a dataset has a MySQL-native source we use it directly; the canonical Sakila sample (tagged `sakila`) takes the place of PostgreSQL's `pagila`, which is itself a port of Sakila.
+The MySQL images mirror the PostgreSQL ones — one dataset per image, same ETL [Dockerfile](mysql/Dockerfile) driven by `manifest.yml`. The engine is MariaDB (see [Databases](#databases) for why); it is wire- and SQL-compatible with MySQL for these samples. Because each image is a single dataset, the build strips any database-level DDL the upstream dump ships (`CREATE`/`DROP DATABASE`/`SCHEMA`, `USE`) and loads everything into one database named after the dataset.
 
 Start a container and connect with the `mariadb` (MySQL-compatible) client:
 ```
 docker run -d --name my-ds-<tag> aa8y/mysql-dataset:<tag>
 docker exec -it my-ds-<tag> mariadb -uroot -pmysql <db_name>
 ```
-where `<tag>` is one of the MySQL tags below and `<db_name>` is the matching dataset name. The root password is `mysql`.
+where `<tag>` is one of the tags in the MySQL column of the [matrix](#dataset-support-matrix) and `<db_name>` is the matching dataset name (the tag itself, minus any `stackexchange-` prefix). The root password is `mysql`.
 
 ### MySQL datasets
 
-* `sakila`: MySQL's own [Sakila sample database](https://dev.mysql.com/doc/sakila/en/) — the canonical "DVD rental store" model (films, actors, customers, inventory, rentals, and payments; 16 base tables in the `sakila` database). This is the original that PostgreSQL's `pagila` ports, so it stands in for `pagila` on MySQL. We source the official `sakila-db.tar.gz` (`sakila-schema.sql` + `sakila-data.sql`). Note: `film_text` is populated by an `AFTER INSERT` trigger on `film` rather than by bulk data, and unlike `pagila` the `payment` table is not partitioned.
-* `world`: MySQL's canonical [world sample database](https://dev.mysql.com/doc/world-setup/en/) — `city`, `country`, and `countrylanguage` (3 tables in the `world` database). These are the same three tables as the PostgreSQL `world` dataset, with identical row counts. Sourced from the official `world-db.tar.gz`.
-* `chinook`: the [Chinook](https://github.com/lerocha/chinook-database) digital media store — artists, albums, tracks, customers, and invoices (11 tables in the `chinook` database). We use the vendor's MySQL-specific `Chinook_MySql.sql` (release `v1.4.5`); like the PostgreSQL `yugabyte-chinook` tag, tables use quoted CamelCase identifiers (e.g. `` `Track` ``, `` `InvoiceLine` ``). The upstream script's own `CREATE DATABASE Chinook` is stripped so it loads into the lowercase `chinook` database.
-* `northwind`: the classic Northwind specialty-foods import/export company — customers, orders, products, employees, and suppliers (20 tables in the `northwind` database). MySQL has no first-party Northwind, so we use the well-established [dalers/mywind](https://github.com/dalers/mywind) port of Microsoft's Access Northwind sample (snake_case identifiers; its table DDL is schema-qualified to `northwind`). Note this is a larger 20-table conversion of the Access database rather than the 14-table model behind the PostgreSQL `yugabyte-northwind` tag.
-* `moma`: the [Museum of Modern Art research collection](https://github.com/MuseumofModernArt/collection) — ~160k catalogued artworks and ~16k artists (2 tables in the `moma` database). As on the PostgreSQL side, MoMA publishes only CSV/JSON (no SQL), so the schema is authored in-repo (`mysql/scripts/moma/schema.sql`, every column `text` since the data is free-form) and the CSVs ship alongside the init script. The data is bulk-loaded at container start with server-side `LOAD DATA INFILE`. Note: MoMA refreshes the published CSVs periodically, so exact row counts drift over time (the smoke test records them as floors).
-* **Stack Exchange sites** (tagged `stackexchange-<site>`): the same Q&A site dumps as the PostgreSQL family — posts, comments, users, votes, badges, tags, post links, and post history (8 tables, identifiers in CamelCase, e.g. `` `Posts` ``, `` `PostHistory` ``). Each is sourced from the [Stack Exchange data dump on archive.org](https://archive.org/details/stackexchange) (per-table XML only). As on the PostgreSQL side every site shares one schema, so they all build through a single shared hook (`mysql/scripts/stackexchange`; each site's `mysql/scripts/<site>` directory is a symlink to it). The hook is the MySQL-emitting counterpart of the PostgreSQL one: it converts the XML to `CREATE TABLE` + batched `INSERT`s + indexes, mapping PostgreSQL `int`/`timestamp`/`text` to `INT`/`DATETIME(6)`/`MEDIUMTEXT` and adding a key-prefix length to indexes on text columns (MySQL cannot index a full `TEXT`). Counts match the PostgreSQL sites exactly and, since the upstream dumps are refreshed periodically, are recorded as floors. The sites currently shipped (database name in parentheses): `stackexchange-beer` (`beer`), `stackexchange-coffee` (`coffee`), `stackexchange-poker` (`poker`), `stackexchange-woodworking` (`woodworking`), `stackexchange-chess` (`chess`), and `stackexchange-cooking` (`cooking`, the largest — ~500k votes, ~230k post-history rows).
+MySQL-native sources, used directly (sources in the [matrix](#dataset-support-matrix); notes below are MySQL-specific):
 
-The next group of datasets has no MySQL-native source, but their PostgreSQL dumps are essentially DDL + data, so we hand-translate the dialect at build time through a shared `mysql/scripts/pgsql` transform hook (each dataset's `mysql/scripts/<dataset>` directory is a symlink to it). The hook converts `COPY` blocks to batched `INSERT`s, rewrites PostgreSQL types to their MySQL equivalents (`character varying`→`varchar`, `timestamp`→`datetime`, `double precision`→`double`, bare `numeric`→`decimal`, and `text`→`varchar(255)` so a text column can serve as a key, which MySQL forbids for `TEXT`), drops PostgreSQL-only noise (sequences, `OWNER TO`, `GRANT`/`REVOKE`, `USING btree`/`hash`/`lsm`, schema qualifiers), lower-cases table identifiers, transcodes Latin-1 dumps to UTF-8, and drops any PL/pgSQL stored functions (which have no mechanical MySQL translation — the schema and all data still load). Row counts match the PostgreSQL datasets exactly.
+* `sakila`: stands in for PostgreSQL's `pagila` (which is itself a Sakila port); 16 base tables. `film_text` is populated by an `AFTER INSERT` trigger on `film` rather than by bulk data, and unlike `pagila` the `payment` table is not partitioned.
+* `world`: MySQL's native `world` — `city`, `country`, `countrylanguage` (3 tables), identical row counts to the PostgreSQL `world`.
+* `chinook`: the vendor's MySQL-specific `Chinook_MySql.sql` (release `v1.4.5`); CamelCase identifiers (e.g. `` `Track` ``), with the script's `CREATE DATABASE Chinook` stripped so it loads into the lowercase `chinook` database.
+* `northwind`: the dalers/mywind port of Microsoft's Access sample (snake_case, 20 tables) — a larger conversion than the 14-table PostgreSQL `yugabyte-northwind`.
+* `moma`: schema authored in-repo (`mysql/scripts/moma/schema.sql`, every column `text`); CSVs bulk-loaded at start with server-side `LOAD DATA INFILE`. Counts drift as MoMA refreshes its exports (recorded as floors).
+* `stackexchange-<site>`: per-table XML converted at build time by a shared hook (`mysql/scripts/stackexchange`) to `CREATE TABLE` + batched `INSERT`s + indexes (CamelCase identifiers). It maps PostgreSQL `int`/`timestamp`/`text` to `INT`/`DATETIME(6)`/`MEDIUMTEXT` and adds a key-prefix length to text-column indexes (MySQL cannot index a full `TEXT`). `cooking` is the largest; counts are recorded as floors.
 
-* `iso3166`: ISO 3166 country and subdivision codes — `country` and `subcountry` (2 tables in the `iso3166` database). Sourced from the [pgFoundry dbsamples](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) PostgreSQL tarball; the only MySQL-specific touch beyond the shared hook is that `two_letter` (the country primary key, referenced by `subcountry`) becomes `varchar` so it can be a key.
-* `frenchtowns`: French regions, departments, and communes — `regions`, `departments`, and `towns` (3 tables in the `frenchtowns` database; ~36k towns). Sourced from the pgFoundry `french-towns-communes-francaises` tarball. The dump declares CamelCase tables (`Regions`) but loads lower-case (`regions`), which the hook reconciles by lower-casing table names; accented commune names survive the conversion (the source is UTF-8).
-* `usda`: the USDA National Nutrient Database (release SR18) — food descriptions, nutrient data, weights, and references (10 tables in the `usda` database; ~254k nutrient rows). Sourced from the pgFoundry `usda` tarball, which is Latin-1 encoded — the hook transcodes it to UTF-8 before loading.
-* `pgexercises`: the "clubdata" database behind [pgexercises.com](https://pgexercises.com/) — a country club's members, bookable facilities, and bookings (3 tables in the `pgexercises` database). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample) (the same dump behind the PostgreSQL `yugabyte-pgexercises` tag). Upstream it lives in a dedicated `cd` schema; since each MySQL image is a single database, the hook strips the `cd.` qualifier so it loads into the `pgexercises` database.
-* `sportsdb`: the SportsDB sports statistics model — a generic schema covering events, persons, teams, seasons, plus American football, baseball, basketball, and ice hockey stats (107 tables in the `sportsdb` database; motor racing, soccer, tennis, wagering, and weather tables are schema-only, matching the PostgreSQL side). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample) (the same dump behind the PostgreSQL `sportsdb`/`yugabyte-sportsdb` tags), which ships as five PostgreSQL files (tables, INSERT data, indexes, constraints, FKs). Beyond the shared hook's usual fixes it drops Yugabyte's `USING lsm` index access method and an unused `CREATE DOMAIN`; the 96 unique constraints and 137 foreign keys survive the translation.
-* `dellstore`: the Dell DVD Store ("dellstore2") sample — a small e-commerce model of customers, orders, order lines, products, and inventory (8 tables in the `dellstore` database; ~20k customers, ~12k orders). Sourced from the [pgFoundry dbsamples](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) PostgreSQL tarball. The dump ships a `new_customer` PL/pgSQL stored function (an application helper, not used by the schema); since stored procedures have no mechanical PostgreSQL→MySQL translation, the hook drops it — the schema, primary keys, foreign keys, and all data still load.
+The remaining datasets have no MySQL-native source, but their PostgreSQL dumps are plain DDL + data, so they are hand-translated at build time through a shared `mysql/scripts/pgsql` transform hook. It converts `COPY` blocks to batched `INSERT`s, rewrites PostgreSQL types to their MySQL equivalents (`character varying`→`varchar`, `timestamp`→`datetime`, `double precision`→`double`, bare `numeric`→`decimal`, and `text`→`varchar(255)` so a text column can serve as a key, which MySQL forbids for `TEXT`), drops PostgreSQL-only noise (sequences, `OWNER TO`, `GRANT`/`REVOKE`, `USING btree`/`hash`/`lsm`, schema qualifiers), lower-cases table identifiers, transcodes Latin-1 dumps to UTF-8, and drops any PL/pgSQL stored functions (no mechanical MySQL translation — the schema and all data still load). Row counts match the PostgreSQL datasets exactly.
 
-### MySQL tags
-
-Available MySQL tags are `sakila`, `world`, `chinook`, `northwind`, `moma`, `iso3166`, `frenchtowns`, `usda`, `pgexercises`, `sportsdb`, `dellstore`, `stackexchange-beer`, `stackexchange-coffee`, `stackexchange-poker`, `stackexchange-woodworking`, `stackexchange-chess`, `stackexchange-cooking` and `latest`. Each image carries exactly one dataset, loaded into a database of the same name. `latest` currently tracks the `world` dataset (mirroring the PostgreSQL `latest`).
+* `iso3166`: the `two_letter` country primary key (referenced by `subcountry`) becomes `varchar` so it can be a key.
+* `frenchtowns`: the dump declares CamelCase tables but loads lower-case, which the hook reconciles by lower-casing table names; accented commune names survive (the source is UTF-8).
+* `usda`: the pgFoundry tarball is Latin-1, so the hook transcodes it to UTF-8 before loading.
+* `pgexercises`: upstream lives in a dedicated `cd` schema; the hook strips the `cd.` qualifier so it loads into the single `pgexercises` database.
+* `sportsdb`: beyond the usual fixes the hook drops Yugabyte's `USING lsm` index access method and an unused `CREATE DOMAIN`; the 96 unique constraints and 137 foreign keys survive the translation.
+* `dellstore`: the dump ships a `new_customer` PL/pgSQL function (an unused app helper); the hook drops it — the schema, keys, and all data still load.
 
 ### Datasets not ported to MySQL
 
@@ -99,27 +120,18 @@ The remaining PostgreSQL datasets are either sourced from PostgreSQL-only upstre
 
 ## CockroachDB images
 
-The CockroachDB images mirror the PostgreSQL ones: each [`aa8y/cockroach-dataset`](https://hub.docker.com/r/aa8y/cockroach-dataset) image carries exactly one dataset, loaded into its own database, and is built through the same Extract -> Transform -> Load [Dockerfile](cockroach/Dockerfile) driven by `manifest.yml`. The engine is [CockroachDB](https://www.cockroachlabs.com/) (see [Databases](#databases) for the base-image choice); it is PostgreSQL wire- and SQL-compatible, so these reuse the same PostgreSQL-dialect dumps the Yugabyte PostgreSQL tags do. The official `cockroachdb/cockroach` entrypoint creates the database named by the `COCKROACH_DATABASE` env var and runs every `/docker-entrypoint-initdb.d/*.sql` script against it (under `start-single-node`), so — unlike the postgres images — the build emits no `CREATE DATABASE` header; the database is the bare dataset name. All CockroachDB tags are published for `linux/amd64` and `linux/arm64`.
+The CockroachDB images mirror the PostgreSQL ones — one dataset per image, same ETL [Dockerfile](cockroach/Dockerfile) driven by `manifest.yml`. The engine is [CockroachDB](https://www.cockroachlabs.com/) (see [Databases](#databases) for the base-image choice); it is PostgreSQL wire- and SQL-compatible, so these reuse the same PostgreSQL-dialect dumps the Yugabyte PostgreSQL tags do. The official `cockroachdb/cockroach` entrypoint creates the database named by the `COCKROACH_DATABASE` env var and runs every `/docker-entrypoint-initdb.d/*.sql` script against it (under `start-single-node`), so — unlike the postgres images — the build emits no `CREATE DATABASE` header; the database is the bare dataset name.
 
 The images run a single-node cluster in insecure mode (these are throwaway practice/test images, mirroring the trivial credentials the postgres/mysql images use), which keeps connecting simple. Start a container and connect with the built-in `cockroach sql` client:
 ```
 docker run -d --name cr-ds-<tag> aa8y/cockroach-dataset:<tag>
 docker exec -it cr-ds-<tag> cockroach sql --insecure --database <db_name>
 ```
-where `<tag>` is one of the CockroachDB tags below and `<db_name>` is the matching dataset name.
-
-### CockroachDB datasets
-
-* `chinook`: the [Chinook](https://github.com/lerocha/chinook-database) digital-media store — artists, albums, tracks, customers, and invoices (11 tables in the `public` schema; quoted CamelCase identifiers like `"Track"`, `"InvoiceLine"`). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample) (the same PostgreSQL-dialect dump behind the PostgreSQL `yugabyte-chinook` tag), which loads on CockroachDB unchanged.
-* `northwind`: the classic Northwind specialty-foods import/export company — customers, orders, products, employees, and suppliers (14 tables in the `public` schema; snake_case identifiers). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample) (the same dump behind the PostgreSQL `yugabyte-northwind` tag).
-
-### CockroachDB tags
-
-Available CockroachDB tags are `chinook`, `northwind` and `latest`. Each image carries exactly one dataset, loaded into a database of the same name. `latest` currently tracks the `chinook` dataset.
+where `<tag>` is one of the tags in the CockroachDB column of the [matrix](#dataset-support-matrix) and `<db_name>` is the matching dataset name. Schema and identifier details match the PostgreSQL `chinook`/`northwind` notes above (same dumps).
 
 ## SQLite images
 
-The SQLite images follow the same one-dataset-per-image model, but since SQLite is serverless the build inverts: rather than shipping init scripts that run at container start, the build assembles the database file and the final image carries it. Each [`aa8y/sqlite-dataset`](https://hub.docker.com/r/aa8y/sqlite-dataset) image carries exactly one dataset as `/data/<dataset>.db`, built through the [Dockerfile](sqlite/Dockerfile) driven by `manifest.yml`: a dataset is described either by a native SQLite SQL script (fed to the `sqlite3` CLI to build the database) or by a prebuilt SQLite database file (shipped as-is). All SQLite tags are published for `linux/amd64` and `linux/arm64`.
+The SQLite images follow the same one-dataset-per-image model, but since SQLite is serverless the build inverts: rather than shipping init scripts that run at container start, the build assembles the database file and the final image carries it. Each [`aa8y/sqlite-dataset`](https://hub.docker.com/r/aa8y/sqlite-dataset) image carries exactly one dataset as `/data/<dataset>.db`, built through the [Dockerfile](sqlite/Dockerfile) driven by `manifest.yml`: a dataset is described either by a native SQLite SQL script (fed to the `sqlite3` CLI to build the database) or by a prebuilt SQLite database file (shipped as-is).
 
 Start a container and open the database with the bundled `sqlite3` shell:
 ```
@@ -129,16 +141,14 @@ which opens `/data/<db_name>.db` directly. You can also run a one-off query:
 ```
 docker run --rm aa8y/sqlite-dataset:<tag> /usr/bin/sqlite3 /data/<db_name>.db "SELECT count(*) FROM ..."
 ```
-where `<tag>` is one of the SQLite tags below and `<db_name>` is the matching dataset name.
+where `<tag>` is one of the tags in the SQLite column of the [matrix](#dataset-support-matrix) and `<db_name>` is the matching dataset name.
 
 ### SQLite datasets
 
-* `chinook`: the [Chinook](https://github.com/lerocha/chinook-database) digital-media store — artists, albums, tracks, customers, and invoices (11 tables; quoted CamelCase identifiers like `Track`, `InvoiceLine`). Built at image-build time from the vendor's native `Chinook_Sqlite.sql` script (release `v1.4.5`), so row counts match the other `chinook` tags exactly.
-* `northwind`: the classic Northwind specialty-foods import/export company — customers, orders, products, employees, and suppliers (13 tables). We ship the prebuilt database from [jpwhite3/northwind-SQLite3](https://github.com/jpwhite3/northwind-SQLite3), a SQLite3 port of the Microsoft Access Northwind sample. Note this is the port's *expanded* edition — the `Orders` and especially `"Order Details"` tables carry far more rows than the classic sample, so this image is heavier than the others.
+Sources are in the [matrix](#dataset-support-matrix); the notes below are SQLite-specific:
 
-### SQLite tags
-
-Available SQLite tags are `chinook`, `northwind` and `latest`. Each image carries exactly one dataset as a database file of the same name. `latest` currently tracks the `chinook` dataset.
+* `chinook`: built at image-build time from the vendor's native `Chinook_Sqlite.sql` script (release `v1.4.5`); CamelCase identifiers (`Track`, `InvoiceLine`), with row counts matching the other `chinook` tags exactly.
+* `northwind`: the prebuilt jpwhite3/northwind-SQLite3 database shipped as-is — the port's *expanded* edition, whose `Orders` and especially `"Order Details"` tables carry far more rows than the classic sample, so this image is heavier than the others.
 
 ## Usage
 
@@ -150,7 +160,7 @@ and access it by:
 ```
 docker exec -it pg-ds-<tag> psql -d <db_name>
 ```
-where `<tag>` is one of the tags mentioned [here](#tags) and `<db_name>` is the database name which is one of the dataset names mentioned [here](#datasets). You can also use them with `docker-compose`. See [this example](https://github.com/aa8y/data-dude/blob/master/docker-compose.yml) for information on how to use them.
+where `<tag>` is one of the tags in the [matrix](#dataset-support-matrix) and `<db_name>` is the dataset baked into it — the tag itself, minus any `yugabyte-`/`stackexchange-` prefix (e.g. `yugabyte-chinook` → `chinook`, `stackexchange-beer` → `beer`). You can also use them with `docker-compose`. See [this example](https://github.com/aa8y/data-dude/blob/master/docker-compose.yml) for information on how to use them.
 
 ## Custom images
 
@@ -267,8 +277,8 @@ integration tests).
 
 ## Future Work
 
-* [MySQL](https://www.mysql.com/) images are now shipped (see [MySQL images](#mysql-images)), including the full Stack Exchange family. Remaining MySQL work: port more of the PostgreSQL datasets where a MySQL-native source can be found or the upstream is format-neutral enough to hand-translate faithfully (see [Datasets not ported to MySQL](#datasets-not-ported-to-mysql)).
-* [CockroachDB](https://www.cockroachlabs.com/) images are now shipped (see [CockroachDB images](#cockroachdb-images)), starting with the PostgreSQL-dialect `chinook` and `northwind` datasets. Remaining CockroachDB work: extend the dataset set (most plain DDL + data PostgreSQL dumps should load with little or no change).
-* [SQLite](https://www.sqlite.org/) images are now shipped (see [SQLite images](#sqlite-images)), starting with the `chinook` and `northwind` datasets. Remaining SQLite work: add more datasets from native SQLite sources or by building from format-neutral SQL.
+* More MySQL datasets: port additional PostgreSQL datasets where a MySQL-native source exists or the upstream is format-neutral enough to hand-translate faithfully (see [Datasets not ported to MySQL](#datasets-not-ported-to-mysql)).
+* More CockroachDB datasets: most plain DDL + data PostgreSQL dumps should load with little or no change.
+* More SQLite datasets: from native SQLite sources or by building from format-neutral SQL.
 * Images for other popular databases.
 * Find and add more free data sources.
