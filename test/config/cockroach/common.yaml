@@ -1,0 +1,18 @@
+schemaVersion: "2.0.0"
+
+# Shared assertions for every aa8y/cockroach-dataset tag: the COCKROACH_DATABASE
+# env wiring set by the Dockerfile (which names the database the entrypoint
+# creates and runs the init scripts against) and the init-script directory the
+# cockroach.sh entrypoint reads under `start-single-node`. COCKROACH_DATABASE is
+# per-dataset, so we only assert it is set (non-empty).
+
+metadataTest:
+  envVars:
+    - key: COCKROACH_DATABASE
+      value: ".+"
+      isRegex: true
+
+fileExistenceTests:
+  - name: "docker-entrypoint-initdb.d exists"
+    path: "/docker-entrypoint-initdb.d"
+    shouldExist: true

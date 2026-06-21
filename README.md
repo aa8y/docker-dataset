@@ -27,10 +27,11 @@ So far we have the following datasets which are being used in the images.
 
 ## Databases
 
-Two database engines are supported, each published as its own image repository:
+Four database engines are supported, each published as its own image repository:
 
 * [PostgreSQL](https://www.postgresql.org/) as [`aa8y/postgres-dataset`](https://hub.docker.com/r/aa8y/postgres-dataset). We use the `alpine` version of the official image as the base image to keep our image slim.
 * [MySQL](https://www.mysql.com/) as [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset). There is no official Alpine image for Oracle MySQL (the official `mysql` image is Oracle Linux / Debian based) and Alpine's own package repositories ship [MariaDB](https://mariadb.org/) in place of MySQL, so to keep the "thin, Alpine-based" goal we build on the community [`yobasystems/alpine-mariadb`](https://hub.docker.com/r/yobasystems/alpine-mariadb) image. MariaDB is the MySQL drop-in Alpine substitutes, and its entrypoint honours the same `MYSQL_*` env vars and `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image, so the dataset pattern carries over unchanged. See [MySQL images](#mysql-images) for the datasets and tags available.
+* [CockroachDB](https://www.cockroachlabs.com/) as [`aa8y/cockroach-dataset`](https://hub.docker.com/r/aa8y/cockroach-dataset). There is no official Alpine image (the official [`cockroachdb/cockroach`](https://hub.docker.com/r/cockroachdb/cockroach) image is UBI-minimal), but it is slim (~170 MB) and multi-arch, and its entrypoint honours the same `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image (plus a `COCKROACH_DATABASE` env var) when the container is started with `start-single-node`. CockroachDB is PostgreSQL wire- and SQL-compatible, so the dataset pattern carries over and these reuse the same PostgreSQL-dialect sample dumps. See [CockroachDB images](#cockroachdb-images) for the datasets and tags available.
 * [SQLite](https://www.sqlite.org/) as [`aa8y/sqlite-dataset`](https://hub.docker.com/r/aa8y/sqlite-dataset). SQLite is serverless — a database is just a file — so there is no server to boot and no init scripts; the build assembles the database file and the image ships it. We use the Alpine, statically-linked [`keinos/sqlite3`](https://hub.docker.com/r/keinos/sqlite3) image (multi-arch) as the base, keeping the image genuinely thin and Alpine-based. See [SQLite images](#sqlite-images) for the datasets and tags available.
 
 ## Tags
@@ -95,6 +96,26 @@ The remaining PostgreSQL datasets are either sourced from PostgreSQL-only upstre
 * `airlines`: the [postgrespro demo](https://postgrespro.com/education/demodb) is distributed as a binary-ish PostgreSQL `pg_dump` and leans on PostgreSQL features (`jsonb`, several million inlined rows); it is PostgreSQL-only.
 * `omdb`: [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql) is PostgreSQL-specific — its views rely on the `tsm_system_rows` extension (no MySQL equivalent), so a port would have to drop them and would no longer be the upstream dataset.
 * `yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-sportsdb`: superseded on MySQL by the native/ported `chinook`, `northwind`, and `sportsdb` tags above (the Yugabyte SQL is PostgreSQL dialect; `sportsdb` is hand-translated from the same dump, so the prefixed tag is not duplicated here).
+
+## CockroachDB images
+
+The CockroachDB images mirror the PostgreSQL ones: each [`aa8y/cockroach-dataset`](https://hub.docker.com/r/aa8y/cockroach-dataset) image carries exactly one dataset, loaded into its own database, and is built through the same Extract -> Transform -> Load [Dockerfile](cockroach/Dockerfile) driven by `manifest.yml`. The engine is [CockroachDB](https://www.cockroachlabs.com/) (see [Databases](#databases) for the base-image choice); it is PostgreSQL wire- and SQL-compatible, so these reuse the same PostgreSQL-dialect dumps the Yugabyte PostgreSQL tags do. The official `cockroachdb/cockroach` entrypoint creates the database named by the `COCKROACH_DATABASE` env var and runs every `/docker-entrypoint-initdb.d/*.sql` script against it (under `start-single-node`), so — unlike the postgres images — the build emits no `CREATE DATABASE` header; the database is the bare dataset name. All CockroachDB tags are published for `linux/amd64` and `linux/arm64`.
+
+The images run a single-node cluster in insecure mode (these are throwaway practice/test images, mirroring the trivial credentials the postgres/mysql images use), which keeps connecting simple. Start a container and connect with the built-in `cockroach sql` client:
+```
+docker run -d --name cr-ds-<tag> aa8y/cockroach-dataset:<tag>
+docker exec -it cr-ds-<tag> cockroach sql --insecure --database <db_name>
+```
+where `<tag>` is one of the CockroachDB tags below and `<db_name>` is the matching dataset name.
+
+### CockroachDB datasets
+
+* `chinook`: the [Chinook](https://github.com/lerocha/chinook-database) digital-media store — artists, albums, tracks, customers, and invoices (11 tables in the `public` schema; quoted CamelCase identifiers like `"Track"`, `"InvoiceLine"`). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample) (the same PostgreSQL-dialect dump behind the PostgreSQL `yugabyte-chinook` tag), which loads on CockroachDB unchanged.
+* `northwind`: the classic Northwind specialty-foods import/export company — customers, orders, products, employees, and suppliers (14 tables in the `public` schema; snake_case identifiers). Sourced from [Yugabyte's sample data repo](https://github.com/yugabyte/yugabyte-db/tree/master/sample) (the same dump behind the PostgreSQL `yugabyte-northwind` tag).
+
+### CockroachDB tags
+
+Available CockroachDB tags are `chinook`, `northwind` and `latest`. Each image carries exactly one dataset, loaded into a database of the same name. `latest` currently tracks the `chinook` dataset.
 
 ## SQLite images
 
@@ -247,6 +268,7 @@ integration tests).
 ## Future Work
 
 * [MySQL](https://www.mysql.com/) images are now shipped (see [MySQL images](#mysql-images)), including the full Stack Exchange family. Remaining MySQL work: port more of the PostgreSQL datasets where a MySQL-native source can be found or the upstream is format-neutral enough to hand-translate faithfully (see [Datasets not ported to MySQL](#datasets-not-ported-to-mysql)).
+* [CockroachDB](https://www.cockroachlabs.com/) images are now shipped (see [CockroachDB images](#cockroachdb-images)), starting with the PostgreSQL-dialect `chinook` and `northwind` datasets. Remaining CockroachDB work: extend the dataset set (most plain DDL + data PostgreSQL dumps should load with little or no change).
 * [SQLite](https://www.sqlite.org/) images are now shipped (see [SQLite images](#sqlite-images)), starting with the `chinook` and `northwind` datasets. Remaining SQLite work: add more datasets from native SQLite sources or by building from format-neutral SQL.
 * Images for other popular databases.
 * Find and add more free data sources.

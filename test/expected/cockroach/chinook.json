@@ -1,0 +1,13 @@
+{
+  "public.Album": 347,
+  "public.Artist": 275,
+  "public.Customer": 59,
+  "public.Employee": 8,
+  "public.Genre": 25,
+  "public.Invoice": 412,
+  "public.InvoiceLine": 2240,
+  "public.MediaType": 5,
+  "public.Playlist": 18,
+  "public.PlaylistTrack": 8715,
+  "public.Track": 3503
+}
