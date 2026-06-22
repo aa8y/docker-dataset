@@ -1,0 +1,11 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. sakila is built at image
+# build time into /data/sakila.db. (Row counts are asserted by the integration
+# smoke test, since the database is a binary file the structure test cannot
+# introspect.)
+
+fileExistenceTests:
+  - name: "sakila database file exists"
+    path: "/data/sakila.db"
+    shouldExist: true

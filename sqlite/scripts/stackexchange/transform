@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Transform a StackExchange XML dump into a SQLite SQL script.
+
+This is the SQLite counterpart of ../../../mysql/scripts/stackexchange/transform.
+A StackExchange site dump is a set of per-table XML files, one ``<row .../>``
+element per record with the column values held as element attributes. This hook
+converts each table that is present into ``CREATE TABLE`` + batched multi-row
+``INSERT`` statements, then appends the indexes, assembling a single
+``<dataset>.sql`` that the build cats into the sqlite3 CLI.
+
+The schema, the XML-attribute -> column mapping, and the indexes are the same as
+the postgres/mysql hooks (both adapted from stackexchange-dump-to-postgres,
+https://github.com/Human-Centric-Machine-Learning/stackexchange-dump-to-postgres);
+only the emitted dialect differs:
+
+  * identifiers are double-quoted (``Tags``, ``Count`` are SQL keywords);
+  * Postgres ``int``/``timestamp``/``text`` become ``INTEGER``/``TEXT``/``TEXT``
+    (timestamps stored as ISO 8601 text);
+  * data is loaded with batched ``INSERT`` rather than an inline ``COPY`` block;
+  * indexes on text columns need no key-prefix length (SQLite indexes full TEXT).
+
+Indexes are emitted after the bulk load (faster to build once), exactly as the
+postgres hook does. Every StackExchange site shares this identical schema, so
+this hook is site-agnostic: each site's dataset directory (e.g. scripts/beer,
+scripts/coffee) is a symlink to scripts/stackexchange, and the only thing that
+varies per site is $DATASET (the database/output-file name). Unknown attributes
+from refreshed dumps (e.g. ContentLicense) are ignored because every INSERT uses
+an explicit column list.
+"""
+import os
+import sys
+
+from lxml import etree
+
+INT, TS, TXT = "INTEGER", "TEXT", "TEXT"
+
+# Each table: (xml_file, table, columns, indexes). A column is
+# (xml_attribute, sql_column, type); the first column is the primary key. An
+# index is (index_name, [sql_column, ...]).
+TABLES = [
+    ("Users.xml", "Users", [
+        ("Id", "Id", INT), ("Reputation", "Reputation", INT),
+        ("CreationDate", "CreationDate", TS), ("DisplayName", "DisplayName", TXT),
+        ("LastAccessDate", "LastAccessDate", TS), ("WebsiteUrl", "WebsiteUrl", TXT),
+        ("Location", "Location", TXT), ("AboutMe", "AboutMe", TXT),
+        ("Views", "Views", INT), ("UpVotes", "UpVotes", INT),
+        ("DownVotes", "DownVotes", INT), ("ProfileImageUrl", "ProfileImageUrl", TXT),
+        ("Age", "Age", INT), ("AccountId", "AccountId", INT),
+    ], [
+        ("users_account_id_idx", ["AccountId"]),
+        ("users_display_name_idx", ["DisplayName"]),
+        ("users_up_votes_idx", ["UpVotes"]),
+        ("users_down_votes_idx", ["DownVotes"]),
+        ("users_creation_date_idx", ["CreationDate"]),
+    ]),
+    ("Posts.xml", "Posts", [
+        ("Id", "Id", INT), ("PostTypeId", "PostTypeId", INT),
+        ("AcceptedAnswerId", "AcceptedAnswerId", INT), ("ParentId", "ParentId", INT),
+        ("CreationDate", "CreationDate", TS), ("Score", "Score", INT),
+        ("ViewCount", "ViewCount", INT), ("Body", "Body", TXT),
+        ("OwnerUserId", "OwnerUserId", INT), ("LastEditorUserId", "LastEditorUserId", INT),
+        ("LastEditorDisplayName", "LastEditorDisplayName", TXT),
+        ("LastEditDate", "LastEditDate", TS), ("LastActivityDate", "LastActivityDate", TS),
+        ("Title", "Title", TXT), ("Tags", "Tags", TXT),
+        ("AnswerCount", "AnswerCount", INT), ("CommentCount", "CommentCount", INT),
+        ("FavoriteCount", "FavoriteCount", INT), ("ClosedDate", "ClosedDate", TS),
+        ("CommunityOwnedDate", "CommunityOwnedDate", TS),
+    ], [
+        ("posts_post_type_id_idx", ["PostTypeId"]),
+        ("posts_score_idx", ["Score"]),
+        ("posts_creation_date_idx", ["CreationDate"]),
+        ("posts_owner_user_id_idx", ["OwnerUserId"]),
+        ("posts_answer_count_idx", ["AnswerCount"]),
+        ("posts_comment_count_idx", ["CommentCount"]),
+        ("posts_favorite_count_idx", ["FavoriteCount"]),
+        ("posts_view_count_idx", ["ViewCount"]),
+        ("posts_accepted_answer_id_idx", ["AcceptedAnswerId"]),
+        ("posts_parent_id_idx", ["ParentId"]),
+    ]),
+    ("Comments.xml", "Comments", [
+        ("Id", "Id", INT), ("PostId", "PostId", INT), ("Score", "Score", INT),
+        ("Text", "Text", TXT), ("CreationDate", "CreationDate", TS),
+        ("UserId", "UserId", INT),
+    ], [
+        ("comments_score_idx", ["Score"]),
+        ("comments_post_id_idx", ["PostId"]),
+        ("comments_creation_date_idx", ["CreationDate"]),
+        ("comments_user_id_idx", ["UserId"]),
+    ]),
+    ("Votes.xml", "Votes", [
+        ("Id", "Id", INT), ("PostId", "PostId", INT), ("VoteTypeId", "VoteTypeId", INT),
+        ("UserId", "UserId", INT), ("CreationDate", "CreationDate", TS),
+        ("BountyAmount", "BountyAmount", INT),
+    ], [
+        ("votes_post_id_idx", ["PostId"]),
+        ("votes_type_idx", ["VoteTypeId"]),
+        ("votes_creation_date_idx", ["CreationDate"]),
+    ]),
+    ("Badges.xml", "Badges", [
+        ("Id", "Id", INT), ("UserId", "UserId", INT), ("Name", "Name", TXT),
+        ("Date", "Date", TS),
+    ], [
+        ("badges_user_id_idx", ["UserId"]),
+        ("badges_name_idx", ["Name"]),
+        ("badges_date_idx", ["Date"]),
+    ]),
+    ("Tags.xml", "Tags", [
+        ("Id", "Id", INT), ("TagName", "TagName", TXT), ("Count", "Count", INT),
+        ("ExcerptPostId", "ExcerptPostId", INT), ("WikiPostId", "WikiPostId", INT),
+    ], [
+        ("tags_count_idx", ["Count"]),
+        ("tags_name_idx", ["TagName"]),
+    ]),
+    ("PostLinks.xml", "PostLinks", [
+        ("Id", "Id", INT), ("CreationDate", "CreationDate", TS), ("PostId", "PostId", INT),
+        ("RelatedPostId", "RelatedPostId", INT), ("LinkTypeId", "LinkTypeId", INT),
+    ], [
+        ("post_links_post_id_idx", ["PostId"]),
+        ("post_links_related_post_id_idx", ["RelatedPostId"]),
+    ]),
+    ("PostHistory.xml", "PostHistory", [
+        ("Id", "Id", INT), ("PostHistoryTypeId", "PostHistoryTypeId", INT),
+        ("PostId", "PostId", INT), ("RevisionGUID", "RevisionGUID", TXT),
+        ("CreationDate", "CreationDate", TS), ("UserId", "UserId", INT),
+        ("Text", "PostText", TXT),
+    ], [
+        ("post_history_type_id_idx", ["PostHistoryTypeId"]),
+        ("post_history_post_id_idx", ["PostId"]),
+        ("post_history_revision_guid_idx", ["RevisionGUID"]),
+        ("post_history_creation_date_idx", ["CreationDate"]),
+        ("post_history_user_id_idx", ["UserId"]),
+    ]),
+]
+
+BATCH = 500
+
+
+def sql_str(value):
+    """Render a string as a single-line SQLite string literal."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def value(attribs, xml_attr, col_type):
+    v = attribs.get(xml_attr)
+    if v is None or (col_type != TXT and v == ""):
+        return "NULL"
+    if col_type == TS:
+        return sql_str(v)
+    if col_type == INT:
+        return v
+    return sql_str(v)
+
+
+def ddl(table, columns):
+    defs = []
+    for i, (_, col, col_type) in enumerate(columns):
+        defs.append('  "{}" {}{}'.format(
+            col, col_type, " PRIMARY KEY" if i == 0 else ""))
+    return 'CREATE TABLE "{}" (\n{}\n);\n'.format(table, ",\n".join(defs))
+
+
+def index_ddl(table, name, cols):
+    parts = ['"{}"'.format(col) for col in cols]
+    return 'CREATE INDEX "{}" ON "{}" ({});\n'.format(name, table, ", ".join(parts))
+
+
+def main():
+    dataset = os.environ.get("DATASET", "stackexchange")
+    present = [t for t in TABLES if os.path.exists(t[0])]
+    if not present:
+        sys.exit("stackexchange transform: no StackExchange XML files found")
+
+    with open("{}.sql".format(dataset), "w", encoding="utf-8") as out:
+        out.write("-- StackExchange data dump, converted from XML at build time.\n")
+        out.write("-- See sqlite/scripts/stackexchange/transform.\n\n")
+        out.write("PRAGMA synchronous=OFF;\nBEGIN;\n\n")
+
+        for xml_file, table, columns, _ in present:
+            out.write(ddl(table, columns))
+            col_list = ", ".join('"{}"'.format(col) for _, col, _ in columns)
+            insert_head = 'INSERT INTO "{}" ({}) VALUES\n'.format(table, col_list)
+
+            batch = []
+            def flush():
+                if batch:
+                    out.write(insert_head + ",\n".join(batch) + ";\n")
+                    batch.clear()
+
+            for _, elem in etree.iterparse(xml_file, events=("end",)):
+                if elem.tag == "row":
+                    row = ", ".join(value(elem.attrib, xa, ct) for xa, _, ct in columns)
+                    batch.append("({})".format(row))
+                    if len(batch) >= BATCH:
+                        flush()
+                elem.clear()
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+            flush()
+            out.write("\n")
+
+        for _, table, _, indexes in present:
+            for name, cols in indexes:
+                out.write(index_ddl(table, name, cols))
+
+        out.write("\nCOMMIT;\n")
+
+
+if __name__ == "__main__":
+    main()

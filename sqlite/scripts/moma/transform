@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# MoMA publishes no SQL, so stage the authored SQLite schema (shipped alongside
+# these build scripts) into the build dir as moma.sql and append sqlite3 CLI
+# dot-commands to bulk-import the CSVs fetched by EXTRACT_URL.
+set -e
+cp /usr/local/lib/scripts/moma/schema.sql moma.sql
+cat >>moma.sql <<'EOF'
+
+.mode csv
+.import --skip 1 Artists.csv artists
+.import --skip 1 Artworks.csv artworks
+EOF

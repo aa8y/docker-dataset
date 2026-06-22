@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Hand-translate a PostgreSQL SQL dump into SQLite at build time.
+
+A number of our datasets only ship as PostgreSQL dumps. Where the dump is plain
+DDL + data (no PL/pgSQL, no extensions) the dialect gap is small and mechanical,
+so this shared hook rewrites the SQL rather than us carrying a hand-maintained
+SQLite fork of each dataset. Every dataset that needs it symlinks its
+scripts/<dataset> directory to scripts/pgsql, exactly like the stackexchange
+hook is shared across sites; the conversion is dataset-agnostic and keyed only
+on $SQL_FILES (the files the build will cat into the sqlite3 CLI).
+
+What it does, per file in $SQL_FILES:
+
+  * transcodes the file to UTF-8 (some pgFoundry dumps are Latin-1);
+  * converts ``COPY tbl (cols) FROM stdin`` + TEXT-format data + ``\\.`` into
+    batched multi-row ``INSERT``s (SQLite has no inline COPY);
+  * drops Postgres-only noise (``SET``, sequences, ``OWNER TO``, ``GRANT`` /
+    ``REVOKE``, ``COMMENT ON``, ``WITH/WITHOUT OIDS``, ``DEFAULT nextval(...)``,
+    psql ``\\connect`` / ``\\.``), strips ``USING btree`` / ``USING hash`` /
+    ``USING lsm`` access-method clauses and ``public.`` / ``cd.`` schema
+    qualifiers; and
+  * lower-cases table identifiers so a dump that defines ``Regions`` but loads
+    ``regions`` (Postgres folds unquoted names) still resolves on SQLite;
+  * drops ``ALTER TABLE ... ADD CONSTRAINT ...`` statements wholesale (SQLite
+    cannot add constraints via ALTER TABLE; tables and data still load);
+  * drops PL/pgSQL stored functions (no mechanical SQLite translation).
+
+Column types are kept as-is: SQLite type affinity accepts Postgres spellings
+(``character varying``, ``timestamp``, ``numeric``, ``boolean``, etc.).
+
+The output is wrapped in ``PRAGMA synchronous=OFF; BEGIN;`` / ``COMMIT;`` for
+fast bulk load.
+"""
+import glob
+import os
+import re
+import sys
+
+BATCH = 500
+
+PREAMBLE = "PRAGMA synchronous=OFF;\nPRAGMA journal_mode=MEMORY;\n\n"
+POSTAMBLE = ""
+
+# A COPY header: COPY <table> (<cols>) FROM stdin [DELIMITER 'x'];
+COPY_RE = re.compile(
+    r"^COPY\s+([^\s(]+)\s*\(([^)]*)\)\s+FROM\s+stdin"
+    r"(?:\s+DELIMITER\s+'([^']*)')?\s*;",
+    re.IGNORECASE)
+
+# Whole DDL lines that are Postgres-only and have no SQLite equivalent we need.
+DROP_LINE_RE = re.compile(
+    r"^\s*(SET\s|SELECT\s+pg_catalog\.setval|GRANT\s|REVOKE\s|COMMENT\s+ON|"
+    r"WITHOUT\s+OIDS|USING\s+(btree|hash|lsm)\b|\\connect|\\c\s|\\\."
+    r"|CREATE\s+SCHEMA|DROP\s+SCHEMA|CREATE\s+DATABASE|DROP\s+DATABASE)\b",
+    re.IGNORECASE)
+
+# Multi-line statements to drop wholesale (from this keyword until the line that
+# ends the statement with ';').
+DROP_BLOCK_RE = re.compile(
+    r"^\s*(CREATE\s+SEQUENCE|ALTER\s+SEQUENCE|CREATE\s+DOMAIN|CREATE\s+TYPE)\b",
+    re.IGNORECASE)
+
+# SQLite cannot add constraints via ALTER TABLE; drop these blocks wholesale
+# (single-line or multi-line until ';').
+ALTER_TABLE_RE = re.compile(r"^\s*ALTER\s+TABLE\b", re.IGNORECASE)
+
+# PL/pgSQL stored functions have no mechanical SQLite translation.
+FUNC_START_RE = re.compile(r"^\s*CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b",
+                           re.IGNORECASE)
+FUNC_END_RE = re.compile(r"\bLANGUAGE\s+\w+\s*;\s*$", re.IGNORECASE)
+
+
+def transcode(path):
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+def strip_schema(line):
+    """Remove Postgres schema qualifiers SQLite does not use."""
+    return re.sub(r"(?i)\b(public|cd)\.", "", line)
+
+
+def clean_ddl(line):
+    """Apply dialect fixes to a single DDL/statement line."""
+    line = strip_schema(line)
+    line = re.sub(r"(?i)\bdefault\s+nextval\([^)]*\)", "", line)
+    line = re.sub(r"(?i)\balter\s+table\s+only\b", "ALTER TABLE", line)
+    line = re.sub(r"(?i)\busing\s+(btree|hash|lsm)\b", "", line)
+    line = re.sub(r"(?i)\bwith\s*\(\s*oids[^)]*\)", "", line)
+    # Postgres type casts (e.g. 'Asia'::text) have no SQLite equivalent.
+    line = re.sub(r"::\w+(?:\([^)]*\))?", "", line)
+    line = re.sub(r"(?i)(create\s+table\s+)(\w+)",
+                  lambda m: m.group(1) + m.group(2).lower(), line)
+    line = re.sub(r"(?i)(alter\s+table\s+)(\w+)",
+                  lambda m: m.group(1) + m.group(2).lower(), line)
+    line = re.sub(r"(?i)(references\s+)(\w+)",
+                  lambda m: m.group(1) + m.group(2).lower(), line)
+    line = re.sub(r"(?i)(create\s+index\s+\w+\s+on\s+)(\w+)",
+                  lambda m: m.group(1) + m.group(2).lower(), line)
+    return line
+
+
+def split_copy_row(line, delim):
+    """Split a COPY TEXT row on unescaped delimiters, keeping escape pairs."""
+    fields, cur, i, n = [], [], 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n:
+            cur.append(line[i:i + 2]); i += 2; continue
+        if c == delim:
+            fields.append("".join(cur)); cur = []; i += 1; continue
+        cur.append(c); i += 1
+    fields.append("".join(cur))
+    return fields
+
+
+_UNESCAPE = {"t": "\t", "n": "\n", "r": "\r", "\\": "\\"}
+
+
+def copy_value(field):
+    """Render one COPY field as a SQLite string literal."""
+    if field == "\\N":
+        return "NULL"
+    out, i = [], 0
+    while i < len(field):
+        if field[i] == "\\" and i + 1 < len(field):
+            out.append(_UNESCAPE.get(field[i + 1], field[i + 1])); i += 2
+        else:
+            out.append(field[i]); i += 1
+    return "'" + "".join(out).replace("'", "''") + "'"
+
+
+def convert_file(text, out):
+    lines = text.split("\n")
+    i, n = 0, len(lines)
+    drop_block = drop_func = drop_alter = False
+    while i < n:
+        line = lines[i]
+
+        if drop_func:
+            if FUNC_END_RE.search(line):
+                drop_func = False
+            i += 1; continue
+        if drop_block:
+            if ";" in line:
+                drop_block = False
+            i += 1; continue
+        if drop_alter:
+            if ";" in line:
+                drop_alter = False
+            i += 1; continue
+
+        m = COPY_RE.match(line)
+        if m:
+            table, cols, delim = m.group(1), m.group(2), m.group(3) or "\t"
+            table = table.split(".")[-1].lower()
+            head = "INSERT INTO {} ({}) VALUES\n".format(table, cols)
+            batch = []
+            i += 1
+            while i < n and lines[i].rstrip() != "\\.":
+                row = split_copy_row(lines[i], delim)
+                batch.append("(" + ", ".join(copy_value(f) for f in row) + ")")
+                if len(batch) >= BATCH:
+                    out.write(head + ",\n".join(batch) + ";\n")
+                    batch = []
+                i += 1
+            if batch:
+                out.write(head + ",\n".join(batch) + ";\n")
+            i += 1  # skip the \. terminator
+            continue
+
+        if FUNC_START_RE.match(line):
+            drop_func = not FUNC_END_RE.search(line)
+            i += 1; continue
+        if ALTER_TABLE_RE.match(line):
+            drop_alter = ";" not in line
+            i += 1; continue
+        if DROP_BLOCK_RE.match(line):
+            drop_block = ";" not in line
+            i += 1; continue
+        if DROP_LINE_RE.match(line):
+            i += 1; continue
+
+        stripped = line.lstrip()
+        if stripped.startswith("--") or not stripped:
+            out.write(line + "\n")
+        elif stripped.startswith("INSERT INTO"):
+            out.write(strip_schema(line) + "\n")
+        else:
+            out.write(clean_ddl(line) + "\n")
+        i += 1
+
+
+def main():
+    files = os.environ.get("SQL_FILES", "").split() or sorted(glob.glob("*.sql"))
+    files = [f for f in files if os.path.isfile(f)]
+    if not files:
+        sys.exit("pgsql transform: no SQL files to convert")
+
+    for idx, path in enumerate(files):
+        text = transcode(path)
+        with open(path, "w", encoding="utf-8") as out:
+            if idx == 0:
+                out.write(PREAMBLE)
+            convert_file(text, out)
+            if idx == len(files) - 1:
+                out.write(POSTAMBLE)
+
+
+if __name__ == "__main__":
+    main()

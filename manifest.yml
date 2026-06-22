@@ -566,6 +566,152 @@ contexts:
         structureTest:
           configs:
             - test/config/sqlite/northwind.yaml
+      # Tier 1 hand-translated PostgreSQL datasets. These ship only as
+      # PostgreSQL dumps, but are plain DDL + data (no PL/pgSQL, no extensions),
+      # so the shared scripts/pgsql transform hook rewrites the dialect at build
+      # time (COPY -> INSERT, strip Postgres-only noise). SQLite cannot add
+      # constraints via ALTER TABLE, so PK/FK/unique from the dump are dropped;
+      # tables and row counts still load faithfully. Each dataset's
+      # scripts/<dataset> dir is a symlink to scripts/pgsql.
+      world: &sqlite-world
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz
+        sqlFiles: dbsamples-0.1/world/world.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/sqlite/world.yaml
+      iso3166:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz
+        sqlFiles: iso-3166/iso-3166.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/sqlite/iso3166.yaml
+      frenchtowns:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz
+        sqlFiles: french-towns-communes-francaises.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/sqlite/frenchtowns.yaml
+      usda:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
+        sqlFiles: usda-r18-1.0/usda.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/sqlite/usda.yaml
+      pgexercises:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_data.sql
+        sqlFiles: clubdata_ddl.sql clubdata_data.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/sqlite/pgexercises.yaml
+      # Tier 2 hand-translated PostgreSQL datasets. Larger / slightly more
+      # involved than tier 1 but still handled by the shared scripts/pgsql hook:
+      # sportsdb is INSERT-based across five files with sequences and constraints;
+      # dellstore2 is COPY-based plus a PL/pgSQL stored function, which the hook
+      # drops (no mechanical SQLite translation -- the schema and all data still
+      # load faithfully).
+      dellstore:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz
+        sqlFiles: dellstore2-normal-1.0/dellstore2-normal-1.0.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/sqlite/dellstore.yaml
+      sportsdb:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_indexes.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_constraints.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_fks.sql
+        sqlFiles: sportsdb_tables.sql sportsdb_inserts.sql sportsdb_indexes.sql sportsdb_constraints.sql sportsdb_fks.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/sqlite/sportsdb.yaml
+      # Sakila: MySQL's own sample database (the original of pagila). The
+      # bradleygrant/sakila-sqlite3 port publishes a prebuilt database file,
+      # shipped as-is (mirrors the northwind dbFile pattern).
+      sakila:
+        extractUrl: https://raw.githubusercontent.com/bradleygrant/sakila-sqlite3/main/sakila_master.db
+        dbFile: sakila_master.db
+        structureTest:
+          configs:
+            - test/config/sqlite/sakila.yaml
+      # MoMA research collection. Published only as CSV, so the schema is
+      # authored in-repo (sqlite/scripts/moma) and the CSVs are bulk-loaded at
+      # build time with the sqlite3 CLI's .import dot-command. Counts drift
+      # between builds (the CSVs are refreshed upstream), so the smoke test
+      # records floors.
+      moma:
+        extractUrl: >-
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artworks.csv
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artists.csv
+        sqlFiles: moma.sql
+        structureTest:
+          configs:
+            - test/config/sqlite/moma.yaml
+      # StackExchange sites. Each ships as per-table XML in a 7z archive (no
+      # SQL), so -- exactly like the postgres/mysql side -- every site builds
+      # through the shared scripts/stackexchange hooks (each site's scripts/<site>
+      # dir is a symlink to it): the extract hook un-7z's the dump and the
+      # transform hook converts the XML to a SQLite init script (CREATE TABLE +
+      # batched INSERTs + indexes). Adding a site is just a tag here + a
+      # structure-test config + an expected/sqlite/<site>.json floor file.
+      stackexchange-beer:
+        dataset: beer
+        extractUrl: https://archive.org/download/stackexchange/beer.stackexchange.com.7z
+        sqlFiles: beer.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/sqlite/stackexchange-beer.yaml
+      stackexchange-coffee:
+        dataset: coffee
+        extractUrl: https://archive.org/download/stackexchange/coffee.stackexchange.com.7z
+        sqlFiles: coffee.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/sqlite/stackexchange-coffee.yaml
+      stackexchange-poker:
+        dataset: poker
+        extractUrl: https://archive.org/download/stackexchange/poker.stackexchange.com.7z
+        sqlFiles: poker.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/sqlite/stackexchange-poker.yaml
+      stackexchange-woodworking:
+        dataset: woodworking
+        extractUrl: https://archive.org/download/stackexchange/woodworking.stackexchange.com.7z
+        sqlFiles: woodworking.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/sqlite/stackexchange-woodworking.yaml
+      stackexchange-chess:
+        dataset: chess
+        extractUrl: https://archive.org/download/stackexchange/chess.stackexchange.com.7z
+        sqlFiles: chess.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/sqlite/stackexchange-chess.yaml
+      stackexchange-cooking:
+        dataset: cooking
+        extractUrl: https://archive.org/download/stackexchange/cooking.stackexchange.com.7z
+        sqlFiles: cooking.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/sqlite/stackexchange-cooking.yaml
       # `latest` tracks a single representative dataset, mirroring postgres/mysql.
       latest:
         <<: *sqlite-chinook
