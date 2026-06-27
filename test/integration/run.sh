@@ -115,15 +115,23 @@ docker run -d --name "$CONTAINER" "$IMAGE" >/dev/null
 # (-h 127.0.0.1): a socket-only check returns ready mid-init and we would
 # query half-loaded databases. TCP readiness means all init scripts (every
 # database, fully populated) have completed.
+#
+# The budget is a wall-clock deadline, not a fixed iteration count: each
+# pg_isready runs via `docker exec`, which on a loaded ARM runner can itself
+# take a second or more, so an N-iteration loop silently waits far less than N
+# seconds. 300s matches the MySQL budget; the heaviest dataset (sportsdb) loads
+# well inside it on emulated/ARM runners but exceeded the old 120-count loop.
+READY_TIMEOUT="${READY_TIMEOUT:-300}"
 ready=0
-for _ in $(seq 1 120); do
+deadline=$(( SECONDS + READY_TIMEOUT ))
+while (( SECONDS < deadline )); do
   if docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then
     ready=1; break
   fi
   sleep 1
 done
 if [[ "$ready" -ne 1 ]]; then
-  fail "${IMAGE}: Postgres did not become ready in time"
+  fail "${IMAGE}: Postgres did not become ready in time (${READY_TIMEOUT}s)"
   docker logs "$CONTAINER" 2>&1 | tail -30 >&2
   exit 1
 fi
