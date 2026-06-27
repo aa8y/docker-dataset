@@ -1,0 +1,10 @@
+{
+  "public.badges": ">=53236",
+  "public.comments": ">=45030",
+  "public.posthistory": ">=92345",
+  "public.postlinks": ">=2634",
+  "public.posts": ">=30990",
+  "public.tags": ">=404",
+  "public.users": ">=30056",
+  "public.votes": ">=191720"
+}

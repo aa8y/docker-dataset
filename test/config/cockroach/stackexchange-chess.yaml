@@ -1,0 +1,26 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "chess init script exists"
+    path: "/docker-entrypoint-initdb.d/chess.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "chess declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/chess.sql"
+    expectedContents:
+      - "CREATE TABLE Users[ (]"
+      - "CREATE TABLE Posts[ (]"
+      - "CREATE TABLE Comments[ (]"
+      - "CREATE TABLE Votes[ (]"
+      - "CREATE TABLE Badges[ (]"
+      - "CREATE TABLE Tags[ (]"
+      - "CREATE TABLE PostLinks[ (]"
+      - "CREATE TABLE PostHistory[ (]"
+
+  - name: "chess loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/chess.sql"
+    expectedContents:
+      - "COPY Users[ (]"
+      - "COPY Posts[ (]"
+      - "COPY PostHistory[ (]"

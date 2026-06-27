@@ -1,0 +1,21 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "frenchtowns init script exists"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "frenchtowns declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    expectedContents:
+      - "CREATE TABLE Regions[ (]"
+      - "CREATE TABLE Departments[ (]"
+      - "CREATE TABLE Towns[ (]"
+
+  - name: "frenchtowns loads data into every table"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    expectedContents:
+      - "COPY regions[ (]"
+      - "COPY departments[ (]"
+      - "COPY towns[ (]"

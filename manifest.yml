@@ -466,6 +466,7 @@ contexts:
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
         {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
         -t {{{repository}}}:{{tag}} {{{context}}}
       test: REPOSITORY={{{repository}}} bash test/integration/run-cockroach.sh {{tag}} {{dataset}}
@@ -477,6 +478,7 @@ contexts:
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
         {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
         -t {{{repository}}}:{{tag}} {{{context}}}
     tags:
@@ -503,6 +505,128 @@ contexts:
         structureTest:
           configs:
             - test/config/cockroach/northwind.yaml
+      # Plain PostgreSQL-dialect dumps from pgFoundry or Yugabyte that load on
+      # CockroachDB unchanged (mirroring the postgres tags for these datasets).
+      world:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz
+        sqlFiles: dbsamples-0.1/world/world.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/world.yaml
+      iso3166:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz
+        sqlFiles: iso-3166/iso-3166.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/iso3166.yaml
+      frenchtowns:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz
+        sqlFiles: french-towns-communes-francaises.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/frenchtowns.yaml
+      usda:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
+        sqlFiles: usda-r18-1.0/usda.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/usda.yaml
+      pgexercises:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_data.sql
+        sqlFiles: clubdata_ddl.sql clubdata_data.sql
+        structureTest:
+          configs:
+            - test/config/cockroach/pgexercises.yaml
+      dellstore:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz
+        sqlFiles: dellstore2-normal-1.0/dellstore2-normal-1.0.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/dellstore.yaml
+      sportsdb:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_indexes.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_constraints.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_fks.sql
+        sqlFiles: sportsdb_tables.sql sportsdb_inserts.sql sportsdb_indexes.sql sportsdb_constraints.sql sportsdb_fks.sql
+        extraPrereqs: python3
+        indexMethod: btree
+        structureTest:
+          configs:
+            - test/config/cockroach/sportsdb.yaml
+      # MoMA publishes only CSV, so the schema is authored in-repo
+      # (postgres/scripts/moma) and the CSVs ship alongside the init script so
+      # the \copy directives resolve at start (cdDir below).
+      moma:
+        extractUrl: >-
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artworks.csv
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artists.csv
+        sqlFiles: moma.sql
+        cdDir: /docker-entrypoint-initdb.d/moma
+        structureTest:
+          configs:
+            - test/config/cockroach/moma.yaml
+      # StackExchange sites all share one schema, so they all build through the
+      # shared scripts/stackexchange hooks (each site's scripts/<site> dir is a
+      # symlink to it). Adding a site is just a tag here + a structure-test
+      # config + an expected/cockroach/<site>.json floor file.
+      stackexchange-beer:
+        dataset: beer
+        extractUrl: https://archive.org/download/stackexchange/beer.stackexchange.com.7z
+        sqlFiles: beer.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/cockroach/stackexchange-beer.yaml
+      stackexchange-coffee:
+        dataset: coffee
+        extractUrl: https://archive.org/download/stackexchange/coffee.stackexchange.com.7z
+        sqlFiles: coffee.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/cockroach/stackexchange-coffee.yaml
+      stackexchange-poker:
+        dataset: poker
+        extractUrl: https://archive.org/download/stackexchange/poker.stackexchange.com.7z
+        sqlFiles: poker.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/cockroach/stackexchange-poker.yaml
+      stackexchange-woodworking:
+        dataset: woodworking
+        extractUrl: https://archive.org/download/stackexchange/woodworking.stackexchange.com.7z
+        sqlFiles: woodworking.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/cockroach/stackexchange-woodworking.yaml
+      stackexchange-chess:
+        dataset: chess
+        extractUrl: https://archive.org/download/stackexchange/chess.stackexchange.com.7z
+        sqlFiles: chess.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/cockroach/stackexchange-chess.yaml
+      stackexchange-cooking:
+        dataset: cooking
+        extractUrl: https://archive.org/download/stackexchange/cooking.stackexchange.com.7z
+        sqlFiles: cooking.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/cockroach/stackexchange-cooking.yaml
       # `latest` tracks a single representative dataset, mirroring postgres/mysql.
       latest:
         <<: *cockroach-chinook

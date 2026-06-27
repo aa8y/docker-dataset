@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Strip Postgres-only DDL from the Yugabyte sportsdb dump for CockroachDB.
+
+The dump defines an unused ``primary_id`` domain (``CREATE DOMAIN primary_id AS
+integer``) that CockroachDB does not implement (crdb issue #27796). Drop it;
+no column references the domain.
+"""
+import os
+import re
+import sys
+
+DROP_BLOCK_RE = re.compile(r"^\s*CREATE\s+DOMAIN\b", re.IGNORECASE)
+
+
+def transform_file(path: str) -> None:
+    lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if DROP_BLOCK_RE.match(lines[i]):
+            while i < len(lines) and ";" not in lines[i]:
+                i += 1
+            i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    open(path, "w", encoding="utf-8").write("".join(out))
+
+
+def main() -> None:
+    for path in os.environ.get("SQL_FILES", "").split():
+        transform_file(path)
+
+
+if __name__ == "__main__":
+    main()

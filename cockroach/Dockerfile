@@ -54,6 +54,9 @@ ARG EXTRA_PREREQS
 # Optional: target access method for `USING lsm` index DDL. Defaults to "lsm"
 # (a no-op); set to "gin"/"btree"/etc. to rewrite Yugabyte's lsm indexes.
 ARG INDEX_METHOD=lsm
+# Optional: psql \cd target for datasets whose init script uses relative \copy
+# paths (e.g. moma). The CSV data dir is shipped by the dataset load hook.
+ARG CD_DIR
 
 WORKDIR /tmp/build
 # Per-dataset ETL hooks, located by convention as scripts/<dataset>/<step>
@@ -112,6 +115,7 @@ RUN bash -c ' \
       set -e; \
       mkdir -p /docker-entrypoint-initdb.d; \
       INIT="/docker-entrypoint-initdb.d/${DATASET}.sql"; \
+      [ -n "$CD_DIR" ] && echo "\cd ${CD_DIR}" >> "$INIT"; \
       for f in $SQL_FILES; do cat "$f" >> "$INIT"; echo >> "$INIT"; done; \
       h="/usr/local/lib/scripts/${DATASET}/load"; if [ -f "$h" ]; then "$h"; fi'
 

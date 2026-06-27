@@ -1,0 +1,35 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "usda init script exists"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "usda declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    expectedContents:
+      - "CREATE TABLE data_src[ (]"
+      - "CREATE TABLE datsrcln[ (]"
+      - "CREATE TABLE deriv_cd[ (]"
+      - "CREATE TABLE fd_group[ (]"
+      - "CREATE TABLE food_des[ (]"
+      - "CREATE TABLE footnote[ (]"
+      - "CREATE TABLE nut_data[ (]"
+      - "CREATE TABLE nutr_def[ (]"
+      - "CREATE TABLE src_cd[ (]"
+      - "CREATE TABLE weight[ (]"
+
+  - name: "usda loads data into every table"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    expectedContents:
+      - "COPY data_src[ (]"
+      - "COPY datsrcln[ (]"
+      - "COPY deriv_cd[ (]"
+      - "COPY fd_group[ (]"
+      - "COPY food_des[ (]"
+      - "COPY footnote[ (]"
+      - "COPY nut_data[ (]"
+      - "COPY nutr_def[ (]"
+      - "COPY src_cd[ (]"
+      - "COPY weight[ (]"

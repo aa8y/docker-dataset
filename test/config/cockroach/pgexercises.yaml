@@ -1,0 +1,27 @@
+schemaVersion: "2.0.0"
+
+# PgExercises is the "clubdata" sample database behind pgexercises.com. Its
+# three tables live in a dedicated `cd` schema (not public), and data is loaded
+# via INSERT statements. CockroachDB creates the database (COCKROACH_DATABASE)
+# and runs this script against it, so there is no CREATE DATABASE header.
+
+fileExistenceTests:
+  - name: "pgexercises init script exists"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "pgexercises creates the cd schema and its tables"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "CREATE SCHEMA cd"
+      - "CREATE TABLE facilities[ (]"
+      - "CREATE TABLE members[ (]"
+      - "CREATE TABLE bookings[ (]"
+
+  - name: "pgexercises loads data into its tables"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "INSERT INTO facilities[ (]"
+      - "INSERT INTO members[ (]"
+      - "INSERT INTO bookings[ (]"
