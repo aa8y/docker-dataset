@@ -23,6 +23,11 @@ so the dataset fits this repo's extract/transform/load build with no database
 running at build time. Unknown attributes (e.g. ContentLicense on newer dumps)
 are ignored because every INSERT uses an explicit column list, so refreshed
 dumps keep loading unchanged.
+
+The indexes here are plain (B-tree) indexes. The Postgres hook declares a few
+of them as ``USING hash``, but CockroachDB has no hash access method -- its
+``USING HASH`` is a differently-positioned hash-*sharded* index for a different
+purpose -- so those become plain indexes, which serve equality lookups fine.
 """
 import os
 import sys
@@ -46,8 +51,8 @@ TABLES = [
         ("DownVotes", "DownVotes", INT), ("ProfileImageUrl", "ProfileImageUrl", TXT),
         ("Age", "Age", INT), ("AccountId", "AccountId", INT),
     ], [
-        "CREATE INDEX users_account_id_idx ON Users USING hash (AccountId);",
-        "CREATE INDEX users_display_name_idx ON Users USING hash (DisplayName);",
+        "CREATE INDEX users_account_id_idx ON Users (AccountId);",
+        "CREATE INDEX users_display_name_idx ON Users (DisplayName);",
         "CREATE INDEX users_up_votes_idx ON Users (UpVotes);",
         "CREATE INDEX users_down_votes_idx ON Users (DownVotes);",
         "CREATE INDEX users_creation_date_idx ON Users (CreationDate);",
@@ -68,7 +73,7 @@ TABLES = [
         "CREATE INDEX posts_post_type_id_idx ON Posts (PostTypeId);",
         "CREATE INDEX posts_score_idx ON Posts (Score);",
         "CREATE INDEX posts_creation_date_idx ON Posts (CreationDate);",
-        "CREATE INDEX posts_owner_user_id_idx ON Posts USING hash (OwnerUserId);",
+        "CREATE INDEX posts_owner_user_id_idx ON Posts (OwnerUserId);",
         "CREATE INDEX posts_answer_count_idx ON Posts (AnswerCount);",
         "CREATE INDEX posts_comment_count_idx ON Posts (CommentCount);",
         "CREATE INDEX posts_favorite_count_idx ON Posts (FavoriteCount);",
@@ -82,7 +87,7 @@ TABLES = [
         ("UserId", "UserId", INT),
     ], [
         "CREATE INDEX comments_score_idx ON Comments (Score);",
-        "CREATE INDEX comments_post_id_idx ON Comments USING hash (PostId);",
+        "CREATE INDEX comments_post_id_idx ON Comments (PostId);",
         "CREATE INDEX comments_creation_date_idx ON Comments (CreationDate);",
         "CREATE INDEX comments_user_id_idx ON Comments (UserId);",
     ]),
@@ -91,7 +96,7 @@ TABLES = [
         ("UserId", "UserId", INT), ("CreationDate", "CreationDate", TS),
         ("BountyAmount", "BountyAmount", INT),
     ], [
-        "CREATE INDEX votes_post_id_idx ON Votes USING hash (PostId);",
+        "CREATE INDEX votes_post_id_idx ON Votes (PostId);",
         "CREATE INDEX votes_type_idx ON Votes (VoteTypeId);",
         "CREATE INDEX votes_creation_date_idx ON Votes (CreationDate);",
     ]),
@@ -108,7 +113,7 @@ TABLES = [
         ("ExcerptPostId", "ExcerptPostId", INT), ("WikiPostId", "WikiPostId", INT),
     ], [
         "CREATE INDEX tags_count_idx ON Tags (Count);",
-        "CREATE INDEX tags_name_idx ON Tags USING hash (TagName);",
+        "CREATE INDEX tags_name_idx ON Tags (TagName);",
     ]),
     ("PostLinks.xml", "PostLinks", [
         ("Id", "Id", INT), ("CreationDate", "CreationDate", TS), ("PostId", "PostId", INT),
@@ -125,7 +130,7 @@ TABLES = [
         ("Text", "PostText", TXT),
     ], [
         "CREATE INDEX post_history_type_id_idx ON PostHistory (PostHistoryTypeId);",
-        "CREATE INDEX post_history_post_id_idx ON PostHistory USING hash (PostId);",
+        "CREATE INDEX post_history_post_id_idx ON PostHistory (PostId);",
         "CREATE INDEX post_history_revision_guid_idx ON PostHistory (RevisionGUID);",
         "CREATE INDEX post_history_creation_date_idx ON PostHistory (CreationDate);",
         "CREATE INDEX post_history_user_id_idx ON PostHistory (UserId);",
