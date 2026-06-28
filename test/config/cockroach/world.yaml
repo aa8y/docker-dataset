@@ -21,6 +21,6 @@ fileContentTests:
   - name: "world loads data into every table"
     path: "/docker-entrypoint-initdb.d/world.sql"
     expectedContents:
-      - "COPY city[ (]"
-      - "COPY country[ (]"
-      - "COPY countrylanguage[ (]"
+      - "INSERT INTO city[ (]"
+      - "INSERT INTO country[ (]"
+      - "INSERT INTO countrylanguage[ (]"

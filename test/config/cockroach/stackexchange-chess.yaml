@@ -21,6 +21,6 @@ fileContentTests:
   - name: "chess loads data into representative tables"
     path: "/docker-entrypoint-initdb.d/chess.sql"
     expectedContents:
-      - "COPY Users[ (]"
-      - "COPY Posts[ (]"
-      - "COPY PostHistory[ (]"
+      - "INSERT INTO Users[ (]"
+      - "INSERT INTO Posts[ (]"
+      - "INSERT INTO PostHistory[ (]"

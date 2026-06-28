@@ -16,6 +16,6 @@ fileContentTests:
   - name: "frenchtowns loads data into every table"
     path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
     expectedContents:
-      - "COPY regions[ (]"
-      - "COPY departments[ (]"
-      - "COPY towns[ (]"
+      - "INSERT INTO regions[ (]"
+      - "INSERT INTO departments[ (]"
+      - "INSERT INTO towns[ (]"

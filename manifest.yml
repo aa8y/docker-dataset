@@ -564,14 +564,15 @@ contexts:
           configs:
             - test/config/cockroach/sportsdb.yaml
       # MoMA publishes only CSV, so the schema is authored in-repo
-      # (postgres/scripts/moma) and the CSVs ship alongside the init script so
-      # the \copy directives resolve at start (cdDir below).
+      # (cockroach/scripts/moma) and the transform hook bakes the CSV data into
+      # the init script as INSERTs (CockroachDB's SQL client supports neither
+      # \copy nor COPY FROM '<file>'), so nothing ships beside the init script.
       moma:
         extractUrl: >-
           https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artworks.csv
           https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artists.csv
         sqlFiles: moma.sql
-        cdDir: /docker-entrypoint-initdb.d/moma
+        extraPrereqs: python3
         structureTest:
           configs:
             - test/config/cockroach/moma.yaml

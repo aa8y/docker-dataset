@@ -1,34 +1,18 @@
 schemaVersion: "2.0.0"
 
 # MoMA publishes no SQL, so the schema is authored in-repo
-# (postgres/scripts/moma/schema.sql) and the CSV data ships alongside the init
-# script so the \copy directives resolve at start. CockroachDB creates the
-# database (COCKROACH_DATABASE) and runs this script against it, so there is
-# no CREATE DATABASE header.
+# (cockroach/scripts/moma/schema.sql) and the transform hook bakes the CSV data
+# into the init script as INSERTs (CockroachDB's SQL client supports neither
+# \copy nor COPY FROM '<file>'). CockroachDB creates the database
+# (COCKROACH_DATABASE) and runs this script against it, so there is no CREATE
+# DATABASE header.
 
 fileExistenceTests:
   - name: "moma init script exists"
     path: "/docker-entrypoint-initdb.d/moma.sql"
     shouldExist: true
 
-  - name: "moma CSV data directory exists"
-    path: "/docker-entrypoint-initdb.d/moma"
-    shouldExist: true
-
-  - name: "moma Artworks CSV exists"
-    path: "/docker-entrypoint-initdb.d/moma/Artworks.csv"
-    shouldExist: true
-
-  - name: "moma Artists CSV exists"
-    path: "/docker-entrypoint-initdb.d/moma/Artists.csv"
-    shouldExist: true
-
 fileContentTests:
-  - name: "moma init script sets the CSV working directory"
-    path: "/docker-entrypoint-initdb.d/moma.sql"
-    expectedContents:
-      - '\\cd /docker-entrypoint-initdb.d/moma'
-
   - name: "moma declares all expected tables"
     path: "/docker-entrypoint-initdb.d/moma.sql"
     expectedContents:
@@ -38,5 +22,5 @@ fileContentTests:
   - name: "moma loads data into every table"
     path: "/docker-entrypoint-initdb.d/moma.sql"
     expectedContents:
-      - '\\copy artists '
-      - '\\copy artworks '
+      - "INSERT INTO artists[ (]"
+      - "INSERT INTO artworks[ (]"

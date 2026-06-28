@@ -15,5 +15,5 @@ fileContentTests:
   - name: "iso3166 loads data into every table"
     path: "/docker-entrypoint-initdb.d/iso3166.sql"
     expectedContents:
-      - "COPY country[ (]"
-      - "COPY subcountry[ (]"
+      - "INSERT INTO country[ (]"
+      - "INSERT INTO subcountry[ (]"

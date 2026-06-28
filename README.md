@@ -134,11 +134,11 @@ where `<tag>` is one of the tags in the CockroachDB column of the [matrix](#data
 Sources are in the [matrix](#dataset-support-matrix); the notes below are CockroachDB-specific:
 
 * `chinook`, `northwind`: same Yugabyte PostgreSQL-dialect dumps as the postgres `yugabyte-chinook` / `yugabyte-northwind` tags (quoted CamelCase identifiers for chinook; snake_case for northwind).
-* `world`, `iso3166`, `frenchtowns`, `usda`, `dellstore`: pgFoundry PostgreSQL DDL + data dumps, transcoded from Latin-1 to UTF-8 and stripped of Postgres session settings CockroachDB does not implement at build time (`cockroach/scripts/pgfoundry`). The dellstore PL/pgSQL helper function is dropped (schema and data still load faithfully).
+* `world`, `iso3166`, `frenchtowns`, `usda`, `dellstore`: pgFoundry PostgreSQL DDL + data dumps, transcoded from Latin-1 to UTF-8, stripped of Postgres session settings and `setval` calls CockroachDB does not need, with `COPY` blocks rewritten to batched `INSERT`s at build time (`cockroach/scripts/pgfoundry`; CRDB's init-time stdin `COPY` is far slower than Postgres for large blocks). The dellstore PL/pgSQL helper function is dropped (schema and data still load faithfully).
 * `pgexercises`: the Yugabyte `clubdata` sample (3 tables in a dedicated `cd` schema).
 * `sportsdb`: the Yugabyte sportsdb mirror (107 tables created; only generic infrastructure plus American football, baseball, basketball, and ice hockey carry data). Yugabyte `USING lsm` indexes are rewritten to `btree` at build time; an unused `CREATE DOMAIN` is dropped.
-* `moma`: schema authored in-repo (`postgres/scripts/moma/schema.sql`, every column `text`); CSVs ship alongside the init script so `\copy` resolves at start. Counts drift as MoMA refreshes its exports (recorded as floors).
-* `stackexchange-<site>` (db = bare site name): per-table XML converted at build time by the shared postgres stackexchange hook to `CREATE TABLE` + inline `COPY` + indexes (8 tables in `public`). Counts are recorded as floors. `cooking` is the largest.
+* `moma`: schema authored in-repo (`cockroach/scripts/moma/schema.sql`, every column `text`); the CSV exports are read at build time and baked into the init script as batched `INSERT`s (CockroachDB's SQL client supports neither `\copy` nor `COPY FROM '<file>'`). Counts drift as MoMA refreshes its exports (recorded as floors).
+* `stackexchange-<site>` (db = bare site name): per-table XML converted at build time by the shared cockroach stackexchange hook to `CREATE TABLE` + batched `INSERT`s + indexes (8 tables in `public`); Postgres' hook emits `COPY` instead, but CRDB's init-time stdin `COPY` is far slower for large blocks. Counts are recorded as floors. `cooking` is the largest.
 
 ### Datasets not ported to CockroachDB
 

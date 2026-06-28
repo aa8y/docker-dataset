@@ -103,8 +103,16 @@ docker run -d --name "$CONTAINER" "$IMAGE" >/dev/null
 # "end running init files from /docker-entrypoint-initdb.d" only after every
 # init script has run and just before it brings the server to the foreground --
 # so we wait for that marker first, then for a successful query.
+#
+# The budget is a wall-clock deadline, not a fixed iteration count: each
+# `docker logs`/`docker exec` round-trip on a loaded ARM runner can itself take
+# a second or more, so an N-iteration loop silently waits far less than N
+# seconds. 300s matches the Postgres/MySQL budgets; the largest inits (dellstore,
+# usda, stackexchange, moma, sportsdb) can exceed the old 180-count loop on CRDB.
+READY_TIMEOUT="${READY_TIMEOUT:-300}"
 ready=0
-for _ in $(seq 1 180); do
+deadline=$(( SECONDS + READY_TIMEOUT ))
+while (( SECONDS < deadline )); do
   if docker logs "$CONTAINER" 2>&1 | grep -q "end running init files"; then
     ready=1; break
   fi
@@ -115,7 +123,8 @@ for _ in $(seq 1 180); do
 done
 if [[ "$ready" -eq 1 ]]; then
   ready=0
-  for _ in $(seq 1 60); do
+  sql_deadline=$(( SECONDS + 60 ))
+  while (( SECONDS < sql_deadline )); do
     if docker exec "$CONTAINER" cockroach sql --insecure -e "SELECT 1" >/dev/null 2>&1; then
       ready=1; break
     fi
@@ -123,7 +132,7 @@ if [[ "$ready" -eq 1 ]]; then
   done
 fi
 if [[ "$ready" -ne 1 ]]; then
-  fail "${IMAGE}: CockroachDB did not become ready in time"
+  fail "${IMAGE}: CockroachDB did not become ready in time (${READY_TIMEOUT}s)"
   docker logs "$CONTAINER" 2>&1 | tail -40 >&2
   exit 1
 fi

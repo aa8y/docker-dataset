@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Build MoMA's CockroachDB init script: authored schema + INSERTs from CSV.
+
+MoMA publishes only CSV (no SQL), so the table schema is authored alongside this
+hook (schema.sql) and the data is fetched by the generic extract step as
+Artworks.csv / Artists.csv. CockroachDB's SQL client implements neither psql's
+``\\copy`` meta-command nor ``COPY ... FROM '<file>'`` (it supports only ``COPY
+... FROM STDIN``), and even STDIN COPY is far slower than Postgres for large
+blocks, so this hook reads the CSVs at build time and emits batched multi-row
+``INSERT``s -- the same approach the pgfoundry hook uses. The CSVs are consumed
+at build time and never shipped, so no data dir / cdDir is needed at start.
+"""
+import csv
+import os
+import re
+import sys
+
+BATCH = 500
+
+# Authored schema, staged alongside these build scripts.
+SCHEMA = "/usr/local/lib/scripts/moma/schema.sql"
+
+# CSV file -> table. The schema's column order matches each export's column
+# order (the schema was authored against these CSVs), so rows map positionally,
+# exactly as the previous ``\copy ... WITH (HEADER true)`` did.
+CSV_TABLES = [("Artists.csv", "artists"), ("Artworks.csv", "artworks")]
+
+
+def table_columns(ddl: str, table: str) -> list[str]:
+    """Ordered column names of `table`, parsed from its CREATE TABLE block."""
+    m = re.search(
+        r"CREATE TABLE\s+" + re.escape(table) + r"\s*\((.*?)\n\);",
+        ddl, re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        sys.exit(f"moma transform: no CREATE TABLE for {table}")
+    cols = []
+    for line in m.group(1).splitlines():
+        line = line.strip().rstrip(",")
+        if line:
+            cols.append(line.split()[0])
+    return cols
+
+
+def value(cell: str) -> str:
+    """Render one CSV cell as a SQL literal (empty -> NULL, matching CSV COPY)."""
+    if cell == "":
+        return "NULL"
+    return "'" + cell.replace("'", "''") + "'"
+
+
+def insert_rows(out, table: str, columns: list[str], rows) -> None:
+    head = f"INSERT INTO {table} ({', '.join(columns)}) VALUES\n"
+    n = len(columns)
+    batch: list[str] = []
+    for row in rows:
+        # Pad/truncate to the schema's column count so a refreshed export with
+        # extra/missing trailing columns still loads.
+        row = (row + [""] * n)[:n]
+        batch.append("(" + ", ".join(value(c) for c in row) + ")")
+        if len(batch) >= BATCH:
+            out.write(head + ",\n".join(batch) + ";\n")
+            batch = []
+    if batch:
+        out.write(head + ",\n".join(batch) + ";\n")
+
+
+def main() -> None:
+    ddl = open(SCHEMA, encoding="utf-8").read()
+    with open("moma.sql", "w", encoding="utf-8") as out:
+        out.write(ddl)
+        if not ddl.endswith("\n"):
+            out.write("\n")
+        for csv_file, table in CSV_TABLES:
+            if not os.path.exists(csv_file):
+                sys.exit(f"moma transform: {csv_file} not found")
+            columns = table_columns(ddl, table)
+            with open(csv_file, newline="", encoding="utf-8") as fh:
+                reader = csv.reader(fh)
+                next(reader, None)  # skip header row (and its UTF-8 BOM)
+                insert_rows(out, table, columns, reader)
+
+
+if __name__ == "__main__":
+    main()
