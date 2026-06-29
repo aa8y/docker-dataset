@@ -5,9 +5,9 @@
 -- column is text: the published CSVs carry free-form values (e.g. approximate
 -- dates like "c. 1950", blank measurements, multi-valued ConstituentID) that
 -- don't map cleanly onto stricter types. The moma transform hook reads this
--- schema plus the CSVs at build time and emits batched INSERTs (CockroachDB's
--- SQL client supports neither \copy nor COPY FROM '<file>'), so the data is
--- baked into the init script and no CSVs are shipped at container start.
+-- schema plus the CSVs at build time and bulk-loads them with IMPORT INTO, so
+-- the init script ships alongside normalized per-table CSVs in the image's
+-- external-IO dir.
 
 CREATE TABLE artists (
   constituent_id text,

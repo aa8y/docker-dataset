@@ -1,11 +1,10 @@
 schemaVersion: "2.0.0"
 
 # MoMA publishes no SQL, so the schema is authored in-repo
-# (cockroach/scripts/moma/schema.sql) and the transform hook bakes the CSV data
-# into the init script as INSERTs (CockroachDB's SQL client supports neither
-# \copy nor COPY FROM '<file>'). CockroachDB creates the database
-# (COCKROACH_DATABASE) and runs this script against it, so there is no CREATE
-# DATABASE header.
+# (cockroach/scripts/moma/schema.sql) and the transform hook normalizes the CSV
+# data into per-table CSVs the init script bulk-loads with IMPORT INTO.
+# CockroachDB creates the database (COCKROACH_DATABASE) and runs this script
+# against it, so there is no CREATE DATABASE header.
 
 fileExistenceTests:
   - name: "moma init script exists"
@@ -22,5 +21,5 @@ fileContentTests:
   - name: "moma loads data into every table"
     path: "/docker-entrypoint-initdb.d/moma.sql"
     expectedContents:
-      - "INSERT INTO artists[ (]"
-      - "INSERT INTO artworks[ (]"
+      - "IMPORT INTO artists[ (]"
+      - "IMPORT INTO artworks[ (]"
