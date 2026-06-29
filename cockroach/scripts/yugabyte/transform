@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Prepare Yugabyte single-row-INSERT dumps for CockroachDB at build time.
+
+The Yugabyte sample dumps that ship their data as one ``INSERT`` statement per
+row (chinook, sportsdb) load slowly on CockroachDB: each implicit-transaction
+INSERT pays a full Raft commit (an fsync), so tens of thousands of them run for
+many minutes and overrun the test readiness budget. Consecutive INSERTs that
+share an ``INSERT INTO <table> (<cols>)`` prefix -- the dumps group each table's
+rows together -- are coalesced into batched multi-row INSERTs, collapsing those
+commits into a few hundred (the same speed-up the pgfoundry hook applies to
+COPY blocks). Multi-row dumps (northwind, pgexercises) need no help and don't
+symlink here.
+
+sportsdb additionally defines an unused ``primary_id`` domain (``CREATE DOMAIN
+primary_id AS integer``) that CockroachDB does not implement (crdb issue
+#27796); it is dropped (a no-op for dumps without one). Datasets that need this
+prep symlink ``scripts/<dataset>`` to ``scripts/yugabyte``; the hook is keyed
+only on ``SQL_FILES``.
+"""
+import os
+import re
+import sys
+
+# Rows per coalesced multi-row INSERT.
+BATCH = 500
+
+DROP_BLOCK_RE = re.compile(r"^\s*CREATE\s+DOMAIN\b", re.IGNORECASE)
+
+# A single-row INSERT: group 1 is the `INSERT INTO <table> (<cols>)` prefix (the
+# coalescing key), group 2 the VALUES tuple up to the terminating ';'. The table
+# name may be quoted ("Track") or schema-qualified (public.categories), so it is
+# matched non-greedily up to the column list, whose own parens hold no nested
+# ')'. The dumps emit one such statement per line.
+INSERT_RE = re.compile(
+    r"^(INSERT INTO\s+.+?\s*\([^)]*\))\s+VALUES\s+(.+);\s*$",
+    re.IGNORECASE,
+)
+
+
+def transform_file(path: str) -> None:
+    lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+    out: list[str] = []
+    key = None        # prefix of the INSERT run currently being coalesced
+    batch: list[str] = []  # VALUES tuples accumulated for `key`
+
+    def flush() -> None:
+        nonlocal key, batch
+        if batch:
+            out.append("{} VALUES\n{};\n".format(key, ",\n".join(batch)))
+            batch = []
+        key = None
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if DROP_BLOCK_RE.match(line):
+            flush()
+            while i < len(lines) and ";" not in lines[i]:
+                i += 1
+            i += 1
+            continue
+        m = INSERT_RE.match(line.rstrip("\n"))
+        if m:
+            prefix, values = m.group(1), m.group(2)
+            if prefix != key or len(batch) >= BATCH:
+                flush()
+                key = prefix
+            batch.append(values)
+            i += 1
+            continue
+        # Any other line (comment, blank, DDL) ends the current INSERT run.
+        flush()
+        out.append(line)
+        i += 1
+    flush()
+    open(path, "w", encoding="utf-8").write("".join(out))
+
+
+def main() -> None:
+    for path in os.environ.get("SQL_FILES", "").split():
+        transform_file(path)
+
+
+if __name__ == "__main__":
+    main()

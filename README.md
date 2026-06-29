@@ -29,18 +29,18 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | [AdventureWorks](https://github.com/lorint/AdventureWorks-for-Postgres) | `adventureworks` | — | — | — |
 | [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | — |
 | Chinook | [`yugabyte-chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) |
-| [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | — | `dellstore` |
-| [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | — | `frenchtowns` |
-| [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | — | `iso3166` |
-| [MoMA](https://github.com/MuseumofModernArt/collection) | `moma` | `moma` | — | `moma` |
+| [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | `dellstore` | `dellstore` |
+| [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` |
+| [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | `iso3166` | `iso3166` |
+| [MoMA](https://github.com/MuseumofModernArt/collection) | `moma` | `moma` | `moma` | `moma` |
 | Northwind | [`yugabyte-northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/dalers/mywind) | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/jpwhite3/northwind-SQLite3) |
 | [OMDb](https://github.com/df7cb/omdb-postgresql) | `omdb` | — | — | — |
-| [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `yugabyte-pgexercises` | `pgexercises` | — | `pgexercises` |
+| [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `yugabyte-pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` |
 | Sakila / Pagila | [`pagila`](https://github.com/devrimgunduz/pagila) | [`sakila`](https://dev.mysql.com/doc/sakila/en/) | — | [`sakila`](https://github.com/bradleygrant/sakila-sqlite3) |
-| [SportsDB](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `sportsdb`, `yugabyte-sportsdb` | `sportsdb` | — | `sportsdb` |
-| [Stack Exchange](https://archive.org/details/stackexchange)¹ | `stackexchange-<site>` | `stackexchange-<site>` | — | `stackexchange-<site>` |
-| [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | — | `usda` |
-| World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | — | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) |
+| [SportsDB](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `sportsdb`, `yugabyte-sportsdb` | `sportsdb` | `sportsdb` | `sportsdb` |
+| [Stack Exchange](https://archive.org/details/stackexchange)¹ | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` |
+| [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | `usda` | `usda` |
+| World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) |
 
 ¹ `<site>` is one of `beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking` (e.g. `stackexchange-chess`).
 
@@ -48,7 +48,7 @@ Every engine also publishes a `latest` tag: it tracks `world` on PostgreSQL and 
 
 ## Databases
 
-Four database engines are supported, each published as its own image repository:
+Four database engines are supported today, each published as its own image repository. [ClickHouse](https://clickhouse.com/), [DuckDB](https://duckdb.org/), [Apache Druid](https://druid.apache.org/), and [Apache Pinot](https://pinot.apache.org/) are planned — see [Future Work](#future-work).
 
 * [PostgreSQL](https://www.postgresql.org/) as [`aa8y/postgres-dataset`](https://hub.docker.com/r/aa8y/postgres-dataset). We use the `alpine` version of the official image as the base image to keep our image slim.
 * [MySQL](https://www.mysql.com/) as [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset). There is no official Alpine image for Oracle MySQL (the official `mysql` image is Oracle Linux / Debian based) and Alpine's own package repositories ship [MariaDB](https://mariadb.org/) in place of MySQL, so to keep the "thin, Alpine-based" goal we build on the community [`yobasystems/alpine-mariadb`](https://hub.docker.com/r/yobasystems/alpine-mariadb) image. MariaDB is the MySQL drop-in Alpine substitutes, and its entrypoint honours the same `MYSQL_*` env vars and `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image, so the dataset pattern carries over unchanged.
@@ -127,7 +127,27 @@ The images run a single-node cluster in insecure mode (these are throwaway pract
 docker run -d --name cr-ds-<tag> aa8y/cockroach-dataset:<tag>
 docker exec -it cr-ds-<tag> cockroach sql --insecure --database <db_name>
 ```
-where `<tag>` is one of the tags in the CockroachDB column of the [matrix](#dataset-support-matrix) and `<db_name>` is the matching dataset name. Schema and identifier details match the PostgreSQL `chinook`/`northwind` notes above (same dumps).
+where `<tag>` is one of the tags in the CockroachDB column of the [matrix](#dataset-support-matrix) and `<db_name>` is the matching dataset name (the tag minus any `stackexchange-` prefix, e.g. `stackexchange-beer` → `beer`).
+
+### CockroachDB datasets
+
+Sources are in the [matrix](#dataset-support-matrix); the notes below are CockroachDB-specific:
+
+* `chinook`, `northwind`: same Yugabyte PostgreSQL-dialect dumps as the postgres `yugabyte-chinook` / `yugabyte-northwind` tags (quoted CamelCase identifiers for chinook; snake_case for northwind).
+* `world`, `iso3166`, `frenchtowns`, `usda`, `dellstore`: pgFoundry PostgreSQL DDL + data dumps, transcoded from Latin-1 to UTF-8, stripped of Postgres session settings and `setval` calls CockroachDB does not need, with `COPY` blocks rewritten to batched `INSERT`s at build time (`cockroach/scripts/pgfoundry`; CRDB's init-time stdin `COPY` is far slower than Postgres for large blocks). The dellstore PL/pgSQL helper function is dropped (schema and data still load faithfully).
+* `pgexercises`: the Yugabyte `clubdata` sample (3 tables in a dedicated `cd` schema).
+* `sportsdb`: the Yugabyte sportsdb mirror (107 tables created; only generic infrastructure plus American football, baseball, basketball, and ice hockey carry data). Yugabyte `USING lsm` indexes are rewritten to `btree` at build time; an unused `CREATE DOMAIN` is dropped.
+* `moma`: schema authored in-repo (`cockroach/scripts/moma/schema.sql`, every column `text`); the CSV exports are read at build time and baked into the init script as batched `INSERT`s (CockroachDB's SQL client supports neither `\copy` nor `COPY FROM '<file>'`). Counts drift as MoMA refreshes its exports (recorded as floors).
+* `stackexchange-<site>` (db = bare site name): per-table XML converted at build time by the shared cockroach stackexchange hook to `CREATE TABLE` + batched `INSERT`s + indexes (8 tables in `public`); Postgres' hook emits `COPY` instead, but CRDB's init-time stdin `COPY` is far slower for large blocks. Counts are recorded as floors. `cooking` is the largest.
+
+### Datasets not ported to CockroachDB
+
+The remaining datasets are either sourced from PostgreSQL-only upstreams or rely on PostgreSQL-specific features CockroachDB does not support faithfully:
+
+* `pagila`: not omitted but *replaced* — `pagila` is a port of Sakila to PostgreSQL with range-partitioned tables; MySQL and SQLite use native Sakila ports directly (tag `sakila`).
+* `adventureworks`: the only maintained open port targets PostgreSQL; its build relies on a Python reformat plus multiple schemas and materialized views — too much PostgreSQL-specific machinery to load on CockroachDB without divergence.
+* `airlines`: the [postgrespro demo](https://postgrespro.com/education/demodb) is distributed as a binary-ish PostgreSQL `pg_dump` and leans on PostgreSQL features (`jsonb`, several million inlined rows).
+* `omdb`: [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql) relies on the `tsm_system_rows` extension (no CockroachDB equivalent), so a port would have to drop the upstream views.
 
 ## SQLite images
 
@@ -292,6 +312,8 @@ integration tests).
 ## Future Work
 
 * More MySQL datasets: port additional PostgreSQL datasets where a MySQL-native source exists or the upstream is format-neutral enough to hand-translate faithfully (see [Datasets not ported to MySQL](#datasets-not-ported-to-mysql)).
-* More CockroachDB datasets: most plain DDL + data PostgreSQL dumps should load with little or no change.
-* Images for other popular databases.
+* [ClickHouse](https://clickhouse.com/) images: ship the same sample datasets on ClickHouse — an OLAP columnar engine whose SQL dialect and bulk-load model (`MergeTree`, `INSERT`/`CSV`) differ from PostgreSQL enough that most datasets would need engine-specific transforms rather than reusing the postgres dumps verbatim.
+* [DuckDB](https://duckdb.org/) images: ship the same sample datasets on DuckDB — an embedded analytical database (like SQLite, a database file rather than a server to boot) with strong PostgreSQL compatibility for many plain DDL + data dumps, so several datasets may port with little change.
+* [Apache Druid](https://druid.apache.org/) images: ship the same sample datasets on Druid — a real-time OLAP datastore built around immutable segments and batch/stream ingestion rather than conventional DDL + `INSERT`/`COPY`, so each dataset would need a dedicated ingest pipeline and schema mapping.
+* [Apache Pinot](https://pinot.apache.org/) images: ship the same sample datasets on Pinot — a distributed OLAP engine oriented toward star-schema analytics tables and offline/online ingestion jobs, so the relational sample dumps would need similar per-dataset transforms and load paths rather than loading postgres SQL as-is.
 * Find and add more free data sources.

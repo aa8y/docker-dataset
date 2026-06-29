@@ -1,0 +1,26 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "coffee init script exists"
+    path: "/docker-entrypoint-initdb.d/coffee.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "coffee declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/coffee.sql"
+    expectedContents:
+      - "CREATE TABLE Users[ (]"
+      - "CREATE TABLE Posts[ (]"
+      - "CREATE TABLE Comments[ (]"
+      - "CREATE TABLE Votes[ (]"
+      - "CREATE TABLE Badges[ (]"
+      - "CREATE TABLE Tags[ (]"
+      - "CREATE TABLE PostLinks[ (]"
+      - "CREATE TABLE PostHistory[ (]"
+
+  - name: "coffee loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/coffee.sql"
+    expectedContents:
+      - "IMPORT INTO Users[ (]"
+      - "IMPORT INTO Posts[ (]"
+      - "IMPORT INTO PostHistory[ (]"

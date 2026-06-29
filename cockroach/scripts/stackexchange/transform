@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Transform a StackExchange XML dump into a CockroachDB init script + CSVs.
+
+A StackExchange site dump is a set of per-table XML files, one ``<row .../>``
+element per record with the column values held as element attributes. For each
+table that is present this hook writes a CSV of its rows (to CSV_DIR) and, into
+a single ``<dataset>.sql`` our ETL cats into the init script, a ``CREATE TABLE``
+followed by an ``IMPORT INTO ... CSV DATA (...)`` that bulk-loads that CSV; the
+indexes are appended after every table is loaded.
+
+We use IMPORT rather than INSERTs (what the Postgres hook's COPY and an earlier
+revision of this hook both effectively are) because IMPORT is CockroachDB's bulk
+path -- it writes SSTs directly instead of running every row through the SQL
+write layer -- so the larger sites (chess) load in seconds instead of the many
+minutes an INSERT-per-statement load took, comfortably inside the test readiness
+budget. The CSV source is read over ``nodelocal://1/`` from the node's
+external-IO dir, which the final image pins to CSV_DIR via ``--external-io-dir``
+(see ../../Dockerfile); the build copies the CSVs there.
+
+NULLs use the ``\\N`` sentinel (matched by ``WITH nullif``): a missing attribute,
+or an empty numeric/timestamp, becomes NULL, while an empty TEXT attribute stays
+an empty string (an unquoted empty CSV field, which ``\\N`` does not match). The
+sentinel is unquoted, so the vanishingly rare TEXT value equal to a literal
+``\\N`` is the only ambiguity -- the same convention Postgres COPY uses.
+
+Every StackExchange site shares this identical schema, so this hook is
+site-agnostic: each site's dataset directory (e.g. scripts/beer,
+scripts/coffee) is a symlink to scripts/stackexchange, and the only thing that
+varies per site is $DATASET (the database/output-file name).
+
+The schema, the XML-attribute -> column mapping, and the indexes are adapted
+from the stackexchange-dump-to-postgres tool
+(https://github.com/Human-Centric-Machine-Learning/stackexchange-dump-to-postgres).
+Unlike that tool, which streams INSERTs into a *running* server, we emit a
+script + data files, so the dataset fits this repo's extract/transform/load
+build with no database running at build time. Unknown attributes (e.g.
+ContentLicense on newer dumps) are ignored because every IMPORT uses an explicit
+column list, so refreshed dumps keep loading unchanged.
+
+The indexes here are plain (B-tree) indexes. The Postgres hook declares a few
+of them as ``USING hash``, but CockroachDB has no hash access method -- its
+``USING HASH`` is a differently-positioned hash-*sharded* index for a different
+purpose -- so those become plain indexes, which serve equality lookups fine.
+"""
+import csv
+import os
+import sys
+
+from lxml import etree
+
+INT, TS, TXT = "int", "timestamp", "text"
+
+# Field value that IMPORT (via ``WITH nullif``) maps to SQL NULL.
+NULL = "\\N"
+
+# Where the per-table CSVs are written. Defaults to the final image's
+# ``--external-io-dir`` (see ../../Dockerfile) so ``nodelocal://1/<file>``
+# resolves to the file written here; overridable via $CSV_DIR for tests.
+CSV_DIR = os.environ.get("CSV_DIR", "/csv")
+
+# Each table: (xml_file, table, columns, indexes). A column is
+# (xml_attribute, sql_column, type); the first column is the primary key.
+# Identifiers are unquoted, so Postgres folds them to lower case.
+TABLES = [
+    ("Users.xml", "Users", [
+        ("Id", "Id", INT), ("Reputation", "Reputation", INT),
+        ("CreationDate", "CreationDate", TS), ("DisplayName", "DisplayName", TXT),
+        ("LastAccessDate", "LastAccessDate", TS), ("WebsiteUrl", "WebsiteUrl", TXT),
+        ("Location", "Location", TXT), ("AboutMe", "AboutMe", TXT),
+        ("Views", "Views", INT), ("UpVotes", "UpVotes", INT),
+        ("DownVotes", "DownVotes", INT), ("ProfileImageUrl", "ProfileImageUrl", TXT),
+        ("Age", "Age", INT), ("AccountId", "AccountId", INT),
+    ], [
+        "CREATE INDEX users_account_id_idx ON Users (AccountId);",
+        "CREATE INDEX users_display_name_idx ON Users (DisplayName);",
+        "CREATE INDEX users_up_votes_idx ON Users (UpVotes);",
+        "CREATE INDEX users_down_votes_idx ON Users (DownVotes);",
+        "CREATE INDEX users_creation_date_idx ON Users (CreationDate);",
+    ]),
+    ("Posts.xml", "Posts", [
+        ("Id", "Id", INT), ("PostTypeId", "PostTypeId", INT),
+        ("AcceptedAnswerId", "AcceptedAnswerId", INT), ("ParentId", "ParentId", INT),
+        ("CreationDate", "CreationDate", TS), ("Score", "Score", INT),
+        ("ViewCount", "ViewCount", INT), ("Body", "Body", TXT),
+        ("OwnerUserId", "OwnerUserId", INT), ("LastEditorUserId", "LastEditorUserId", INT),
+        ("LastEditorDisplayName", "LastEditorDisplayName", TXT),
+        ("LastEditDate", "LastEditDate", TS), ("LastActivityDate", "LastActivityDate", TS),
+        ("Title", "Title", TXT), ("Tags", "Tags", TXT),
+        ("AnswerCount", "AnswerCount", INT), ("CommentCount", "CommentCount", INT),
+        ("FavoriteCount", "FavoriteCount", INT), ("ClosedDate", "ClosedDate", TS),
+        ("CommunityOwnedDate", "CommunityOwnedDate", TS),
+    ], [
+        "CREATE INDEX posts_post_type_id_idx ON Posts (PostTypeId);",
+        "CREATE INDEX posts_score_idx ON Posts (Score);",
+        "CREATE INDEX posts_creation_date_idx ON Posts (CreationDate);",
+        "CREATE INDEX posts_owner_user_id_idx ON Posts (OwnerUserId);",
+        "CREATE INDEX posts_answer_count_idx ON Posts (AnswerCount);",
+        "CREATE INDEX posts_comment_count_idx ON Posts (CommentCount);",
+        "CREATE INDEX posts_favorite_count_idx ON Posts (FavoriteCount);",
+        "CREATE INDEX posts_view_count_idx ON Posts (ViewCount);",
+        "CREATE INDEX posts_accepted_answer_id_idx ON Posts (AcceptedAnswerId);",
+        "CREATE INDEX posts_parent_id_idx ON Posts (ParentId);",
+    ]),
+    ("Comments.xml", "Comments", [
+        ("Id", "Id", INT), ("PostId", "PostId", INT), ("Score", "Score", INT),
+        ("Text", "Text", TXT), ("CreationDate", "CreationDate", TS),
+        ("UserId", "UserId", INT),
+    ], [
+        "CREATE INDEX comments_score_idx ON Comments (Score);",
+        "CREATE INDEX comments_post_id_idx ON Comments (PostId);",
+        "CREATE INDEX comments_creation_date_idx ON Comments (CreationDate);",
+        "CREATE INDEX comments_user_id_idx ON Comments (UserId);",
+    ]),
+    ("Votes.xml", "Votes", [
+        ("Id", "Id", INT), ("PostId", "PostId", INT), ("VoteTypeId", "VoteTypeId", INT),
+        ("UserId", "UserId", INT), ("CreationDate", "CreationDate", TS),
+        ("BountyAmount", "BountyAmount", INT),
+    ], [
+        "CREATE INDEX votes_post_id_idx ON Votes (PostId);",
+        "CREATE INDEX votes_type_idx ON Votes (VoteTypeId);",
+        "CREATE INDEX votes_creation_date_idx ON Votes (CreationDate);",
+    ]),
+    ("Badges.xml", "Badges", [
+        ("Id", "Id", INT), ("UserId", "UserId", INT), ("Name", "Name", TXT),
+        ("Date", "Date", TS),
+    ], [
+        "CREATE INDEX badges_user_id_idx ON Badges (UserId);",
+        "CREATE INDEX badges_name_idx ON Badges (Name);",
+        "CREATE INDEX badges_date_idx ON Badges (Date);",
+    ]),
+    ("Tags.xml", "Tags", [
+        ("Id", "Id", INT), ("TagName", "TagName", TXT), ("Count", "Count", INT),
+        ("ExcerptPostId", "ExcerptPostId", INT), ("WikiPostId", "WikiPostId", INT),
+    ], [
+        "CREATE INDEX tags_count_idx ON Tags (Count);",
+        "CREATE INDEX tags_name_idx ON Tags (TagName);",
+    ]),
+    ("PostLinks.xml", "PostLinks", [
+        ("Id", "Id", INT), ("CreationDate", "CreationDate", TS), ("PostId", "PostId", INT),
+        ("RelatedPostId", "RelatedPostId", INT), ("LinkTypeId", "LinkTypeId", INT),
+    ], [
+        "CREATE INDEX post_links_post_id_idx ON PostLinks (PostId);",
+        "CREATE INDEX post_links_related_post_id_idx ON PostLinks (RelatedPostId);",
+    ]),
+    # PostHistory's XML attribute is "Text"; the column is named PostText.
+    ("PostHistory.xml", "PostHistory", [
+        ("Id", "Id", INT), ("PostHistoryTypeId", "PostHistoryTypeId", INT),
+        ("PostId", "PostId", INT), ("RevisionGUID", "RevisionGUID", TXT),
+        ("CreationDate", "CreationDate", TS), ("UserId", "UserId", INT),
+        ("Text", "PostText", TXT),
+    ], [
+        "CREATE INDEX post_history_type_id_idx ON PostHistory (PostHistoryTypeId);",
+        "CREATE INDEX post_history_post_id_idx ON PostHistory (PostId);",
+        "CREATE INDEX post_history_revision_guid_idx ON PostHistory (RevisionGUID);",
+        "CREATE INDEX post_history_creation_date_idx ON PostHistory (CreationDate);",
+        "CREATE INDEX post_history_user_id_idx ON PostHistory (UserId);",
+    ]),
+]
+
+
+def field(attribs, xml_attr, col_type):
+    """Render one XML attribute as a CSV field (NULL sentinel or the value)."""
+    value = attribs.get(xml_attr)
+    # A missing attribute, or an empty numeric/timestamp, is NULL. An empty TEXT
+    # attribute is a real empty string, which the csv writer emits as an unquoted
+    # empty field -- distinct from the NULL sentinel.
+    if value is None or (col_type in (INT, TS) and value == ""):
+        return NULL
+    return value
+
+
+def ddl(table, columns):
+    defs = []
+    for i, (_, col, col_type) in enumerate(columns):
+        defs.append("    {} {}{}".format(col, col_type, " PRIMARY KEY" if i == 0 else ""))
+    return "CREATE TABLE {} (\n{}\n);\n".format(table, ",\n".join(defs))
+
+
+def write_csv(xml_file, columns, path):
+    """Stream the dump's rows into a CSV at path, one column per mapping entry."""
+    with open(path, "w", encoding="utf-8", newline="") as cf:
+        writer = csv.writer(cf, lineterminator="\n")
+        for _, elem in etree.iterparse(xml_file, events=("end",)):
+            if elem.tag == "row":
+                writer.writerow([field(elem.attrib, xa, ct) for xa, _, ct in columns])
+            elem.clear()
+            while elem.getprevious() is not None:
+                del elem.getparent()[0]
+
+
+def main():
+    dataset = os.environ.get("DATASET", "stackexchange")
+    present = [t for t in TABLES if os.path.exists(t[0])]
+    if not present:
+        sys.exit("stackexchange transform: no StackExchange XML files found")
+
+    os.makedirs(CSV_DIR, exist_ok=True)
+    with open("{}.sql".format(dataset), "w", encoding="utf-8") as out:
+        out.write("-- StackExchange data dump, converted from XML at build time.\n")
+        out.write("-- CREATE TABLE + IMPORT INTO CSV (see this hook's docstring).\n\n")
+        for xml_file, table, columns, _ in present:
+            csv_file = "{}.csv".format(table)
+            write_csv(xml_file, columns, os.path.join(CSV_DIR, csv_file))
+            out.write(ddl(table, columns))
+            out.write("IMPORT INTO {} ({}) CSV DATA ('nodelocal://1/{}')"
+                      " WITH nullif = '{}';\n\n".format(
+                          table, ", ".join(col for _, col, _ in columns),
+                          csv_file, NULL))
+        for _, _, _, indexes in present:
+            for index in indexes:
+                out.write(index + "\n")
+
+
+if __name__ == "__main__":
+    main()

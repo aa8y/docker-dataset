@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Prepare pgFoundry PostgreSQL dumps for CockroachDB at build time.
+
+Several pgFoundry samples (world, iso3166, frenchtowns, usda, dellstore)
+declare ``SET client_encoding = 'LATIN1'`` and ship Latin-1 bytes. CockroachDB
+does not implement client_encoding (see crdb issue #35882) and expects UTF-8,
+so this shared hook transcodes each file in ``SQL_FILES`` to UTF-8 and strips
+that setting. Datasets that need it symlink ``scripts/<dataset>`` to
+``scripts/pgfoundry``; the hook is keyed only on ``SQL_FILES``.
+
+CockroachDB's init-time ``COPY ... FROM stdin`` path is far slower than Postgres
+for multi-row blocks (dellstore's 60k-row ``cust_hist`` load can hang for many
+minutes), so COPY blocks are rewritten to batched multi-row ``INSERT``s — the
+same mechanical fix the MySQL ``scripts/pgsql`` hook applies, but emitting
+PostgreSQL literals.
+
+For dellstore2 the dump also defines a PL/pgSQL ``new_customer`` helper
+function with no data dependency — it is dropped so the schema and data still
+load faithfully (mirroring the MySQL pgsql hook, which drops it too).
+
+The dumps also wrap the load in ``BEGIN``/``COMMIT`` and end with a table-less
+``ANALYZE`` (some with ``VACUUM``). CockroachDB rejects a bare ``ANALYZE`` as a
+syntax error -- which aborts the whole init script -- and gathers statistics and
+reclaims space automatically, so these transaction-control and maintenance
+statements are stripped too (see DROP_LINE_RE).
+"""
+import os
+import re
+import sys
+
+BATCH = 500
+
+COPY_RE = re.compile(
+    r"^COPY\s+([^\s(]+)\s*\(([^)]*)\)\s+FROM\s+stdin"
+    r"(?:\s+DELIMITER\s+'([^']*)')?\s*;",
+    re.IGNORECASE,
+)
+
+# Top-level statements to drop. SET client_encoding (unsupported, see below) and
+# the sequence-resetting SELECT pg_catalog.setval are irrelevant to a fresh load;
+# the dump's transaction wrapper (BEGIN/COMMIT) and trailing maintenance
+# (table-less ANALYZE, VACUUM) are either unsupported by CockroachDB -- a bare
+# ANALYZE is a syntax error -- or pointless for it (statistics and GC are
+# automatic). Matched only outside COPY bodies (see transform_file) so a data row
+# beginning with one of these words is never dropped.
+DROP_LINE_RE = re.compile(
+    r"^\s*("
+    r"SET\s+client_encoding"
+    r"|SELECT\s+pg_catalog\.setval"
+    r"|BEGIN|COMMIT|START\s+TRANSACTION"
+    r"|ANALYZE|VACUUM"
+    r")\b",
+    re.IGNORECASE,
+)
+FUNC_START_RE = re.compile(
+    r"^\s*CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b",
+    re.IGNORECASE,
+)
+FUNC_END_RE = re.compile(r"\bLANGUAGE\s+\w+\s*;\s*$", re.IGNORECASE)
+
+_UNESCAPE = {"t": "\t", "n": "\n", "r": "\r", "\\": "\\"}
+
+
+def drop_function_block(lines: list[str], start: int) -> int:
+    """Drop from CREATE [OR REPLACE] FUNCTION through its LANGUAGE ...; line."""
+    i = start
+    while i < len(lines):
+        if FUNC_END_RE.search(lines[i]):
+            return i + 1
+        i += 1
+    return start + 1
+
+
+def split_copy_row(line: str, delim: str) -> list[str]:
+    """Split a COPY TEXT row on unescaped delimiters."""
+    fields, cur, i, n = [], [], 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n:
+            cur.append(line[i : i + 2])
+            i += 2
+            continue
+        if c == delim:
+            fields.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    fields.append("".join(cur))
+    return fields
+
+
+def copy_value(field: str) -> str:
+    """Render one COPY field as a PostgreSQL literal."""
+    if field == "\\N":
+        return "NULL"
+    out, i = [], 0
+    while i < len(field):
+        if field[i] == "\\" and i + 1 < len(field):
+            out.append(_UNESCAPE.get(field[i + 1], field[i + 1]))
+            i += 2
+        else:
+            out.append(field[i])
+            i += 1
+    return "'" + "".join(out).replace("'", "''") + "'"
+
+
+def convert_copy_blocks(lines: list[str]) -> list[str]:
+    """Rewrite COPY ... FROM stdin blocks to batched INSERT statements."""
+    out: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        m = COPY_RE.match(lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+
+        table, cols, delim = m.group(1), m.group(2), m.group(3) or "\t"
+        head = f"INSERT INTO {table} ({cols}) VALUES\n"
+        batch: list[str] = []
+        i += 1
+        while i < n and lines[i].rstrip() != "\\.":
+            row = split_copy_row(lines[i].rstrip("\n"), delim)
+            batch.append("(" + ", ".join(copy_value(f) for f in row) + ")")
+            if len(batch) >= BATCH:
+                out.append(head + ",\n".join(batch) + ";\n")
+                batch = []
+            i += 1
+        if batch:
+            out.append(head + ",\n".join(batch) + ";\n")
+        i += 1  # skip \.
+    return out
+
+
+def decode_raw(raw: bytes) -> str:
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+def transform_file(path: str) -> None:
+    raw = open(path, "rb").read()
+    text = decode_raw(raw)
+
+    lines = text.splitlines(keepends=True)
+    filtered: list[str] = []
+    i = 0
+    in_copy = False
+    while i < len(lines):
+        line = lines[i]
+        # Inside a COPY ... FROM stdin body every line is data (terminated by a
+        # lone "\."), so pass it through untouched -- never match it against the
+        # statement-drop patterns. convert_copy_blocks rewrites the block later.
+        if in_copy:
+            filtered.append(line)
+            if line.rstrip() == "\\.":
+                in_copy = False
+            i += 1
+            continue
+        if COPY_RE.match(line):
+            in_copy = True
+            filtered.append(line)
+            i += 1
+            continue
+        if DROP_LINE_RE.match(line):
+            i += 1
+            continue
+        if FUNC_START_RE.match(line):
+            i = drop_function_block(lines, i)
+            continue
+        filtered.append(line)
+        i += 1
+
+    # splitlines(keepends=True) vs convert_copy_blocks expecting lines without
+    # relying on keepends for COPY body — normalize for the state machine.
+    body_lines = [ln.rstrip("\n") + "\n" for ln in filtered]
+    converted = convert_copy_blocks(body_lines)
+    open(path, "w", encoding="utf-8").write("".join(converted))
+
+
+def main() -> None:
+    sql_files = os.environ.get("SQL_FILES", "").split()
+    if not sql_files:
+        sys.exit("pgfoundry transform: SQL_FILES is empty")
+    for path in sql_files:
+        transform_file(path)
+
+
+if __name__ == "__main__":
+    main()

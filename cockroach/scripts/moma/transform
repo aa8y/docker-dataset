@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""Build MoMA's CockroachDB init script: authored schema + IMPORT INTO from CSV.
+
+MoMA publishes only CSV (no SQL), so the table schema is authored alongside this
+hook (schema.sql) and the data is fetched by the generic extract step as
+Artworks.csv / Artists.csv. This is the repo's largest dataset (~176k rows), so
+rather than bake the rows into the init script as INSERTs we normalize the
+exports into clean per-table CSVs and load them with CockroachDB's bulk path,
+``IMPORT INTO ... CSV DATA``, which writes SSTs directly instead of running every
+row through the SQL write layer (the same approach as the stackexchange hook).
+
+MoMA's raw exports are messy -- variable column counts, embedded newlines and
+quotes -- so each row is parsed, padded/truncated to the schema's column count
+(so a refreshed export with extra/missing trailing columns still loads), and
+re-written through csv.writer into a clean CSV. Every schema column is text and
+an empty cell means NULL, so the IMPORT uses ``WITH nullif = ''`` (an unquoted
+empty field becomes NULL), matching the previous ``\\copy``/INSERT behavior.
+
+The normalized CSVs are written to CSV_DIR, which the final image pins to the
+node's external-IO dir via ``--external-io-dir`` (see ../../Dockerfile) so
+``nodelocal://1/<file>`` resolves to them.
+"""
+import csv
+import os
+import re
+import sys
+
+# Where the normalized CSVs are written. Defaults to the final image's
+# ``--external-io-dir`` (see ../../Dockerfile); overridable via $CSV_DIR for
+# tests.
+CSV_DIR = os.environ.get("CSV_DIR", "/csv")
+
+# Authored schema, staged alongside these build scripts.
+SCHEMA = "/usr/local/lib/scripts/moma/schema.sql"
+
+# CSV file -> table. The schema's column order matches each export's column
+# order (the schema was authored against these CSVs), so rows map positionally,
+# exactly as the previous ``\copy ... WITH (HEADER true)`` did.
+CSV_TABLES = [("Artists.csv", "artists"), ("Artworks.csv", "artworks")]
+
+
+def table_columns(ddl: str, table: str) -> list[str]:
+    """Ordered column names of `table`, parsed from its CREATE TABLE block."""
+    m = re.search(
+        r"CREATE TABLE\s+" + re.escape(table) + r"\s*\((.*?)\n\);",
+        ddl, re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        sys.exit(f"moma transform: no CREATE TABLE for {table}")
+    cols = []
+    for line in m.group(1).splitlines():
+        line = line.strip().rstrip(",")
+        if line:
+            cols.append(line.split()[0])
+    return cols
+
+
+def normalize_csv(src: str, n: int, dst: str) -> None:
+    """Write a clean CSV of src's data rows, each padded/truncated to n columns.
+
+    csv.writer emits an empty cell as an unquoted empty field, which IMPORT's
+    ``nullif = ''`` reads as NULL -- so empty cells stay NULL as before.
+    """
+    with open(src, newline="", encoding="utf-8") as fh, \
+            open(dst, "w", newline="", encoding="utf-8") as out:
+        reader = csv.reader(fh)
+        writer = csv.writer(out, lineterminator="\n")
+        next(reader, None)  # skip header row (and its UTF-8 BOM)
+        for row in reader:
+            writer.writerow((row + [""] * n)[:n])
+
+
+def main() -> None:
+    ddl = open(SCHEMA, encoding="utf-8").read()
+    os.makedirs(CSV_DIR, exist_ok=True)
+    with open("moma.sql", "w", encoding="utf-8") as out:
+        out.write(ddl)
+        if not ddl.endswith("\n"):
+            out.write("\n")
+        out.write("\n")
+        for csv_file, table in CSV_TABLES:
+            if not os.path.exists(csv_file):
+                sys.exit(f"moma transform: {csv_file} not found")
+            columns = table_columns(ddl, table)
+            normalize_csv(csv_file, len(columns), os.path.join(CSV_DIR, f"{table}.csv"))
+            out.write(
+                "IMPORT INTO {} ({}) CSV DATA ('nodelocal://1/{}.csv')"
+                " WITH nullif = '';\n".format(table, ", ".join(columns), table))
+
+
+if __name__ == "__main__":
+    main()

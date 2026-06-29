@@ -1,0 +1,31 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "dellstore init script exists"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "dellstore declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "CREATE TABLE categories[ (]"
+      - "CREATE TABLE cust_hist[ (]"
+      - "CREATE TABLE customers[ (]"
+      - "CREATE TABLE inventory[ (]"
+      - "CREATE TABLE orderlines[ (]"
+      - "CREATE TABLE orders[ (]"
+      - "CREATE TABLE products[ (]"
+      - "CREATE TABLE reorder[ (]"
+
+  - name: "dellstore loads data into every table"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "INSERT INTO categories[ (]"
+      - "INSERT INTO cust_hist[ (]"
+      - "INSERT INTO customers[ (]"
+      - "INSERT INTO inventory[ (]"
+      - "INSERT INTO orderlines[ (]"
+      - "INSERT INTO orders[ (]"
+      - "INSERT INTO products[ (]"
+      - "CREATE TABLE reorder[ (]"

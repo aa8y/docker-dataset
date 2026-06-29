@@ -1,0 +1,19 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "iso3166 init script exists"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "iso3166 declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "CREATE TABLE country[ (]"
+      - "CREATE TABLE subcountry[ (]"
+
+  - name: "iso3166 loads data into every table"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "INSERT INTO country[ (]"
+      - "INSERT INTO subcountry[ (]"

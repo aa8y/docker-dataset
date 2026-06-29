@@ -1,0 +1,26 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. world is the pgFoundry
+# three-table sample (city, country, countrylanguage). CockroachDB creates the
+# database (COCKROACH_DATABASE) and runs this script against it, so there is
+# no CREATE DATABASE header.
+
+fileExistenceTests:
+  - name: "world init script exists"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "world declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "CREATE TABLE city[ (]"
+      - "CREATE TABLE country[ (]"
+      - "CREATE TABLE countrylanguage[ (]"
+
+  - name: "world loads data into every table"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "INSERT INTO city[ (]"
+      - "INSERT INTO country[ (]"
+      - "INSERT INTO countrylanguage[ (]"
