@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Prepare the Yugabyte sportsdb dump for CockroachDB at build time.
+"""Prepare Yugabyte single-row-INSERT dumps for CockroachDB at build time.
 
-Two fixes, applied across every file in ``SQL_FILES``:
+The Yugabyte sample dumps that ship their data as one ``INSERT`` statement per
+row (chinook, sportsdb) load slowly on CockroachDB: each implicit-transaction
+INSERT pays a full Raft commit (an fsync), so tens of thousands of them run for
+many minutes and overrun the test readiness budget. Consecutive INSERTs that
+share an ``INSERT INTO <table> (<cols>)`` prefix -- the dumps group each table's
+rows together -- are coalesced into batched multi-row INSERTs, collapsing those
+commits into a few hundred (the same speed-up the pgfoundry hook applies to
+COPY blocks). Multi-row dumps (northwind, pgexercises) need no help and don't
+symlink here.
 
-1. The dump defines an unused ``primary_id`` domain (``CREATE DOMAIN primary_id
-   AS integer``) that CockroachDB does not implement (crdb issue #27796). Drop
-   it; no column references the domain.
-
-2. The data is ~79k *single-row* ``INSERT`` statements. On CockroachDB each
-   implicit-transaction INSERT pays a full Raft commit (an fsync), so loading
-   them one at a time runs for many minutes and overruns the test readiness
-   budget. Consecutive INSERTs that share an ``INSERT INTO <table> (<cols>)``
-   prefix (the dump groups each table's rows together) are coalesced into
-   batched multi-row INSERTs, collapsing those ~79k commits into a few hundred
-   -- the same mechanical speed-up the pgfoundry hook applies to COPY blocks.
+sportsdb additionally defines an unused ``primary_id`` domain (``CREATE DOMAIN
+primary_id AS integer``) that CockroachDB does not implement (crdb issue
+#27796); it is dropped (a no-op for dumps without one). Datasets that need this
+prep symlink ``scripts/<dataset>`` to ``scripts/yugabyte``; the hook is keyed
+only on ``SQL_FILES``.
 """
 import os
 import re
@@ -24,11 +26,13 @@ BATCH = 500
 
 DROP_BLOCK_RE = re.compile(r"^\s*CREATE\s+DOMAIN\b", re.IGNORECASE)
 
-# A single-row INSERT: group 1 is the `INSERT INTO <table> (<cols>)` prefix
-# (the coalescing key; the column list has no nested ')'), group 2 the VALUES
-# tuple up to the terminating ';'. The dump emits one such statement per line.
+# A single-row INSERT: group 1 is the `INSERT INTO <table> (<cols>)` prefix (the
+# coalescing key), group 2 the VALUES tuple up to the terminating ';'. The table
+# name may be quoted ("Track") or schema-qualified (public.categories), so it is
+# matched non-greedily up to the column list, whose own parens hold no nested
+# ')'. The dumps emit one such statement per line.
 INSERT_RE = re.compile(
-    r"^(INSERT INTO\s+[A-Za-z_][\w.]*\s*\([^)]*\))\s+VALUES\s+(.+);\s*$",
+    r"^(INSERT INTO\s+.+?\s*\([^)]*\))\s+VALUES\s+(.+);\s*$",
     re.IGNORECASE,
 )
 

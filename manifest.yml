@@ -492,6 +492,9 @@ contexts:
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_genres_artists_albums.sql
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_songs.sql
         sqlFiles: chinook_ddl.sql chinook_genres_artists_albums.sql chinook_songs.sql
+        # python3 for the scripts/chinook -> yugabyte transform (coalesces the
+        # dump's single-row INSERTs into batched multi-row INSERTs).
+        extraPrereqs: python3
         structureTest:
           configs:
             - test/config/cockroach/chinook.yaml
