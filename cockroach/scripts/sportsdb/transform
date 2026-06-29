@@ -1,29 +1,74 @@
 #!/usr/bin/env python3
-"""Strip Postgres-only DDL from the Yugabyte sportsdb dump for CockroachDB.
+"""Prepare the Yugabyte sportsdb dump for CockroachDB at build time.
 
-The dump defines an unused ``primary_id`` domain (``CREATE DOMAIN primary_id AS
-integer``) that CockroachDB does not implement (crdb issue #27796). Drop it;
-no column references the domain.
+Two fixes, applied across every file in ``SQL_FILES``:
+
+1. The dump defines an unused ``primary_id`` domain (``CREATE DOMAIN primary_id
+   AS integer``) that CockroachDB does not implement (crdb issue #27796). Drop
+   it; no column references the domain.
+
+2. The data is ~79k *single-row* ``INSERT`` statements. On CockroachDB each
+   implicit-transaction INSERT pays a full Raft commit (an fsync), so loading
+   them one at a time runs for many minutes and overruns the test readiness
+   budget. Consecutive INSERTs that share an ``INSERT INTO <table> (<cols>)``
+   prefix (the dump groups each table's rows together) are coalesced into
+   batched multi-row INSERTs, collapsing those ~79k commits into a few hundred
+   -- the same mechanical speed-up the pgfoundry hook applies to COPY blocks.
 """
 import os
 import re
 import sys
 
+# Rows per coalesced multi-row INSERT.
+BATCH = 500
+
 DROP_BLOCK_RE = re.compile(r"^\s*CREATE\s+DOMAIN\b", re.IGNORECASE)
+
+# A single-row INSERT: group 1 is the `INSERT INTO <table> (<cols>)` prefix
+# (the coalescing key; the column list has no nested ')'), group 2 the VALUES
+# tuple up to the terminating ';'. The dump emits one such statement per line.
+INSERT_RE = re.compile(
+    r"^(INSERT INTO\s+[A-Za-z_][\w.]*\s*\([^)]*\))\s+VALUES\s+(.+);\s*$",
+    re.IGNORECASE,
+)
 
 
 def transform_file(path: str) -> None:
     lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
     out: list[str] = []
+    key = None        # prefix of the INSERT run currently being coalesced
+    batch: list[str] = []  # VALUES tuples accumulated for `key`
+
+    def flush() -> None:
+        nonlocal key, batch
+        if batch:
+            out.append("{} VALUES\n{};\n".format(key, ",\n".join(batch)))
+            batch = []
+        key = None
+
     i = 0
     while i < len(lines):
-        if DROP_BLOCK_RE.match(lines[i]):
+        line = lines[i]
+        if DROP_BLOCK_RE.match(line):
+            flush()
             while i < len(lines) and ";" not in lines[i]:
                 i += 1
             i += 1
             continue
-        out.append(lines[i])
+        m = INSERT_RE.match(line.rstrip("\n"))
+        if m:
+            prefix, values = m.group(1), m.group(2)
+            if prefix != key or len(batch) >= BATCH:
+                flush()
+                key = prefix
+            batch.append(values)
+            i += 1
+            continue
+        # Any other line (comment, blank, DDL) ends the current INSERT run.
+        flush()
+        out.append(line)
         i += 1
+    flush()
     open(path, "w", encoding="utf-8").write("".join(out))
 
 
