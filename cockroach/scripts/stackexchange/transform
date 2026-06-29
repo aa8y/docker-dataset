@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
-"""Transform a StackExchange XML dump into a Postgres init script.
+"""Transform a StackExchange XML dump into a CockroachDB init script + CSVs.
 
 A StackExchange site dump is a set of per-table XML files, one ``<row .../>``
-element per record with the column values held as element attributes. This
-hook converts each table that is present into ``CREATE TABLE`` + batched
-multi-row ``INSERT``s, then appends the indexes, assembling a single
-``<dataset>.sql`` that our ETL cats into the init script. (Postgres' shared
-hook emits ``COPY ... FROM stdin`` instead, but CockroachDB's init-time STDIN
-COPY is far slower than Postgres for large blocks, so we emit INSERTs -- the
-same trade-off the cockroach pgfoundry hook makes.)
+element per record with the column values held as element attributes. For each
+table that is present this hook writes a CSV of its rows (to CSV_DIR) and, into
+a single ``<dataset>.sql`` our ETL cats into the init script, a ``CREATE TABLE``
+followed by an ``IMPORT INTO ... CSV DATA (...)`` that bulk-loads that CSV; the
+indexes are appended after every table is loaded.
+
+We use IMPORT rather than INSERTs (what the Postgres hook's COPY and an earlier
+revision of this hook both effectively are) because IMPORT is CockroachDB's bulk
+path -- it writes SSTs directly instead of running every row through the SQL
+write layer -- so the larger sites (chess) load in seconds instead of the many
+minutes an INSERT-per-statement load took, comfortably inside the test readiness
+budget. The CSV source is read over ``nodelocal://1/`` from the node's
+external-IO dir, which the final image pins to CSV_DIR via ``--external-io-dir``
+(see ../../Dockerfile); the build copies the CSVs there.
+
+NULLs use the ``\\N`` sentinel (matched by ``WITH nullif``): a missing attribute,
+or an empty numeric/timestamp, becomes NULL, while an empty TEXT attribute stays
+an empty string (an unquoted empty CSV field, which ``\\N`` does not match). The
+sentinel is unquoted, so the vanishingly rare TEXT value equal to a literal
+``\\N`` is the only ambiguity -- the same convention Postgres COPY uses.
 
 Every StackExchange site shares this identical schema, so this hook is
 site-agnostic: each site's dataset directory (e.g. scripts/beer,
@@ -18,17 +31,18 @@ varies per site is $DATASET (the database/output-file name).
 The schema, the XML-attribute -> column mapping, and the indexes are adapted
 from the stackexchange-dump-to-postgres tool
 (https://github.com/Human-Centric-Machine-Learning/stackexchange-dump-to-postgres).
-Unlike that tool, which streams INSERTs into a *running* server, we emit SQL,
-so the dataset fits this repo's extract/transform/load build with no database
-running at build time. Unknown attributes (e.g. ContentLicense on newer dumps)
-are ignored because every INSERT uses an explicit column list, so refreshed
-dumps keep loading unchanged.
+Unlike that tool, which streams INSERTs into a *running* server, we emit a
+script + data files, so the dataset fits this repo's extract/transform/load
+build with no database running at build time. Unknown attributes (e.g.
+ContentLicense on newer dumps) are ignored because every IMPORT uses an explicit
+column list, so refreshed dumps keep loading unchanged.
 
 The indexes here are plain (B-tree) indexes. The Postgres hook declares a few
 of them as ``USING hash``, but CockroachDB has no hash access method -- its
 ``USING HASH`` is a differently-positioned hash-*sharded* index for a different
 purpose -- so those become plain indexes, which serve equality lookups fine.
 """
+import csv
 import os
 import sys
 
@@ -36,7 +50,13 @@ from lxml import etree
 
 INT, TS, TXT = "int", "timestamp", "text"
 
-BATCH = 500
+# Field value that IMPORT (via ``WITH nullif``) maps to SQL NULL.
+NULL = "\\N"
+
+# Where the per-table CSVs are written. Defaults to the final image's
+# ``--external-io-dir`` (see ../../Dockerfile) so ``nodelocal://1/<file>``
+# resolves to the file written here; overridable via $CSV_DIR for tests.
+CSV_DIR = os.environ.get("CSV_DIR", "/csv")
 
 # Each table: (xml_file, table, columns, indexes). A column is
 # (xml_attribute, sql_column, type); the first column is the primary key.
@@ -138,19 +158,15 @@ TABLES = [
 ]
 
 
-def sql_value(attribs, xml_attr, col_type):
-    """Render one XML attribute as a SQL literal (NULL / bare int / quoted)."""
+def field(attribs, xml_attr, col_type):
+    """Render one XML attribute as a CSV field (NULL sentinel or the value)."""
     value = attribs.get(xml_attr)
+    # A missing attribute, or an empty numeric/timestamp, is NULL. An empty TEXT
+    # attribute is a real empty string, which the csv writer emits as an unquoted
+    # empty field -- distinct from the NULL sentinel.
     if value is None or (col_type in (INT, TS) and value == ""):
-        return "NULL"
-    if col_type == INT:
-        # StackExchange XML integers are clean, so emit them bare -- no quoting
-        # and no cast needed on the INT column.
-        return value
-    # CockroachDB runs with standard_conforming_strings on, so backslashes are
-    # literal; only the single quote needs escaping. Embedded newlines are fine
-    # inside a single-quoted literal.
-    return "'" + value.replace("'", "''") + "'"
+        return NULL
+    return value
 
 
 def ddl(table, columns):
@@ -160,34 +176,36 @@ def ddl(table, columns):
     return "CREATE TABLE {} (\n{}\n);\n".format(table, ",\n".join(defs))
 
 
+def write_csv(xml_file, columns, path):
+    """Stream the dump's rows into a CSV at path, one column per mapping entry."""
+    with open(path, "w", encoding="utf-8", newline="") as cf:
+        writer = csv.writer(cf, lineterminator="\n")
+        for _, elem in etree.iterparse(xml_file, events=("end",)):
+            if elem.tag == "row":
+                writer.writerow([field(elem.attrib, xa, ct) for xa, _, ct in columns])
+            elem.clear()
+            while elem.getprevious() is not None:
+                del elem.getparent()[0]
+
+
 def main():
     dataset = os.environ.get("DATASET", "stackexchange")
     present = [t for t in TABLES if os.path.exists(t[0])]
     if not present:
         sys.exit("stackexchange transform: no StackExchange XML files found")
 
+    os.makedirs(CSV_DIR, exist_ok=True)
     with open("{}.sql".format(dataset), "w", encoding="utf-8") as out:
         out.write("-- StackExchange data dump, converted from XML at build time.\n")
-        out.write("-- CREATE TABLE + batched INSERTs (see this hook's docstring).\n\n")
+        out.write("-- CREATE TABLE + IMPORT INTO CSV (see this hook's docstring).\n\n")
         for xml_file, table, columns, _ in present:
+            csv_file = "{}.csv".format(table)
+            write_csv(xml_file, columns, os.path.join(CSV_DIR, csv_file))
             out.write(ddl(table, columns))
-            head = "INSERT INTO {} ({}) VALUES\n".format(
-                table, ", ".join(col for _, col, _ in columns))
-            batch = []
-            for _, elem in etree.iterparse(xml_file, events=("end",)):
-                if elem.tag == "row":
-                    batch.append("(" + ", ".join(
-                        sql_value(elem.attrib, xa, ct)
-                        for xa, _, ct in columns) + ")")
-                    if len(batch) >= BATCH:
-                        out.write(head + ",\n".join(batch) + ";\n")
-                        batch = []
-                elem.clear()
-                while elem.getprevious() is not None:
-                    del elem.getparent()[0]
-            if batch:
-                out.write(head + ",\n".join(batch) + ";\n")
-            out.write("\n")
+            out.write("IMPORT INTO {} ({}) CSV DATA ('nodelocal://1/{}')"
+                      " WITH nullif = '{}';\n\n".format(
+                          table, ", ".join(col for _, col, _ in columns),
+                          csv_file, NULL))
         for _, _, _, indexes in present:
             for index in indexes:
                 out.write(index + "\n")

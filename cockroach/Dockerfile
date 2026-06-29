@@ -113,7 +113,7 @@ RUN bash -c ' \
 # data dirs the dump references.
 RUN bash -c ' \
       set -e; \
-      mkdir -p /docker-entrypoint-initdb.d; \
+      mkdir -p /docker-entrypoint-initdb.d /csv; \
       INIT="/docker-entrypoint-initdb.d/${DATASET}.sql"; \
       [ -n "$CD_DIR" ] && echo "\cd ${CD_DIR}" >> "$INIT"; \
       for f in $SQL_FILES; do cat "$f" >> "$INIT"; echo >> "$INIT"; done; \
@@ -143,10 +143,16 @@ ARG DATASET
 ENV COCKROACH_DATABASE=${DATASET}
 
 COPY --from=builder /docker-entrypoint-initdb.d /docker-entrypoint-initdb.d
+# Per-table CSVs that init scripts bulk-load with IMPORT INTO over
+# `nodelocal://1/`, which resolves to the node's external-IO dir (pinned to /csv
+# by the CMD below). Empty for datasets whose init script uses plain SQL.
+COPY --from=builder /csv /csv
 
 # Single-node cluster in insecure mode -- these are throwaway practice/test
 # images (mirroring the trivial credentials the postgres/mysql images use), and
 # insecure mode gives the simplest connection: `cockroach sql --insecure`. The
 # entrypoint still runs the init scripts under /docker-entrypoint-initdb.d on
 # first boot, after the COCKROACH_DATABASE database is created.
-CMD ["start-single-node", "--insecure"]
+# --external-io-dir pins nodelocal:// (the IMPORT INTO source for the
+# CSV-loaded datasets) to /csv; harmless for datasets that ship no CSVs.
+CMD ["start-single-node", "--insecure", "--external-io-dir=/csv"]

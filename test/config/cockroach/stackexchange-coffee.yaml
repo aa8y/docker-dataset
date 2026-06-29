@@ -21,6 +21,6 @@ fileContentTests:
   - name: "coffee loads data into representative tables"
     path: "/docker-entrypoint-initdb.d/coffee.sql"
     expectedContents:
-      - "INSERT INTO Users[ (]"
-      - "INSERT INTO Posts[ (]"
-      - "INSERT INTO PostHistory[ (]"
+      - "IMPORT INTO Users[ (]"
+      - "IMPORT INTO Posts[ (]"
+      - "IMPORT INTO PostHistory[ (]"
