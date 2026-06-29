@@ -17,6 +17,12 @@ PostgreSQL literals.
 For dellstore2 the dump also defines a PL/pgSQL ``new_customer`` helper
 function with no data dependency — it is dropped so the schema and data still
 load faithfully (mirroring the MySQL pgsql hook, which drops it too).
+
+The dumps also wrap the load in ``BEGIN``/``COMMIT`` and end with a table-less
+``ANALYZE`` (some with ``VACUUM``). CockroachDB rejects a bare ``ANALYZE`` as a
+syntax error -- which aborts the whole init script -- and gathers statistics and
+reclaims space automatically, so these transaction-control and maintenance
+statements are stripped too (see DROP_LINE_RE).
 """
 import os
 import re
@@ -30,8 +36,20 @@ COPY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Top-level statements to drop. SET client_encoding (unsupported, see below) and
+# the sequence-resetting SELECT pg_catalog.setval are irrelevant to a fresh load;
+# the dump's transaction wrapper (BEGIN/COMMIT) and trailing maintenance
+# (table-less ANALYZE, VACUUM) are either unsupported by CockroachDB -- a bare
+# ANALYZE is a syntax error -- or pointless for it (statistics and GC are
+# automatic). Matched only outside COPY bodies (see transform_file) so a data row
+# beginning with one of these words is never dropped.
 DROP_LINE_RE = re.compile(
-    r"^\s*(SET\s+client_encoding|SELECT\s+pg_catalog\.setval)\b",
+    r"^\s*("
+    r"SET\s+client_encoding"
+    r"|SELECT\s+pg_catalog\.setval"
+    r"|BEGIN|COMMIT|START\s+TRANSACTION"
+    r"|ANALYZE|VACUUM"
+    r")\b",
     re.IGNORECASE,
 )
 FUNC_START_RE = re.compile(
@@ -130,8 +148,23 @@ def transform_file(path: str) -> None:
     lines = text.splitlines(keepends=True)
     filtered: list[str] = []
     i = 0
+    in_copy = False
     while i < len(lines):
         line = lines[i]
+        # Inside a COPY ... FROM stdin body every line is data (terminated by a
+        # lone "\."), so pass it through untouched -- never match it against the
+        # statement-drop patterns. convert_copy_blocks rewrites the block later.
+        if in_copy:
+            filtered.append(line)
+            if line.rstrip() == "\\.":
+                in_copy = False
+            i += 1
+            continue
+        if COPY_RE.match(line):
+            in_copy = True
+            filtered.append(line)
+            i += 1
+            continue
         if DROP_LINE_RE.match(line):
             i += 1
             continue
