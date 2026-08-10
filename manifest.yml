@@ -894,3 +894,65 @@ contexts:
       latest:
         retagFrom: chinook
         structureTest: false
+  # DuckDB images. Built on the official duckdb/duckdb image and published
+  # under a separate repository. DuckDB is embedded like SQLite -- a database
+  # is just a file -- so the build *builds the database file*: a dataset is
+  # described either by a text SQL source (sqlFiles, fed to the duckdb CLI) or
+  # by a prebuilt DuckDB database file (dbFile, shipped as-is). The official
+  # image is distroless (no shell), so the Dockerfile adds a glibc loader
+  # stage between the Alpine builder and the final image; see
+  # duckdb/Dockerfile for the full shape. The build templates are the DuckDB
+  # flavours (same arg surface as sqlite; test runs the DuckDB smoke-test
+  # script) and override the global postgres ones for this context.
+  duckdb:
+    tagKeys: dataset
+    parameters:
+      repository: aa8y/duckdb-dataset
+    structureTest:
+      configs:
+        - test/config/duckdb/common.yaml
+    templates:
+      # Mirrors the global templates (see top of file), including the always-on
+      # registry build cache gated by the DATASET_CHECKSUM fingerprint. Emits
+      # SQL_FILES or DB_FILE per tag (Mustache sections), never both.
+      build: >
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
+        {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-duckdb.sh {{tag}} {{dataset}}{{/retagFrom}}'
+      push: >
+        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
+        {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+    tags:
+      # Chinook digital-media store, from the same pinned vendor release the
+      # sqlite chinook tag uses. The scripts/chinook transform hook (python3)
+      # rewrites the script's two SQLite-isms -- bracket-quoted identifiers and
+      # forward-referencing FOREIGN KEYs -- into DuckDB SQL; row counts match
+      # the other chinook tags exactly.
+      chinook:
+        extractUrl: https://github.com/lerocha/chinook-database/releases/download/v1.4.5/Chinook_Sqlite.sql
+        sqlFiles: Chinook_Sqlite.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/chinook.yaml
+      # No `latest` alias yet: with a single dataset it would only pin `latest`
+      # to `chinook` prematurely. Add it (retagFrom, mirroring the other
+      # engines) once the context carries a representative spread of datasets.

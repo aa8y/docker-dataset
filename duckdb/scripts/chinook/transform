@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Rewrite the vendor's Chinook_Sqlite.sql into DuckDB SQL at build time.
+
+DuckDB's parser is PostgreSQL-derived, and the vendor's SQLite script leans on
+exactly two SQLite-isms that break it (everything else -- NVARCHAR / DATETIME /
+NUMERIC column types, multi-row INSERTs, CREATE INDEX -- parses unchanged):
+
+  * identifiers are quoted with square brackets (``[Album]``), which DuckDB
+    does not accept as identifier quotes. They are rewritten to standard double
+    quotes, tracking single-quoted string literals so data values such as
+    ``'BBC Sessions [Disc 1]'`` travel untouched; and
+  * ``FOREIGN KEY`` table constraints forward-reference tables the script has
+    not created yet (``Album`` references ``Artist`` one statement before
+    ``Artist`` exists). SQLite tolerates that; DuckDB validates the reference
+    at CREATE time and errors. The constraints are dropped wholesale --
+    mirroring the shared mysql/sqlite pgsql hooks, which likewise drop
+    constraints their engine cannot apply -- while PRIMARY KEYs, indexes and
+    all row data still load faithfully.
+
+Verified against DuckDB 1.5.5 (the pinned engine): the transformed script
+loads cleanly with row counts matching the sqlite chinook image exactly.
+
+Operates in place on every file in $SQL_FILES (the files the loader stage will
+cat into the duckdb CLI), so the manifest needs no extra wiring.
+"""
+import os
+import re
+
+# A FOREIGN KEY table constraint with optional referential actions. Always
+# comma-preceded in this script (a PRIMARY KEY constraint precedes it in every
+# table), so the comma is consumed with the clause.
+FK_RE = re.compile(
+    r',\s*FOREIGN\s+KEY\s*\([^)]*\)\s*REFERENCES\s*"[^"]*"\s*\([^)]*\)'
+    r'(?:\s*ON\s+(?:DELETE|UPDATE)\s+(?:NO\s+ACTION|CASCADE|RESTRICT|SET\s+NULL|SET\s+DEFAULT))*',
+    re.IGNORECASE)
+
+
+def debracket(sql):
+    """``[Ident]`` -> ``"Ident"`` everywhere outside single-quoted literals.
+
+    A character walk rather than a regex because the fence between identifier
+    and data is quote state, not shape: track titles like ``'... [Disc 2]'``
+    must keep their brackets. Inside a literal a doubled ``''`` is an escaped
+    quote, not a closing one.
+    """
+    out = []
+    i, n = 0, len(sql)
+    in_str = False
+    while i < n:
+        c = sql[i]
+        if in_str:
+            if c == "'" and i + 1 < n and sql[i + 1] == "'":
+                out.append("''")
+                i += 2
+                continue
+            if c == "'":
+                in_str = False
+            out.append(c)
+        elif c == "'":
+            in_str = True
+            out.append(c)
+        elif c == "[":
+            j = sql.index("]", i)
+            out.append('"' + sql[i + 1:j] + '"')
+            i = j + 1
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def drop_foreign_keys(sql):
+    """Remove FOREIGN KEY table constraints (run after debracket)."""
+    return FK_RE.sub("", sql)
+
+
+def transform(sql):
+    return drop_foreign_keys(debracket(sql))
+
+
+def main():
+    for path in os.environ["SQL_FILES"].split():
+        with open(path, encoding="utf-8") as fh:
+            sql = fh.read()
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(transform(sql))
+
+
+if __name__ == "__main__":
+    main()
