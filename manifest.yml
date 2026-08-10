@@ -1092,6 +1092,8 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/stackexchange-cooking.yaml
-      # No `latest` alias yet: with a single dataset it would only pin `latest`
-      # to `chinook` prematurely. Add it (retagFrom, mirroring the other
-      # engines) once the context carries a representative spread of datasets.
+      # `latest` tracks a single representative dataset, mirroring the other
+      # engines.
+      latest:
+        retagFrom: chinook
+        structureTest: false
