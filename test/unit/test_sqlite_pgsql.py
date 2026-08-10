@@ -242,3 +242,148 @@ def test_golden_dump(sqlite_pgsql, tmp_path, monkeypatch):
     sqlite_pgsql.main()
     assert work.read_text(encoding="utf-8") == \
         (FIXTURES / "dump.expected_sqlite.sql").read_text(encoding="utf-8")
+
+
+# --- environment knobs (airlines-class dumps) ------------------------------
+#
+# The airlines demo dump needs rewrites beyond the shared set: it qualifies
+# everything to a `bookings` schema and ships views. Both are opt-in via
+# environment knobs (PGSQL_EXTRA_SCHEMAS / PGSQL_DROP_VIEWS) so the datasets
+# that symlink straight to scripts/pgsql keep byte-identical output -- every
+# test here therefore comes in an enabled flavour and a default-off guard.
+
+@pytest.fixture
+def knob_env(sqlite_pgsql, monkeypatch):
+    """Set transform knobs in the environment and re-run configure().
+
+    Restores the default (knob-free) module configuration afterwards, so the
+    session-scoped module fixture never leaks knob state into other tests.
+    """
+    def activate(**env):
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        sqlite_pgsql.configure()
+    yield activate
+    for key in ("PGSQL_EXTRA_SCHEMAS", "PGSQL_DROP_VIEWS"):
+        monkeypatch.delenv(key, raising=False)
+    sqlite_pgsql.configure()
+
+
+def test_strip_schema_default_leaves_unknown_schemas(sqlite_pgsql):
+    # Guard: without the knob, only public./cd. are stripped -- a `bookings.`
+    # qualifier (or anything else) must survive untouched.
+    assert sqlite_pgsql.strip_schema("CREATE TABLE bookings.flights (") == \
+        "CREATE TABLE bookings.flights ("
+
+
+def test_extra_schemas_knob_extends_strip(sqlite_pgsql, knob_env):
+    knob_env(PGSQL_EXTRA_SCHEMAS="bookings")
+    assert sqlite_pgsql.clean_ddl("CREATE TABLE bookings.Flights (") == \
+        "CREATE TABLE flights ("
+    assert sqlite_pgsql.clean_ddl(
+        "CREATE INDEX i ON bookings.routes (departure_airport);") == \
+        "CREATE INDEX i ON routes (departure_airport);"
+    # The default schemas keep being stripped alongside the extra one.
+    assert sqlite_pgsql.clean_ddl("CREATE TABLE public.foo (") == \
+        "CREATE TABLE foo ("
+
+
+def test_extra_schemas_knob_dequalifies_inserts(sqlite_pgsql, knob_env):
+    knob_env(PGSQL_EXTRA_SCHEMAS="bookings")
+    out = io.StringIO()
+    sqlite_pgsql.convert_file("INSERT INTO bookings.foo VALUES (1);", out)
+    assert out.getvalue() == "INSERT INTO foo VALUES (1);\n"
+
+
+def test_copy_strips_any_schema_qualifier_without_knob(sqlite_pgsql):
+    # COPY headers were always de-qualified generically (split on '.'), knob or
+    # no knob -- the airlines COPY data needs no configuration at all.
+    out = _convert(sqlite_pgsql,
+                   "COPY bookings.Flights (flight_id) FROM stdin;\n"
+                   "1\n"
+                   "\\.\n")
+    assert out == "INSERT INTO flights (flight_id) VALUES\n('1');\n\n"
+
+
+def test_convert_file_passes_views_through_by_default(sqlite_pgsql):
+    # Guard: the seven pgsql-symlinked datasets ship no views; if a future dump
+    # grows one it must keep passing through unless the dataset opts in.
+    text = "CREATE VIEW v AS\n SELECT 1;\nSELECT 2;"
+    assert _convert(sqlite_pgsql, text) == text + "\n"
+
+
+def test_convert_file_drops_views_when_enabled(sqlite_pgsql, monkeypatch):
+    monkeypatch.setattr(sqlite_pgsql, "DROP_VIEWS", True)
+    # Single-line and multi-line (the airlines views end with the only `;` on
+    # their final line); the next statement must survive either way.
+    assert _convert(sqlite_pgsql,
+                    "CREATE VIEW v AS SELECT 1;\nSELECT 2;") == "SELECT 2;\n"
+    assert _convert(sqlite_pgsql,
+                    "CREATE VIEW bookings.airplanes AS\n"
+                    " SELECT airplane_code,\n"
+                    "    (model ->> lang()) AS model\n"
+                    "   FROM bookings.airplanes_data;\n"
+                    "SELECT 2;") == "SELECT 2;\n"
+    assert _convert(sqlite_pgsql,
+                    "CREATE OR REPLACE VIEW v AS SELECT 1;\nSELECT 2;") == \
+        "SELECT 2;\n"
+    assert _convert(sqlite_pgsql,
+                    "CREATE MATERIALIZED VIEW v AS\n SELECT 1;\nSELECT 2;") == \
+        "SELECT 2;\n"
+
+
+def test_convert_file_drops_database_dump_noise(sqlite_pgsql):
+    # The airlines dump manages its own database; these forms are dropped
+    # unconditionally, like the DROP/CREATE DATABASE lines always were.
+    for line in ("ALTER DATABASE demo SET search_path TO 'bookings';",
+                 "CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;",
+                 "SELECT pg_catalog.set_config('search_path', '', false);"):
+        assert _convert(sqlite_pgsql, line) == "", line
+
+
+def test_convert_file_drops_sql_standard_body_function(sqlite_pgsql):
+    # PostgreSQL 14+ SQL-standard bodies have no AS '...' quoting; the block
+    # ends at its RETURN line, and everything after must survive.
+    out = _convert(sqlite_pgsql,
+                   "CREATE FUNCTION bookings.now() RETURNS timestamp with time zone\n"
+                   "    LANGUAGE sql IMMUTABLE\n"
+                   "    RETURN '2025-12-01 00:00:00+00'::timestamp with time zone;\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"
+
+
+def test_convert_file_quoted_function_body_return_does_not_end_block(sqlite_pgsql):
+    # Guard: dellstore's PL/pgSQL body contains RETURN statements *inside* the
+    # AS '...' quoting; only the closing LANGUAGE line may end the block, or the
+    # body's tail would leak into the output.
+    out = _convert(sqlite_pgsql,
+                   "CREATE FUNCTION f(OUT n integer) RETURNS integer\n"
+                   "    AS '\n"
+                   "  BEGIN\n"
+                   "    RETURN;\n"
+                   "  END;\n"
+                   "' LANGUAGE plpgsql;\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"
+
+
+def test_clean_ddl_rewrites_any_array_to_in(sqlite_pgsql):
+    # SQLite has no ANY/ARRAY; the CHECK constraint keeps its meaning via IN.
+    assert sqlite_pgsql.clean_ddl(
+        "    CONSTRAINT c CHECK ((status = ANY "
+        "(ARRAY['Scheduled'::text, 'On Time'::text])))") == \
+        "    CONSTRAINT c CHECK ((status IN ('Scheduled', 'On Time')))"
+
+
+def test_golden_airlines_dump(sqlite_pgsql, tmp_path, monkeypatch, knob_env):
+    # The airlines port in miniature, driven exactly as the real hook drives it:
+    # both knobs set in the environment, main() picking them up via configure().
+    work = tmp_path / "work.sql"
+    work.write_bytes((FIXTURES / "airlines.sql").read_bytes())
+    monkeypatch.setenv("SQL_FILES", str(work))
+    monkeypatch.setenv("PGSQL_EXTRA_SCHEMAS", "bookings")
+    monkeypatch.setenv("PGSQL_DROP_VIEWS", "1")
+    monkeypatch.chdir(tmp_path)
+    sqlite_pgsql.main()
+    assert work.read_text(encoding="utf-8") == \
+        (FIXTURES / "airlines.expected_sqlite.sql").read_text(encoding="utf-8")
