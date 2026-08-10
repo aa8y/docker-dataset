@@ -11,7 +11,7 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | Dataset | [PostgreSQL](postgres/README.md) | [MySQL](mysql/README.md) | [CockroachDB](cockroach/README.md) | [SQLite](sqlite/README.md) |
 | --- | --- | --- | --- | --- |
 | [AdventureWorks](https://github.com/lorint/AdventureWorks-for-Postgres) | `adventureworks` | — | — | — |
-| [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | — |
+| [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | `airlines` |
 | Chinook | [`yugabyte-chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) |
 | [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | `dellstore` | `dellstore` |
 | [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` |
