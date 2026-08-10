@@ -953,6 +953,59 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/chinook.yaml
+      # PostgreSQL-dump datasets, the same sources the sqlite tags use. DuckDB's
+      # parser is PostgreSQL-derived, so the shared scripts/pgsql transform hook
+      # is a thin one next to SQLite's: it converts COPY blocks to INSERTs,
+      # transcodes Latin-1 dumps, and removes only what DuckDB genuinely cannot
+      # run (SET, setval, GRANT, USING btree, serial, FOREIGN KEYs, PL/pgSQL) --
+      # PostgreSQL casts, column types and `ALTER TABLE ... ADD PRIMARY KEY` all
+      # survive, so these tags keep their primary keys where the sqlite ones
+      # cannot. Row counts match the sqlite tags exactly. Each dataset's
+      # scripts/<dataset> dir is a symlink to scripts/pgsql.
+      world:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz
+        sqlFiles: dbsamples-0.1/world/world.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/world.yaml
+      iso3166:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz
+        sqlFiles: iso-3166/iso-3166.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/iso3166.yaml
+      frenchtowns:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz
+        sqlFiles: french-towns-communes-francaises.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/frenchtowns.yaml
+      usda:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
+        sqlFiles: usda-r18-1.0/usda.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/usda.yaml
+      pgexercises:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_data.sql
+        sqlFiles: clubdata_ddl.sql clubdata_data.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/pgexercises.yaml
+      dellstore:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz
+        sqlFiles: dellstore2-normal-1.0/dellstore2-normal-1.0.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/dellstore.yaml
       # No `latest` alias yet: with a single dataset it would only pin `latest`
       # to `chinook` prematurely. Add it (retagFrom, mirroring the other
       # engines) once the context carries a representative spread of datasets.

@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Prepare a PostgreSQL SQL dump for DuckDB at build time.
+
+A thin fork of ../../../sqlite/scripts/pgsql/transform. Both hooks solve the
+same problem -- several of our datasets ship only as PostgreSQL dumps -- but
+DuckDB's parser *is* PostgreSQL-derived, so almost every rewrite the SQLite
+hook performs is unnecessary here and would only lose fidelity. What is left is
+the short list of things DuckDB genuinely cannot do, each verified against
+DuckDB 1.5.5 (the pinned engine) with the actual dumps behind the six tags that
+use this hook (world, iso3166, frenchtowns, usda, pgexercises, dellstore).
+
+Kept, with the error DuckDB raises without it:
+
+  * transcode to UTF-8. world / usda / dellstore ship Latin-1 bytes; DuckDB
+    validates UTF-8 in string literals and aborts on the first accented town or
+    author name.
+  * ``COPY tbl (cols) FROM stdin`` + TEXT-format data + ``\\.`` -> batched
+    multi-row ``INSERT``s. DuckDB has ``COPY``, but only from a *file*: there
+    is no inline-data form, so the data rows parse as SQL and fail
+    ("syntax error at or near ...").
+  * drop ``SET ...``. Every spelling in these dumps fails: unknown parameters
+    (``client_encoding``, ``default_with_oids``) raise a Catalog Error, and
+    ``standard_conforming_strings = on`` / ``SET SESSION CHARACTERISTICS`` /
+    the multi-value ``search_path = cd, pg_catalog`` are outright parse errors.
+  * drop ``SELECT pg_catalog.setval(...)``: DuckDB has ``nextval``/``currval``
+    but no ``setval`` (Catalog Error), and a fresh load never needs it -- the
+    dumps' id columns are all written explicitly.
+  * drop ``GRANT`` / ``REVOKE`` and psql's ``\\connect`` / ``\\.`` (parse errors),
+    and ``CREATE``/``DROP SCHEMA`` together with ``public.`` / ``cd.``
+    qualifiers, which flattens every dataset into DuckDB's default ``main``
+    schema. (pgexercises is the one dump with a schema: it creates ``cd``,
+    then relies on ``search_path`` -- which is dropped above -- for its
+    unqualified ``CREATE TABLE``s while its indexes say ``cd.bookings``. Keeping
+    the schema would leave tables in one place and indexes pointing at
+    another.)
+  * strip ``USING btree`` / ``USING hash`` / ``USING lsm`` from ``CREATE INDEX``
+    (Binder Error: Unknown index type: BTREE), inline and on its own line --
+    pgexercises' indexes wrap onto four lines.
+  * strip ``WITH (OIDS ...)`` / ``WITHOUT OIDS`` (Not implemented Error).
+  * strip ``::regclass``, the one PostgreSQL cast DuckDB has no type for
+    (Catalog Error: Type with name regclass does not exist!). Stripping it
+    rather than the whole ``DEFAULT nextval('s'::regclass)`` keeps the default
+    working, since DuckDB does have sequences.
+  * ``serial`` -> ``integer`` (and ``bigserial``/``smallserial``). DuckDB has no
+    ``serial`` pseudo-type (Catalog Error: Type with name serial does not
+    exist!); frenchtowns and dellstore declare their id columns with it and
+    supply every value in the data, so a plain integer column is faithful.
+  * drop table-level ``FOREIGN KEY`` constraints from ``CREATE TABLE``, with
+    the comma that precedes them -- the same rewrite the scripts/chinook hook
+    makes, for the same reason plus one more. DuckDB rejects referential
+    actions outright ("FOREIGN KEY constraints cannot use CASCADE, SET NULL or
+    SET DEFAULT", which is pgexercises' ``members.recommendedby``), and even
+    with the actions stripped it validates the reference per *row* where
+    PostgreSQL validates per statement -- so pgexercises' self-referencing
+    multi-row ``INSERT`` (member 1 recommended by a member listed later) fails
+    with a Constraint Error. Because the ``ALTER TABLE ... ADD CONSTRAINT ...
+    FOREIGN KEY`` form is unsupported anyway (below), dropping these keeps FK
+    handling uniform across both spellings.
+  * ``ALTER TABLE`` is filtered rather than dropped wholesale (the SQLite hook
+    can only drop): DuckDB implements ``ADD CONSTRAINT ... PRIMARY KEY``, so
+    those survive and world/usda/dellstore keep their primary keys, while
+    ``ADD CONSTRAINT ... FOREIGN KEY`` / ``UNIQUE`` (Not implemented Error: No
+    support for that ALTER TABLE option yet!) and ``OWNER TO`` (parse error)
+    are dropped.
+  * drop PL/pgSQL stored functions -- dellstore's ``new_customer`` -- which
+    DuckDB has no equivalent for.
+
+Deleted from the SQLite hook, because DuckDB does not need them:
+
+  * ``::type`` cast stripping. DuckDB speaks PostgreSQL casts; world's
+    ``continent = 'Asia'::text`` CHECK constraint loads verbatim.
+  * lower-casing table identifiers. DuckDB identifiers are case-insensitive
+    (and case-preserving), so a dump that defines ``Regions`` and loads
+    ``regions`` resolves either way -- frenchtowns does exactly that.
+  * ``DEFAULT nextval(...)`` stripping and the ``CREATE``/``ALTER SEQUENCE``
+    block drop: DuckDB has real sequences. (No dump here declares one
+    standalone; ``serial`` is handled above.)
+  * ``COMMENT ON`` dropping: DuckDB supports ``COMMENT ON``.
+  * the ``ALTER TABLE ONLY`` -> ``ALTER TABLE`` rewrite: DuckDB accepts ``ONLY``.
+  * the ``PRAGMA synchronous=OFF`` / ``journal_mode`` preamble, which is
+    SQLite-only and would itself be a Catalog Error here.
+
+Every dataset that needs this symlinks its scripts/<dataset> directory to
+scripts/pgsql, exactly like the SQLite side; the conversion is dataset-agnostic
+and keyed only on $SQL_FILES (the files the loader stage cats into the duckdb
+CLI), which it rewrites in place.
+"""
+import glob
+import os
+import re
+import sys
+
+BATCH = 500
+
+# A COPY header: COPY <table> (<cols>) FROM stdin [DELIMITER 'x'];
+COPY_RE = re.compile(
+    r"^COPY\s+([^\s(]+)\s*\(([^)]*)\)\s+FROM\s+stdin"
+    r"(?:\s+DELIMITER\s+'([^']*)')?\s*;",
+    re.IGNORECASE)
+
+# Whole lines that DuckDB cannot parse or execute and that a fresh load does
+# not need. See the module docstring for the error each one avoids.
+DROP_LINE_RE = re.compile(
+    r"^\s*(SET\s|SELECT\s+pg_catalog\.setval|GRANT\s|REVOKE\s|"
+    r"WITHOUT\s+OIDS|USING\s+(btree|hash|lsm)\b|\\connect|\\c\s|\\\."
+    r"|CREATE\s+SCHEMA|DROP\s+SCHEMA|CREATE\s+DATABASE|DROP\s+DATABASE)\b",
+    re.IGNORECASE)
+
+# ALTER TABLE is buffered to its terminating ';' and then filtered, because
+# DuckDB implements exactly one of the forms these dumps use.
+ALTER_TABLE_RE = re.compile(r"^\s*ALTER\s+TABLE\b", re.IGNORECASE)
+ALTER_KEEP_RE = re.compile(r"\bADD\s+CONSTRAINT\b.*\bPRIMARY\s+KEY\b",
+                           re.IGNORECASE | re.DOTALL)
+ALTER_REJECT_RE = re.compile(r"\b(FOREIGN\s+KEY|UNIQUE)\b",
+                             re.IGNORECASE | re.DOTALL)
+
+# PL/pgSQL stored functions have no DuckDB translation.
+FUNC_START_RE = re.compile(r"^\s*CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b",
+                           re.IGNORECASE)
+FUNC_END_RE = re.compile(r"\bLANGUAGE\s+\w+\s*;\s*$", re.IGNORECASE)
+
+# `serial` and friends, as a standalone column type only -- never inside an
+# identifier (`serial_no`) or a string.
+SERIAL_RE = re.compile(r"\b(big|small)?serial(\d*)\b", re.IGNORECASE)
+_SERIAL_TYPE = {"big": "bigint", "small": "smallint", "": "integer"}
+
+# CREATE TABLE is buffered to its terminating ';' so table-level FOREIGN KEY
+# constraints can be removed with their preceding comma (dropping the line
+# alone would leave a dangling comma before the closing paren).
+CREATE_TABLE_RE = re.compile(r"^\s*CREATE\s+TABLE\b", re.IGNORECASE)
+FK_RE = re.compile(
+    r',\s*FOREIGN\s+KEY\s*\([^)]*\)\s*REFERENCES\s*[^(]*\([^)]*\)'
+    r'(?:\s*ON\s+(?:DELETE|UPDATE)\s+'
+    r'(?:NO\s+ACTION|CASCADE|RESTRICT|SET\s+NULL|SET\s+DEFAULT))*',
+    re.IGNORECASE)
+
+
+def transcode(path):
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+def strip_schema(line):
+    """Flatten `public.`/`cd.` qualifiers into DuckDB's default `main` schema."""
+    return re.sub(r"(?i)\b(public|cd)\.", "", line)
+
+
+def demote_serial(line):
+    """`serial` -> `integer` (DuckDB has no serial pseudo-type)."""
+    return SERIAL_RE.sub(
+        lambda m: _SERIAL_TYPE[(m.group(1) or "").lower()], line)
+
+
+def clean_ddl(line):
+    """Apply dialect fixes to a single DDL/statement line."""
+    line = strip_schema(line)
+    line = re.sub(r"(?i)\busing\s+(btree|hash|lsm)\b", "", line)
+    line = re.sub(r"(?i)\bwith\s*\(\s*oids[^)]*\)", "", line)
+    line = re.sub(r"(?i)::regclass\b", "", line)
+    line = demote_serial(line)
+    return line
+
+
+def drop_foreign_keys(statement):
+    """Remove table-level FOREIGN KEY constraints from a CREATE TABLE block."""
+    return FK_RE.sub("", statement)
+
+
+def split_copy_row(line, delim):
+    """Split a COPY TEXT row on unescaped delimiters, keeping escape pairs."""
+    fields, cur, i, n = [], [], 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n:
+            cur.append(line[i:i + 2]); i += 2; continue
+        if c == delim:
+            fields.append("".join(cur)); cur = []; i += 1; continue
+        cur.append(c); i += 1
+    fields.append("".join(cur))
+    return fields
+
+
+_UNESCAPE = {"t": "\t", "n": "\n", "r": "\r", "\\": "\\"}
+
+
+def copy_value(field):
+    """Render one COPY field as a SQL string literal."""
+    if field == "\\N":
+        return "NULL"
+    out, i = [], 0
+    while i < len(field):
+        if field[i] == "\\" and i + 1 < len(field):
+            out.append(_UNESCAPE.get(field[i + 1], field[i + 1])); i += 2
+        else:
+            out.append(field[i]); i += 1
+    return "'" + "".join(out).replace("'", "''") + "'"
+
+
+def keep_alter(statement):
+    """True for the one ALTER TABLE form DuckDB implements: ADD PRIMARY KEY."""
+    return bool(ALTER_KEEP_RE.search(statement)
+                and not ALTER_REJECT_RE.search(statement))
+
+
+def ends_statement(line, in_string):
+    """Track quote state across a line; report whether a ';' closes outside it.
+
+    Multi-row ``INSERT``s (pgexercises ships its data that way) span many lines
+    and every one of them is *data*, so they must reach the output untouched --
+    running them through clean_ddl would rewrite a value that happens to say
+    "serial" or "cd.". Knowing where the statement ends needs quote state, not
+    a bare ``';' in line``: a literal may itself contain a semicolon, and a
+    doubled ``''`` inside one is an escaped quote, not a close.
+    """
+    i, n, done = 0, len(line), False
+    while i < n:
+        c = line[i]
+        if in_string:
+            if c == "'" and i + 1 < n and line[i + 1] == "'":
+                i += 2; continue
+            if c == "'":
+                in_string = False
+        elif c == "'":
+            in_string = True
+        elif c == ";":
+            done = True
+        i += 1
+    return in_string, done
+
+
+def read_statement(lines, i):
+    """Collect lines[i:] up to the ';' that closes the statement.
+
+    Returns the joined statement and the index just past it.
+    """
+    block = [lines[i]]
+    in_string, done = ends_statement(lines[i], False)
+    while not done and i + 1 < len(lines):
+        i += 1
+        block.append(lines[i])
+        in_string, done = ends_statement(lines[i], in_string)
+    return "\n".join(block), i + 1
+
+
+def convert_file(text, out):
+    lines = text.split("\n")
+    i, n = 0, len(lines)
+    drop_func = False
+    while i < n:
+        line = lines[i]
+
+        if drop_func:
+            if FUNC_END_RE.search(line):
+                drop_func = False
+            i += 1; continue
+
+        m = COPY_RE.match(line)
+        if m:
+            table, cols, delim = m.group(1), m.group(2), m.group(3) or "\t"
+            table = table.split(".")[-1]
+            head = "INSERT INTO {} ({}) VALUES\n".format(table, cols)
+            batch = []
+            i += 1
+            while i < n and lines[i].rstrip() != "\\.":
+                row = split_copy_row(lines[i], delim)
+                batch.append("(" + ", ".join(copy_value(f) for f in row) + ")")
+                if len(batch) >= BATCH:
+                    out.write(head + ",\n".join(batch) + ";\n")
+                    batch = []
+                i += 1
+            if batch:
+                out.write(head + ",\n".join(batch) + ";\n")
+            i += 1  # skip the \. terminator
+            continue
+
+        if FUNC_START_RE.match(line):
+            drop_func = not FUNC_END_RE.search(line)
+            i += 1; continue
+
+        if CREATE_TABLE_RE.match(line):
+            # Buffered whole so a table-level FOREIGN KEY can be removed along
+            # with the comma that precedes it -- a per-line drop would leave a
+            # dangling comma before the closing paren.
+            statement, i = read_statement(lines, i)
+            out.write(drop_foreign_keys(clean_ddl(statement)) + "\n")
+            continue
+
+        if ALTER_TABLE_RE.match(line):
+            # Buffered too (pg_dump wraps ALTER TABLE over two lines), because
+            # the verb that decides whether DuckDB can run it -- PRIMARY KEY vs
+            # FOREIGN KEY / UNIQUE / OWNER TO -- is on the continuation line.
+            statement, i = read_statement(lines, i)
+            if keep_alter(statement):
+                out.write(clean_ddl(statement) + "\n")
+            continue
+
+        if DROP_LINE_RE.match(line):
+            i += 1; continue
+
+        stripped = line.lstrip()
+        if stripped.startswith("--") or not stripped:
+            out.write(line + "\n")
+        elif stripped.upper().startswith("INSERT INTO"):
+            # Only the header names the table (and so may carry a schema
+            # qualifier); every following line is data, copied verbatim.
+            out.write(strip_schema(line) + "\n")
+            in_string, done = ends_statement(line, False)
+            while not done and i + 1 < n:
+                i += 1
+                out.write(lines[i] + "\n")
+                in_string, done = ends_statement(lines[i], in_string)
+            i += 1; continue
+        else:
+            out.write(clean_ddl(line) + "\n")
+        i += 1
+
+
+def main():
+    files = os.environ.get("SQL_FILES", "").split() or sorted(glob.glob("*.sql"))
+    files = [f for f in files if os.path.isfile(f)]
+    if not files:
+        sys.exit("pgsql transform: no SQL files to convert")
+
+    for path in files:
+        text = transcode(path)
+        with open(path, "w", encoding="utf-8") as out:
+            convert_file(text, out)
+
+
+if __name__ == "__main__":
+    main()
