@@ -44,7 +44,7 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | `usda` | `usda` |
 | World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) |
 
-¹ `<site>` is one of `beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking` (e.g. `stackexchange-chess`).
+¹ `<site>` is one of `beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking`, `outdoors`, `boardgames` (e.g. `stackexchange-chess`).
 
 Every engine also publishes a `latest` tag: it tracks `world` on PostgreSQL and MySQL, and `chinook` on CockroachDB and SQLite.
 
