@@ -57,11 +57,52 @@ is_volatile() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_DIR="${SCRIPT_DIR}/../expected/sqlite"
+IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
 
 GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; RESET=$'\033[0m'
 info() { printf '%s\n' "$*" >&2; }
 pass() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
 fail() { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; }
+
+# Identical-image dedupe. Some tags are just a second name for the same build --
+# `latest` is built from the same inputs as `world` -- so a full `dave test` can
+# query the very same image ID more than once. What a container does is a pure
+# function of its image (here, quite literally: the database is a file baked into
+# it), so once an image ID has passed a given set of expectations there is
+# nothing left to learn from running it again.
+#
+# "a given set of expectations" is the point of the stamp: it holds the dataset
+# list plus the bytes of every expected/*.json this run reads, so two tags that
+# share an image but assert different datasets still both run, and editing an
+# expected file invalidates the entry rather than silently skipping past it.
+# Only a clean assert run writes a stamp -- a failure has to stay reproducible --
+# --update neither reads nor writes one, and DDS_DEDUPE=0 opts out entirely. The
+# cache lives under an ephemeral tmp dir, so a stale entry cannot outlive a boot.
+CACHE_DIR="${DDS_TEST_CACHE:-${TMPDIR:-/tmp}/docker-dataset-itest}"
+stamp_file=""
+
+stamp_contents() {
+  local db
+  printf '%s\n' "$DATASETS_CSV"
+  for db in "${DATASETS[@]}"; do
+    cat "${EXPECTED_DIR}/${db}.json" 2>/dev/null || true
+  done
+}
+
+if [[ "$UPDATE" -eq 0 && "${DDS_DEDUPE:-1}" != "0" ]]; then
+  # An image we cannot resolve locally is simply not deduped; `docker run` below
+  # will pull it as before.
+  image_id="$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
+  if [[ -n "$image_id" ]]; then
+    mkdir -p "$CACHE_DIR"
+    stamp_file="${CACHE_DIR}/${image_id//[^a-zA-Z0-9]/-}"
+    if [[ -f "$stamp_file" ]] && stamp_contents | cmp -s - "$stamp_file"; then
+      short_id="${image_id#sha256:}"
+      pass "${IMAGE}: identical image (${short_id:0:12}) already passed as an earlier tag; skipping"
+      exit 0
+    fi
+  fi
+fi
 
 sqlite_q() {
   # sqlite_q <db> <sql> — run a query against /data/<db>.db in a throwaway
@@ -93,7 +134,6 @@ actual_counts() {
 }
 
 rc=0
-IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
 for db in "${DATASETS[@]}"; do
   info "==> ${IMAGE} (${db})"
   expected_file="${EXPECTED_DIR}/${db}.json"
@@ -153,5 +193,12 @@ for db in "${DATASETS[@]}"; do
     rc=1
   fi
 done
+
+# Record the pass, so a later tag resolving to this same image ID with these same
+# expectations can skip the queries entirely. Clean runs only ($stamp_file is
+# empty in --update mode and when dedupe is off).
+if [[ "$rc" -eq 0 && -n "$stamp_file" ]]; then
+  stamp_contents > "$stamp_file"
+fi
 
 exit "$rc"
