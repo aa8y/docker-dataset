@@ -16,17 +16,39 @@ What it does, per file in $SQL_FILES:
     batched multi-row ``INSERT``s (SQLite has no inline COPY);
   * drops Postgres-only noise (``SET``, sequences, ``OWNER TO``, ``GRANT`` /
     ``REVOKE``, ``COMMENT ON``, ``WITH/WITHOUT OIDS``, ``DEFAULT nextval(...)``,
+    ``ALTER DATABASE``, ``CREATE EXTENSION``, ``pg_catalog.set_config``,
     psql ``\\connect`` / ``\\.``), strips ``USING btree`` / ``USING hash`` /
     ``USING lsm`` access-method clauses and ``public.`` / ``cd.`` schema
     qualifiers; and
   * lower-cases table identifiers so a dump that defines ``Regions`` but loads
     ``regions`` (Postgres folds unquoted names) still resolves on SQLite;
+  * rewrites ``= ANY (ARRAY[...])`` (CHECK constraints) to the equivalent
+    ``IN (...)`` -- SQLite has no ANY/ARRAY;
   * drops ``ALTER TABLE ... ADD CONSTRAINT ...`` statements wholesale (SQLite
     cannot add constraints via ALTER TABLE; tables and data still load);
-  * drops PL/pgSQL stored functions (no mechanical SQLite translation).
+  * drops stored functions -- both the classic quoted/dollar-quoted ``AS``-body
+    form (ends at its ``LANGUAGE <lang>;`` line) and the PostgreSQL 14+
+    SQL-standard body form (``LANGUAGE sql ... RETURN <expr>;``), neither of
+    which has a mechanical SQLite translation.
+
+Datasets whose dump needs more than the shared rules opt in via environment
+knobs, set by a thin dataset-specific transform hook that then delegates here
+(see sqlite/scripts/airlines). Both default off, so the symlinked datasets'
+output is byte-identical with or without this machinery:
+
+  PGSQL_EXTRA_SCHEMAS   extra schema qualifiers to strip besides public/cd
+                        (space- or comma-separated), e.g. ``bookings`` for the
+                        airlines demo. COPY statements already de-qualify any
+                        schema; this extends the DDL/INSERT rewriting.
+  PGSQL_DROP_VIEWS=1    drop ``CREATE [OR REPLACE] [MATERIALIZED] VIEW``
+                        statements wholesale (single- or multi-line). View
+                        bodies lean on Postgres operators/functions with no
+                        SQLite equivalent; the smoke test counts tables only.
 
 Column types are kept as-is: SQLite type affinity accepts Postgres spellings
 (``character varying``, ``timestamp``, ``numeric``, ``boolean``, etc.).
+Unknown spellings like ``jsonb`` or ``tstzrange`` fall through the affinity
+rules too, so their COPY literals load as plain text.
 
 The output is wrapped in ``PRAGMA synchronous=OFF; BEGIN;`` / ``COMMIT;`` for
 fast bulk load.
@@ -49,9 +71,11 @@ COPY_RE = re.compile(
 
 # Whole DDL lines that are Postgres-only and have no SQLite equivalent we need.
 DROP_LINE_RE = re.compile(
-    r"^\s*(SET\s|SELECT\s+pg_catalog\.setval|GRANT\s|REVOKE\s|COMMENT\s+ON|"
+    r"^\s*(SET\s|SELECT\s+pg_catalog\.(setval|set_config)|GRANT\s|REVOKE\s|"
+    r"COMMENT\s+ON|"
     r"WITHOUT\s+OIDS|USING\s+(btree|hash|lsm)\b|\\connect|\\c\s|\\\."
-    r"|CREATE\s+SCHEMA|DROP\s+SCHEMA|CREATE\s+DATABASE|DROP\s+DATABASE)\b",
+    r"|CREATE\s+SCHEMA|DROP\s+SCHEMA|CREATE\s+DATABASE|DROP\s+DATABASE"
+    r"|ALTER\s+DATABASE|CREATE\s+EXTENSION|DROP\s+EXTENSION)\b",
     re.IGNORECASE)
 
 # Multi-line statements to drop wholesale (from this keyword until the line that
@@ -60,14 +84,53 @@ DROP_BLOCK_RE = re.compile(
     r"^\s*(CREATE\s+SEQUENCE|ALTER\s+SEQUENCE|CREATE\s+DOMAIN|CREATE\s+TYPE)\b",
     re.IGNORECASE)
 
+# Views, dropped wholesale like the blocks above -- but only when a dataset
+# opts in via PGSQL_DROP_VIEWS (see the module docstring), so the datasets that
+# predate the knob keep byte-identical output.
+VIEW_RE = re.compile(
+    r"^\s*CREATE\s+(OR\s+REPLACE\s+)?(MATERIALIZED\s+)?VIEW\b",
+    re.IGNORECASE)
+
 # SQLite cannot add constraints via ALTER TABLE; drop these blocks wholesale
 # (single-line or multi-line until ';').
 ALTER_TABLE_RE = re.compile(r"^\s*ALTER\s+TABLE\b", re.IGNORECASE)
 
-# PL/pgSQL stored functions have no mechanical SQLite translation.
+# Stored functions have no mechanical SQLite translation. Two shapes:
+#   * classic AS-body: CREATE FUNCTION ... AS '...' / AS $$...$$ LANGUAGE x;
+#     -- ends at the LANGUAGE line (the quoted body may itself contain `;`);
+#   * SQL-standard body (PostgreSQL 14+): CREATE FUNCTION ... LANGUAGE sql ...
+#     RETURN <expr>; -- no AS body, ends at the RETURN line.
+# FUNC_BODY_RE detects the opening of an AS body; while none has been seen a
+# terminating RETURN line ends the statement, otherwise only the LANGUAGE line
+# does (a RETURN inside a quoted PL/pgSQL body must not end the block early).
 FUNC_START_RE = re.compile(r"^\s*CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b",
                            re.IGNORECASE)
 FUNC_END_RE = re.compile(r"\bLANGUAGE\s+\w+\s*;\s*$", re.IGNORECASE)
+FUNC_BODY_RE = re.compile(r"\bAS\s*('|\$\w*\$)", re.IGNORECASE)
+FUNC_RETURN_END_RE = re.compile(r"^\s*RETURN\b.*;\s*$", re.IGNORECASE)
+
+
+# Schemas whose qualifier is stripped from DDL/INSERT lines. The default pair
+# reproduces the historical behaviour exactly; PGSQL_EXTRA_SCHEMAS extends it
+# per-dataset (see the module docstring). configure() is called at import and
+# again from main(), so both the exec'd hook and a test driving main() see the
+# current environment.
+DEFAULT_SCHEMAS = ("public", "cd")
+
+
+def configure():
+    """(Re)read the environment knobs into module state."""
+    global SCHEMA_RE, DROP_VIEWS
+    extra = tuple(s for s in
+                  re.split(r"[\s,]+", os.environ.get("PGSQL_EXTRA_SCHEMAS", ""))
+                  if s)
+    SCHEMA_RE = re.compile(
+        r"(?i)\b({})\.".format("|".join(map(re.escape,
+                                            DEFAULT_SCHEMAS + extra))))
+    DROP_VIEWS = os.environ.get("PGSQL_DROP_VIEWS", "") == "1"
+
+
+configure()
 
 
 def transcode(path):
@@ -81,7 +144,7 @@ def transcode(path):
 
 def strip_schema(line):
     """Remove Postgres schema qualifiers SQLite does not use."""
-    return re.sub(r"(?i)\b(public|cd)\.", "", line)
+    return SCHEMA_RE.sub("", line)
 
 
 def clean_ddl(line):
@@ -93,6 +156,9 @@ def clean_ddl(line):
     line = re.sub(r"(?i)\bwith\s*\(\s*oids[^)]*\)", "", line)
     # Postgres type casts (e.g. 'Asia'::text) have no SQLite equivalent.
     line = re.sub(r"::\w+(?:\([^)]*\))?", "", line)
+    # `x = ANY (ARRAY[a, b])` (CHECK constraints) -> the equivalent `x IN (a, b)`
+    # (SQLite has no ANY/ARRAY).
+    line = re.sub(r"(?i)=\s*ANY\s*\(\s*ARRAY\[([^\]]*)\]\s*\)", r"IN (\1)", line)
     line = re.sub(r"(?i)(create\s+table\s+)(\w+)",
                   lambda m: m.group(1) + m.group(2).lower(), line)
     line = re.sub(r"(?i)(alter\s+table\s+)(\w+)",
@@ -137,12 +203,15 @@ def copy_value(field):
 def convert_file(text, out):
     lines = text.split("\n")
     i, n = 0, len(lines)
-    drop_block = drop_func = drop_alter = False
+    drop_block = drop_func = drop_alter = func_has_body = False
     while i < n:
         line = lines[i]
 
         if drop_func:
-            if FUNC_END_RE.search(line):
+            if FUNC_BODY_RE.search(line):
+                func_has_body = True
+            if FUNC_END_RE.search(line) or \
+                    (not func_has_body and FUNC_RETURN_END_RE.match(line)):
                 drop_func = False
             i += 1; continue
         if drop_block:
@@ -174,12 +243,13 @@ def convert_file(text, out):
             continue
 
         if FUNC_START_RE.match(line):
+            func_has_body = bool(FUNC_BODY_RE.search(line))
             drop_func = not FUNC_END_RE.search(line)
             i += 1; continue
         if ALTER_TABLE_RE.match(line):
             drop_alter = ";" not in line
             i += 1; continue
-        if DROP_BLOCK_RE.match(line):
+        if DROP_BLOCK_RE.match(line) or (DROP_VIEWS and VIEW_RE.match(line)):
             drop_block = ";" not in line
             i += 1; continue
         if DROP_LINE_RE.match(line):
@@ -196,6 +266,7 @@ def convert_file(text, out):
 
 
 def main():
+    configure()
     files = os.environ.get("SQL_FILES", "").split() or sorted(glob.glob("*.sql"))
     files = [f for f in files if os.path.isfile(f)]
     if not files:

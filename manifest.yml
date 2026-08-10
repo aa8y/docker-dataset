@@ -813,6 +813,20 @@ contexts:
         structureTest:
           configs:
             - test/config/sqlite/sportsdb.yaml
+      # Airlines: the postgrespro flight-bookings demo (same pinned snapshot as
+      # the postgres tag), shipped as a single gzipped pg_dump that manages its
+      # own `demo` database and qualifies everything to a `bookings` schema.
+      # The scripts/airlines hooks decompress the dump, then enable the shared
+      # scripts/pgsql transform's opt-in knobs (strip the `bookings.`
+      # qualifier, drop the three convenience views) and delegate to it; jsonb
+      # and range/interval columns load as plain text via type affinity.
+      airlines:
+        extractUrl: https://edu.postgrespro.ru/demo-20250901-3m.sql.gz
+        sqlFiles: airlines.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/sqlite/airlines.yaml
       # Sakila: MySQL's own sample database (the original of pagila). The
       # bradleygrant/sakila-sqlite3 port publishes a prebuilt database file,
       # shipped as-is (mirrors the northwind dbFile pattern).
