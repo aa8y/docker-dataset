@@ -74,6 +74,36 @@ fail() { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; }
 cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
+wait_for_log_marker() {
+  # wait_for_log_marker <marker> <deadline> — <deadline> is an absolute $SECONDS
+  # value. A single `docker logs -f` stream fed to `grep -q -m1`, rather than
+  # re-grepping the whole log once a second (which re-reads every byte written so
+  # far on every poll, so the cost of waiting grows with the log). The follow
+  # replays the log from the start, so a marker printed before we began watching
+  # is still seen; grep exits at the first match; and the stream ends by itself
+  # if the container dies, which turns a crashed container into an immediate
+  # failure instead of a full-budget wait. The loop below therefore only has to
+  # enforce the wall-clock deadline.
+  #
+  # grep reads from a process substitution rather than a pipeline on purpose:
+  # bash waits for *every* member of a pipeline, and `docker logs -f` only
+  # notices the closed pipe when it next writes, so a server that goes quiet
+  # right after printing the marker would keep the watcher alive -- and the
+  # match unreported -- until the deadline. A finished or killed watcher may
+  # leave a lingering `docker logs -f`; the EXIT trap's `docker rm -f` reaps it
+  # along with the container.
+  local marker="$1" deadline="$2" watcher
+  ( grep -q -m1 -- "$marker" < <(docker logs -f "$CONTAINER" 2>&1) ) & watcher=$!
+  while kill -0 "$watcher" 2>/dev/null; do
+    if (( SECONDS >= deadline )); then
+      kill "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
+      return 1
+    fi
+    sleep 1
+  done
+  wait "$watcher"
+}
+
 mysql_q() {
   # mysql_q <args...> — run the mariadb client in the test container, returning
   # tab-separated, header-less rows.
@@ -117,23 +147,19 @@ docker run -d --name "$CONTAINER" "$IMAGE" >/dev/null
 # "Ready for start up." only after every init script has run and just before it
 # execs the real server -- so we wait for that marker first, then for ping.
 #
-# The marker wait has to cover the full init-script import, which for the larger
-# INSERT-based datasets (sportsdb) is the slow part and runs noticeably slower on
-# CI runners than locally. conf/zz-dataset-fast-import.cnf cuts that time, but we
-# still allow a generous budget here so a slow runner doesn't spuriously fail.
+# Both phases share one wall-clock budget, not a fixed iteration count: an
+# iteration costs a `docker exec` round-trip, which on a loaded ARM runner can
+# itself take a second or more, so an N-iteration loop silently waits far less
+# than N seconds. 300s matches the Postgres/CockroachDB budgets. The marker wait
+# has to cover the full init-script import, which for the larger INSERT-based
+# datasets (sportsdb) is the slow part and runs noticeably slower on CI runners
+# than locally. conf/zz-dataset-fast-import.cnf cuts that time, but we still
+# allow a generous budget here so a slow runner doesn't spuriously fail.
+READY_TIMEOUT="${READY_TIMEOUT:-300}"
+deadline=$(( SECONDS + READY_TIMEOUT ))
 ready=0
-for _ in $(seq 1 300); do
-  if docker logs "$CONTAINER" 2>&1 | grep -q "Ready for start up"; then
-    ready=1; break
-  fi
-  if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != "true" ]]; then
-    break
-  fi
-  sleep 1
-done
-if [[ "$ready" -eq 1 ]]; then
-  ready=0
-  for _ in $(seq 1 60); do
+if wait_for_log_marker "Ready for start up" "$deadline"; then
+  while (( SECONDS < deadline )); do
     if docker exec "$CONTAINER" mariadb-admin -uroot -p"$ROOT_PW" ping >/dev/null 2>&1; then
       ready=1; break
     fi
@@ -141,7 +167,7 @@ if [[ "$ready" -eq 1 ]]; then
   done
 fi
 if [[ "$ready" -ne 1 ]]; then
-  fail "${IMAGE}: MariaDB did not become ready in time"
+  fail "${IMAGE}: MariaDB did not become ready in time (${READY_TIMEOUT}s)"
   docker logs "$CONTAINER" 2>&1 | tail -40 >&2
   exit 1
 fi
