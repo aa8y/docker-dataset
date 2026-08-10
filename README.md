@@ -13,22 +13,23 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | [AdventureWorks](https://github.com/lorint/AdventureWorks-for-Postgres) | `adventureworks` | — | — | — | — |
 | [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | — | — |
 | Chinook | [`yugabyte-chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/lerocha/chinook-database) |
-| [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | `dellstore` | `dellstore` | — |
-| [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` | — |
-| [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | `iso3166` | `iso3166` | — |
-| [MoMA](https://github.com/MuseumofModernArt/collection) | `moma` | `moma` | `moma` | `moma` | — |
+| [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | `dellstore` | `dellstore` | `dellstore` |
+| [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` |
+| [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | `iso3166` | `iso3166` | `iso3166` |
+| [MoMA](https://github.com/MuseumofModernArt/collection) | `moma` | `moma` | `moma` | `moma` | `moma` |
 | Northwind | [`yugabyte-northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/dalers/mywind) | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/jpwhite3/northwind-SQLite3) | — |
+| [NYC Taxi Trip Records](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) | — | — | — | — | `nyc-taxi` |
 | [OMDb](https://github.com/df7cb/omdb-postgresql) | `omdb` | — | — | — | — |
-| [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `yugabyte-pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | — |
+| [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `yugabyte-pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` |
 | Sakila / Pagila | [`pagila`](https://github.com/devrimgunduz/pagila) | [`sakila`](https://dev.mysql.com/doc/sakila/en/) | — | [`sakila`](https://github.com/bradleygrant/sakila-sqlite3) | — |
 | [SportsDB](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `sportsdb`, `yugabyte-sportsdb` | `sportsdb` | `sportsdb` | `sportsdb` | — |
-| [Stack Exchange](https://archive.org/details/stackexchange)¹ | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` | — |
-| [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | `usda` | `usda` | — |
-| World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | — |
+| [Stack Exchange](https://archive.org/details/stackexchange)¹ | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` |
+| [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | `usda` | `usda` | `usda` |
+| World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) |
 
 ¹ `<site>` is one of `beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking` (e.g. `stackexchange-chess`).
 
-Every engine except DuckDB also publishes a `latest` tag: it tracks `world` on PostgreSQL and MySQL, and `chinook` on CockroachDB and SQLite. DuckDB gains one once it carries a representative spread of datasets.
+Every engine also publishes a `latest` tag: it tracks `world` on PostgreSQL and MySQL, and `chinook` on CockroachDB, SQLite, and DuckDB.
 
 [ClickHouse](https://clickhouse.com/), [Apache Druid](https://druid.apache.org/), and [Apache Pinot](https://pinot.apache.org/) are planned — see [Future Work](#future-work).
 
@@ -62,7 +63,8 @@ This repository's own software and packaging are [MIT licensed](LICENSE). Each b
 
 * More MySQL datasets: port additional PostgreSQL datasets where a MySQL-native source exists or the upstream is format-neutral enough to hand-translate faithfully (see [Datasets not ported to MySQL](mysql/README.md#datasets-not-ported-to-mysql)).
 * [ClickHouse](https://clickhouse.com/) images: an OLAP columnar engine whose SQL dialect and bulk-load model (`MergeTree`, `INSERT`/`CSV`) differ from PostgreSQL enough that most datasets would need engine-specific transforms rather than reusing the postgres dumps verbatim.
-* More DuckDB datasets: the engine shipped with `chinook`; DuckDB's strong PostgreSQL compatibility for plain DDL + data dumps means several of the other engines' datasets should port with little change (see [duckdb/README.md](duckdb/README.md#duckdb-datasets)).
+* More DuckDB datasets: the engine now carries `chinook`, the pgFoundry family, `moma`, `nyc-taxi`, and the Stack Exchange sites; the remaining gaps (`northwind`, `sakila`, `sportsdb`) need either a DuckDB-readable upstream or a per-dataset transform (see [duckdb/README.md](duckdb/README.md#duckdb-datasets)).
 * [Apache Druid](https://druid.apache.org/) images: a real-time OLAP datastore built around immutable segments and batch/stream ingestion rather than conventional DDL + `INSERT`/`COPY`, so each dataset would need a dedicated ingest pipeline and schema mapping.
 * [Apache Pinot](https://pinot.apache.org/) images: a distributed OLAP engine oriented toward star-schema analytics tables and offline/online ingestion jobs, so the relational sample dumps would need similar per-dataset transforms and load paths.
+* More Parquet-native datasets: `nyc-taxi` showed the shape (fetch a Parquet file, `CREATE TABLE ... AS FROM read_parquet(...)`), and the open-data world publishes plenty more.
 * Find and add more free data sources.
