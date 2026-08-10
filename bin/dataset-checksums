@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Warms the bin/dataset-checksum cache for every dataset in the manifest.
+#
+# Why: the manifest embeds `$(bin/dataset-checksum '<urls>')` in every build and
+# push command, so a plain `dave build` pays one upstream metadata round-trip
+# per tag, strictly serially, before any Docker work starts. This script does
+# the same lookups once, concurrently, and parks the results in the cache
+# directory named by DATASET_CHECKSUM_CACHE; the per-tag calls that follow are
+# then local file reads.
+#
+# Best-effort by design: it mirrors dataset-checksum's fail-open contract. A
+# source whose metadata cannot be read is simply not cached (dataset-checksum
+# refuses to memoize a degraded result), so the per-tag call retries it later
+# and a flaky upstream costs a slow build, never a wrong one. Individual
+# failures therefore do not fail this script.
+#
+# Usage: DATASET_CHECKSUM_CACHE=<dir> dataset-checksums [-c <context>]
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+manifest="$root/manifest.yml"
+context=""
+jobs=16
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: DATASET_CHECKSUM_CACHE=<dir> dataset-checksums [-c <context>]
+
+  -c, --context <name>  only warm the tags of that context (e.g. sqlite)
+  -h, --help            this message
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c|--context) context="${2-}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "dataset-checksums: unknown argument: $1" >&2; usage; exit 2 ;;
+  esac
+done
+
+if [ -z "${DATASET_CHECKSUM_CACHE:-}" ]; then
+  echo "dataset-checksums: DATASET_CHECKSUM_CACHE is not set -- there is nowhere to warm." >&2
+  echo "dataset-checksums: set it to a directory (it is created if missing) and re-run." >&2
+  exit 1
+fi
+
+# Manifest as JSON, so the extraction below is a single jq program regardless of
+# which reader is available. yq is preferred (present on GitHub's runners);
+# otherwise any python3 that can import PyYAML will do. NOTE: the twin of this
+# function lives in bin/merge-manifests -- keep them in step.
+manifest_json() {
+  local out py
+  if command -v yq >/dev/null 2>&1 && out="$(yq -o=json '.' "$manifest" 2>/dev/null)" && [ -n "$out" ]; then
+    printf '%s' "$out"
+    return 0
+  fi
+  for py in python3 "$root/.venv/bin/python" python; do
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import yaml' 2>/dev/null; then
+      "$py" -c 'import json, sys, yaml; json.dump(yaml.safe_load(open(sys.argv[1])), sys.stdout)' "$manifest"
+      return 0
+    fi
+  done
+  echo "dataset-checksums: need yq, or a python3 with PyYAML, to read $manifest" >&2
+  return 1
+}
+
+# One line per distinct extractUrl value. Folded (`>-`) scalars arrive as a
+# single string with embedded newlines collapsed by the YAML reader; the
+# whitespace squeeze below guarantees one line per URL set either way, which is
+# what makes the NUL-delimited hand-off to xargs safe.
+urlsets="$(manifest_json | jq -r --arg ctx "$context" '
+  (.contexts // {})
+  | to_entries[]
+  | select($ctx == "" or .key == $ctx)
+  | ((.value // {}).tags // {})
+  | to_entries[]
+  | (((.value // {}).extractUrl // "") | gsub("^\\s+|\\s+$"; "") | gsub("\\s+"; " "))
+  | select(. != "")
+' | sort -u)"
+
+if [ -z "$urlsets" ]; then
+  echo "dataset-checksums: no extractUrl found${context:+ for context '$context'} in $manifest" >&2
+  exit 1
+fi
+
+count="$(printf '%s\n' "$urlsets" | wc -l | tr -d ' ')"
+mkdir -p "$DATASET_CHECKSUM_CACHE"
+echo "dataset-checksums: warming $count URL set(s) into $DATASET_CHECKSUM_CACHE with $jobs workers"
+
+# Each line is handed to dataset-checksum as exactly ONE argument: NUL
+# delimiters (`tr` + `xargs -0`) keep multi-URL, space-separated sets intact,
+# and avoid GNU-only `xargs -d`. `-n 1` pairs one URL set per process.
+# Failures are swallowed on purpose -- see the header.
+printf '%s\n' "$urlsets" \
+  | tr '\n' '\0' \
+  | xargs -0 -P "$jobs" -n 1 "$root/bin/dataset-checksum" >/dev/null 2>&1 || true
+
+echo "dataset-checksums: done"

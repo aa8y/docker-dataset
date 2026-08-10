@@ -6,9 +6,41 @@
 # on metadata failure emit a stable marker so a flaky upstream does not force a
 # spurious full rebuild.
 #
+# Cache-through mode (opt-in): when DATASET_CHECKSUM_CACHE names a directory,
+# a computed fingerprint is memoized there under a key derived from the URL
+# list. The manifest embeds a $(dataset-checksum ...) call in every build and
+# push command, so a single dave run otherwise pays ~75 serial round-trips;
+# with the cache warmed (see bin/dataset-checksums) each distinct URL set costs
+# one lookup for the whole run. Unset the variable and this script behaves
+# exactly as it always has. Fail-open results are deliberately NOT cached: if
+# any source's metadata could not be read it is folded in as `unknown`, and
+# memoizing that would let a transient upstream blip stick for the whole run.
+#
 # Usage: dataset-checksum "<space-separated EXTRACT_URL list>"
 # Output: a 16-char hex fingerprint on stdout.
 set -euo pipefail
+
+# sha256 of stdin (hex + "  -" on stdout, as both implementations print it).
+# GNU coreutils ships sha256sum; macOS only guarantees shasum(1), so prefer the
+# former where present and fall back to the latter.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256() { sha256sum; }
+else
+  sha256() { shasum -a 256; }
+fi
+
+# Cache lookup. A hit short-circuits every network call below. `-s` (rather
+# than `-f`) so a truncated/empty file is treated as a miss and recomputed.
+cache_file=""
+if [ -n "${DATASET_CHECKSUM_CACHE:-}" ]; then
+  key="$(printf '%s' "${1:-}" | sha256 | cut -c1-16)"
+  cache_file="${DATASET_CHECKSUM_CACHE}/${key}"
+  if [ -s "$cache_file" ]; then
+    cat "$cache_file"
+    exit 0
+  fi
+  mkdir -p "$DATASET_CHECKSUM_CACHE" 2>/dev/null || cache_file=""
+fi
 
 # Cheap HTTP fingerprint: HEAD headers (ETag/Last-Modified/Content-Length), with
 # a ranged-GET fallback for servers that reject HEAD. Echoes "" on failure.
@@ -39,6 +71,7 @@ archive_meta() {
 }
 
 acc=""
+degraded=0
 for u in ${1:-}; do
   case "$u" in
     *.git)
@@ -49,6 +82,16 @@ for u in ${1:-}; do
     *)
       v="$(http_meta "$u")" ;;
   esac
+  [ -n "$v" ] || degraded=1
   acc="${acc}${u}|${v:-unknown}"$'\n'
 done
-printf '%s' "$acc" | sha256sum | cut -c1-16
+checksum="$(printf '%s' "$acc" | sha256 | cut -c1-16)"
+
+# Memoize, but only a clean result (see the header). Write-then-rename so a
+# concurrent reader never sees a partial file.
+if [ -n "$cache_file" ] && [ "$degraded" -eq 0 ]; then
+  tmp="${cache_file}.$$.tmp"
+  { printf '%s\n' "$checksum" > "$tmp" && mv -f "$tmp" "$cache_file"; } || rm -f "$tmp"
+fi
+
+printf '%s\n' "$checksum"
