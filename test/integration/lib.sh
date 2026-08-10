@@ -88,7 +88,14 @@ check_counts() {
   extra="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
     '($a|keys_unsorted) - ($e|keys_unsorted) | .[]')" || exit
   # Count check on tables present in both: a number means exact match, a
-  # ">=N" / ">N" string means a floor.
+  # ">=N" / ">N" string means a floor. Anything else must land in the
+  # "invalid expected spec" branch, which takes both halves of the guard
+  # around capture: on a non-matching *string* capture yields an empty stream
+  # (not null!), and binding empty to $m would silently erase the whole
+  # expression for that key -- `// null` turns empty back into null; on a
+  # non-string (null, bool, ...) capture errors outright, which under
+  # `set -euo pipefail` used to abort the whole script with an opaque jq
+  # message -- `try ... catch null` turns the error into null.
   mismatch="$(jq -rn --argjson e "$expected" --argjson a "$actual" '
     ($e|keys_unsorted) as $ek
     | ($ek - ($ek - ($a|keys_unsorted)))[] as $k
@@ -96,7 +103,7 @@ check_counts() {
     | if ($ev|type) == "number" then
         (if $av != $ev then "\($k): expected \($ev) got \($av)" else empty end)
       else
-        ($ev | capture("^(?<op>>=|>)(?<n>[0-9]+)$")) as $m
+        (($ev | try capture("^(?<op>>=|>)(?<n>[0-9]+)$") catch null) // null) as $m
         | if $m == null then "\($k): invalid expected spec \"\($ev)\""
           else ($m.n | tonumber) as $n
             | if   ($m.op == ">"  and $av >  $n) then empty
