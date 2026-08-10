@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# GeoNames publishes no SQL, so stage the authored SQLite schema (shipped
+# alongside these build scripts) into the build dir as geonames.sql and append
+# sqlite3 CLI dot-commands to bulk-import the export unpacked by the extract
+# hook (mirrors the moma transform hook).
+#
+# `.mode ascii` selects the importer that does no quote processing at all, and
+# `.separator` then points it at the export's tab/newline separators -- the
+# export has no header row and no quoting, so a double quote in a place name is
+# a literal character and must not be read as a field delimiter.
+#
+# `.import` stores a blank field as an empty string rather than NULL, which the
+# nullable integer columns (`elevation` is blank for most rows) would otherwise
+# keep as text; the trailing UPDATE normalizes those three back to NULL, so they
+# match the postgres/cockroach loads.
+set -e
+cp /usr/local/lib/scripts/geonames/schema.sql geonames.sql
+cat >>geonames.sql <<'EOF'
+
+.mode ascii
+.separator "\t" "\n"
+.import cities15000.txt cities
+
+UPDATE cities SET population = nullif(population, ''),
+                  elevation  = nullif(elevation, ''),
+                  dem        = nullif(dem, '');
+EOF

@@ -1,0 +1,11 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. geonames is built at image
+# build time into /data/geonames.db from the tab-separated export. (Row counts
+# are asserted by the integration smoke test, since the database is a binary
+# file the structure test cannot introspect.)
+
+fileExistenceTests:
+  - name: "geonames database file exists"
+    path: "/data/geonames.db"
+    shouldExist: true

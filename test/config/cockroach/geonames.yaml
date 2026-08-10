@@ -1,0 +1,27 @@
+schemaVersion: "2.0.0"
+
+# GeoNames publishes no SQL, so the schema is authored in-repo
+# (cockroach/scripts/geonames/schema.sql) and the transform hook appends the
+# IMPORT INTO that bulk-loads the tab-separated export from the node's
+# external-IO dir. CockroachDB creates the database (COCKROACH_DATABASE) and
+# runs this script against it, so there is no CREATE DATABASE header.
+
+fileExistenceTests:
+  - name: "geonames init script exists"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    shouldExist: true
+
+  - name: "geonames cities export exists in the external-IO dir"
+    path: "/csv/cities15000.txt"
+    shouldExist: true
+
+fileContentTests:
+  - name: "geonames declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    expectedContents:
+      - "CREATE TABLE cities[ (]"
+
+  - name: "geonames loads data into every table"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    expectedContents:
+      - "IMPORT INTO cities[ (]"

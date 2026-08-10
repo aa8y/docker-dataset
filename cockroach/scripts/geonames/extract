@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# GeoNames ships cities15000 as a zip holding a single tab-separated export
+# (cities15000.txt). The generic EXTRACT_URL fetch downloads the .zip; here we
+# unpack it in place so the transform/load steps see the plain text file, then
+# drop the archive. `unzip` is part of the builder's shared tool set, so no
+# extraPrereqs are needed.
+set -e
+for archive in ./*.zip; do
+  unzip -o -q "$archive"
+  rm -f "$archive"
+done

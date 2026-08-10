@@ -1,0 +1,37 @@
+schemaVersion: "2.0.0"
+
+# GeoNames publishes no SQL, so the schema is authored in-repo
+# (mysql/scripts/geonames/schema.sql) and the tab-separated export ships
+# alongside the init script so the LOAD DATA INFILE directive resolves at server
+# runtime. Verify the wrapper SQL, the authored table, the bulk load, and the
+# shipped export.
+
+fileExistenceTests:
+  - name: "geonames init script exists"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    shouldExist: true
+
+  - name: "geonames data directory exists"
+    path: "/docker-entrypoint-initdb.d/geonames"
+    shouldExist: true
+
+  - name: "geonames cities export exists"
+    path: "/docker-entrypoint-initdb.d/geonames/cities15000.txt"
+    shouldExist: true
+
+fileContentTests:
+  - name: "geonames init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `geonames`"
+      - "USE `geonames`"
+
+  - name: "geonames declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    expectedContents:
+      - "CREATE TABLE cities[ (]"
+
+  - name: "geonames loads data into every table"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    expectedContents:
+      - "INTO TABLE cities"
