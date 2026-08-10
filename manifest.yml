@@ -70,7 +70,9 @@ templates:
   test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run.sh {{tag}} {{dataset}}{{/retagFrom}}'
   push: >
     {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
-    --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+    --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+    ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+    --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
     --build-arg DATASET={{dataset}}
     --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
     --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -300,7 +302,9 @@ contexts:
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-mysql.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -512,7 +516,9 @@ contexts:
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-cockroach.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -709,7 +715,9 @@ contexts:
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-sqlite.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
