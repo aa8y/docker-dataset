@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# GeoNames publishes no SQL, so stage the authored CockroachDB schema (shipped
+# alongside these build scripts) into the build dir as geonames.sql and append
+# the bulk load for the export unpacked by the extract hook.
+#
+# The export is a plain tab-separated file with no header row and no quoting, so
+# it is loaded with IMPORT INTO's DELIMITED (TSV) format rather than CSV -- a
+# double quote in a place name is a literal character and must not be read as a
+# field delimiter. `nullif = ''` turns a blank field into NULL, which the
+# nullable integer columns (`elevation` is blank for most rows) need. IMPORT
+# writes SSTs directly instead of routing every row through the SQL write layer
+# (the same bulk path the moma and stackexchange hooks use).
+#
+# The export itself is moved to the node's external-IO dir by the load hook (see
+# ../../Dockerfile), so `nodelocal://1/cities15000.txt` resolves to it.
+set -e
+cp /usr/local/lib/scripts/geonames/schema.sql geonames.sql
+cat >>geonames.sql <<'EOF'
+
+IMPORT INTO cities (
+  geonameid, name, asciiname, alternatenames, latitude, longitude,
+  feature_class, feature_code, country_code, cc2, admin1_code, admin2_code,
+  admin3_code, admin4_code, population, elevation, dem, timezone,
+  modification_date
+) DELIMITED DATA ('nodelocal://1/cities15000.txt') WITH nullif = '';
+EOF

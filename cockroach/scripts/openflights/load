@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Move the OpenFlights data files into the node's external-IO dir so the init
+# script's IMPORT INTO sources (`nodelocal://1/<file>`) resolve at container
+# start (see --external-io-dir in ../../Dockerfile).
+set -e
+mv airports.dat airlines.dat routes.dat /csv/

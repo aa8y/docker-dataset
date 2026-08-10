@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Inline the `source <file>;` includes in the datacharmer/test_db employees
+# dump.
+#
+# Upstream's employees.sql is a loader script meant to be run interactively by
+# the mysql client: it creates the schema and then pulls in the six data files
+# (load_departments.dump, load_employees.dump, ...) with the client's `source`
+# command. `source` is a client-side command, not SQL -- the MariaDB entrypoint
+# feeds our init script to the client on stdin, and even if it were honoured the
+# .dump files do not ship in the image -- so every `source` line is replaced
+# here with the contents of the file it names. The .dump files are plain
+# multi-row INSERTs, so the result is a single self-contained init script.
+#
+# Paths in the `source` lines are relative to the cloned repo, so the rewrite
+# runs from inside it. Nothing else is touched: the dump's own `DROP/CREATE
+# DATABASE` and `USE` lines are already removed by the generic transform step in
+# ../../Dockerfile (the image's single database is created by the load step),
+# and the progress rows the script prints (`SELECT '...' AS 'INFO'`) are plain
+# SELECTs that load cleanly, so they are left as upstream wrote them.
+set -e
+cd test_db
+
+while IFS= read -r line; do
+  if [[ "$line" =~ ^[[:space:]]*[Ss][Oo][Uu][Rr][Cc][Ee][[:space:]]+([^[:space:];]+) ]]; then
+    cat "${BASH_REMATCH[1]}"
+    echo
+  else
+    printf '%s\n' "$line"
+  fi
+done <employees.sql >employees.inlined.sql
+
+mv employees.inlined.sql employees.sql

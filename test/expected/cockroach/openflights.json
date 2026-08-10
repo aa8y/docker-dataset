@@ -1,0 +1,5 @@
+{
+  "public.airlines": ">=6162",
+  "public.airports": ">=7698",
+  "public.routes": ">=67663"
+}

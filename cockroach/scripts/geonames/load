@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Move the GeoNames export into the node's external-IO dir so the init script's
+# IMPORT INTO source (`nodelocal://1/cities15000.txt`) resolves at container
+# start (see --external-io-dir in ../../Dockerfile).
+set -e
+mv cities15000.txt /csv/

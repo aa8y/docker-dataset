@@ -14,12 +14,15 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | `airlines` | — |
 | Chinook | [`yugabyte-chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/lerocha/chinook-database) |
 | [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | `dellstore` | `dellstore` | `dellstore` |
+| [Employees](https://github.com/datacharmer/test_db) | — | `employees` | — | — | — |
 | [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` |
+| [GeoNames](https://download.geonames.org/export/dump/) | `geonames` | `geonames` | `geonames` | `geonames` | — |
 | [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | `iso3166` | `iso3166` | `iso3166` |
 | [MoMA](https://github.com/MuseumofModernArt/collection) | `moma` | `moma` | `moma` | `moma` | `moma` |
 | Northwind | [`yugabyte-northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/dalers/mywind) | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/jpwhite3/northwind-SQLite3) | — |
 | [NYC Taxi Trip Records](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) | — | — | — | — | `nyc-taxi` |
 | [OMDb](https://github.com/df7cb/omdb-postgresql) | `omdb` | — | — | — | — |
+| [OpenFlights](https://github.com/jpatokal/openflights/tree/master/data) | `openflights` | `openflights` | `openflights` | `openflights` | — |
 | [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `yugabyte-pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` |
 | Sakila / Pagila | [`pagila`](https://github.com/devrimgunduz/pagila) | [`sakila`](https://dev.mysql.com/doc/sakila/en/) | — | [`sakila`](https://github.com/bradleygrant/sakila-sqlite3) | — |
 | [SportsDB](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `sportsdb`, `yugabyte-sportsdb` | `sportsdb` | `sportsdb` | `sportsdb` | — |
@@ -27,7 +30,7 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | `usda` | `usda` | `usda` |
 | World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) |
 
-¹ `<site>` is one of `beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking` (e.g. `stackexchange-chess`).
+¹ `<site>` is one of `beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking`, `outdoors`, `boardgames` (e.g. `stackexchange-chess`).
 
 Every engine also publishes a `latest` tag: it tracks `world` on PostgreSQL and MySQL, and `chinook` on CockroachDB, SQLite, and DuckDB.
 

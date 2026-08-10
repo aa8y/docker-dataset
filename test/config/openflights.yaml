@@ -1,0 +1,50 @@
+schemaVersion: "2.0.0"
+
+# OpenFlights publishes no SQL, so the schema is authored in-repo
+# (postgres/scripts/openflights/schema.sql) and the three data files ship
+# alongside the init script so the \copy directives resolve at psql runtime.
+# Verify the wrapper SQL, the authored tables, the \copy loads, and the shipped
+# data files.
+
+fileExistenceTests:
+  - name: "openflights init script exists"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    shouldExist: true
+
+  - name: "openflights data directory exists"
+    path: "/docker-entrypoint-initdb.d/openflights"
+    shouldExist: true
+
+  - name: "openflights airports data file exists"
+    path: "/docker-entrypoint-initdb.d/openflights/airports.dat"
+    shouldExist: true
+
+  - name: "openflights airlines data file exists"
+    path: "/docker-entrypoint-initdb.d/openflights/airlines.dat"
+    shouldExist: true
+
+  - name: "openflights routes data file exists"
+    path: "/docker-entrypoint-initdb.d/openflights/routes.dat"
+    shouldExist: true
+
+fileContentTests:
+  - name: "openflights init script creates and connects to database"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    expectedContents:
+      - "CREATE DATABASE openflights"
+      - '\\c openflights'
+      - '\\cd /docker-entrypoint-initdb.d/openflights'
+
+  - name: "openflights declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    expectedContents:
+      - "CREATE TABLE airports[ (]"
+      - "CREATE TABLE airlines[ (]"
+      - "CREATE TABLE routes[ (]"
+
+  - name: "openflights loads data into every table"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    expectedContents:
+      - '\\copy airports '
+      - '\\copy airlines '
+      - '\\copy routes '

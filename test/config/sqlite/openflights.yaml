@@ -1,0 +1,11 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. openflights is built at image
+# build time into /data/openflights.db from the three published data files. (Row
+# counts are asserted by the integration smoke test, since the database is a
+# binary file the structure test cannot introspect.)
+
+fileExistenceTests:
+  - name: "openflights database file exists"
+    path: "/data/openflights.db"
+    shouldExist: true

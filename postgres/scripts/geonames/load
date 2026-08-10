@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Ship the GeoNames export next to the init script so the authored schema's
+# \copy directive resolves at container start (paired with cdDir in the
+# manifest).
+set -e
+mkdir -p /docker-entrypoint-initdb.d/geonames
+mv cities15000.txt /docker-entrypoint-initdb.d/geonames/

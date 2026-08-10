@@ -1,0 +1,38 @@
+schemaVersion: "2.0.0"
+
+# The StackExchange "boardgames" site dump ships as per-table XML in a 7z
+# archive (no SQL); the shared MySQL stackexchange transform hook converts each
+# table to CREATE TABLE + batched INSERTs + indexes. Verify the wrapper SQL plus
+# the eight tables and a few INSERT blocks. Counts drift (the archive.org dump
+# is refreshed over time), so the integration smoke test records floors.
+
+fileExistenceTests:
+  - name: "boardgames init script exists"
+    path: "/docker-entrypoint-initdb.d/boardgames.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "boardgames init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/boardgames.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `boardgames`"
+      - "USE `boardgames`"
+
+  - name: "boardgames declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/boardgames.sql"
+    expectedContents:
+      - "CREATE TABLE `Users`[ (]"
+      - "CREATE TABLE `Posts`[ (]"
+      - "CREATE TABLE `Comments`[ (]"
+      - "CREATE TABLE `Votes`[ (]"
+      - "CREATE TABLE `Badges`[ (]"
+      - "CREATE TABLE `Tags`[ (]"
+      - "CREATE TABLE `PostLinks`[ (]"
+      - "CREATE TABLE `PostHistory`[ (]"
+
+  - name: "boardgames loads data into representative tables"
+    path: "/docker-entrypoint-initdb.d/boardgames.sql"
+    expectedContents:
+      - "INSERT INTO `Users`[ (]"
+      - "INSERT INTO `Posts`[ (]"
+      - "INSERT INTO `PostHistory`[ (]"
