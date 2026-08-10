@@ -1,0 +1,13 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. chinook is built at image
+# build time from the vendor's Chinook_Sqlite.sql (rewritten for DuckDB by the
+# scripts/chinook transform hook) into /data/chinook.duckdb. Only file
+# existence is asserted -- the base image is distroless (no shell), so there
+# are no commandTests, and row counts are asserted by the integration smoke
+# test, which the structure test cannot introspect a binary database file for.
+
+fileExistenceTests:
+  - name: "chinook database file exists"
+    path: "/data/chinook.duckdb"
+    shouldExist: true

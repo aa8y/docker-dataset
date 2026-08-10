@@ -58,6 +58,11 @@ def se_sqlite():
 
 
 @pytest.fixture(scope="session")
+def duckdb_chinook():
+    return _load("duckdb_chinook_transform", "duckdb/scripts/chinook/transform")
+
+
+@pytest.fixture(scope="session")
 def se_cockroach():
     # Binds CSV_DIR from $CSV_DIR at import time; tests that run main() must
     # monkeypatch.setattr(se_cockroach, "CSV_DIR", ...) -- setting the env var

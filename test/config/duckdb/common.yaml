@@ -1,0 +1,34 @@
+schemaVersion: "2.0.0"
+
+# Shared assertions for every aa8y/duckdb-dataset tag. The base image is
+# distroless (no shell at all), so commandTests are impossible -- container-
+# structure-test would have nothing to exec them with. Everything here is
+# therefore metadata (inspected, not executed) or file existence (checked
+# against the image filesystem): the fixed exec-form CMD the loader's
+# db.duckdb symlink exists for, the /data workdir, the repository label, and
+# the engine binary. DATASET is per-dataset, so we only assert it is set
+# (non-empty).
+
+metadataTest:
+  envVars:
+    - key: DATASET
+      value: ".+"
+      isRegex: true
+  labels:
+    - key: "org.opencontainers.image.title"
+      value: "aa8y/duckdb-dataset"
+  cmd: ["/duckdb", "/data/db.duckdb"]
+  workdir: "/data"
+
+fileExistenceTests:
+  - name: "data directory exists"
+    path: "/data"
+    shouldExist: true
+
+  - name: "duckdb CLI exists"
+    path: "/duckdb"
+    shouldExist: true
+
+  - name: "fixed-path database symlink exists"
+    path: "/data/db.duckdb"
+    shouldExist: true
