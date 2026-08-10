@@ -25,11 +25,16 @@ def _load(name, relpath):
     return module
 
 
-# Distinct module names so the two `transform` files (and the two stackexchange
-# hooks) never collide in sys.modules.
+# Distinct module names so the same-named `transform` files (and the four
+# stackexchange hooks) never collide in sys.modules.
 @pytest.fixture(scope="session")
 def pgsql():
     return _load("pgsql_transform", "mysql/scripts/pgsql/transform")
+
+
+@pytest.fixture(scope="session")
+def sqlite_pgsql():
+    return _load("sqlite_pgsql_transform", "sqlite/scripts/pgsql/transform")
 
 
 @pytest.fixture(scope="session")
@@ -45,3 +50,35 @@ def se_postgres():
 @pytest.fixture(scope="session")
 def se_mysql():
     return _load("se_mysql_transform", "mysql/scripts/stackexchange/transform")
+
+
+@pytest.fixture(scope="session")
+def se_sqlite():
+    return _load("se_sqlite_transform", "sqlite/scripts/stackexchange/transform")
+
+
+@pytest.fixture(scope="session")
+def se_cockroach():
+    # Binds CSV_DIR from $CSV_DIR at import time; tests that run main() must
+    # monkeypatch.setattr(se_cockroach, "CSV_DIR", ...) -- setting the env var
+    # inside a test is too late.
+    return _load("se_cockroach_transform", "cockroach/scripts/stackexchange/transform")
+
+
+@pytest.fixture(scope="session")
+def pgfoundry():
+    return _load("pgfoundry_transform", "cockroach/scripts/pgfoundry/transform")
+
+
+@pytest.fixture(scope="session")
+def yugabyte():
+    return _load("yugabyte_transform", "cockroach/scripts/yugabyte/transform")
+
+
+@pytest.fixture(scope="session")
+def moma():
+    # Like the cockroach stackexchange hook, CSV_DIR is bound at import; SCHEMA
+    # is a fixed path constant read only inside main(). Neither is touched at
+    # import, so loading is side-effect free -- but both must be patched on the
+    # module object before main() runs.
+    return _load("moma_transform", "cockroach/scripts/moma/transform")
