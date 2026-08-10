@@ -34,6 +34,7 @@ fi
 
 TAG="${1:?usage: run-mysql.sh [--update] <tag> <datasets-csv>}"
 DATASETS_CSV="${2:?usage: run-mysql.sh [--update] <tag> <datasets-csv>}"
+IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
 
 REPOSITORY="${REPOSITORY:-aa8y/mysql-dataset}"
 IMAGE="${REPOSITORY}:${TAG}"
@@ -52,27 +53,21 @@ ROOT_PW="${MYSQL_ROOT_PASSWORD:-mysql}"
 #     by prefix and a new site needs no edit here.
 VOLATILE_DATASETS="moma"
 VOLATILE_TAG_PREFIXES="stackexchange-"
-is_volatile() {
-  local db="$1"
-  case " $VOLATILE_DATASETS " in *" $db "*) return 0 ;; esac
-  local prefix
-  for prefix in $VOLATILE_TAG_PREFIXES; do
-    case "$TAG" in "$prefix"*) return 0 ;; esac
-  done
-  return 1
-}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXPECTED_DIR="${SCRIPT_DIR}/../expected/mysql"
-CONTAINER="my-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
+EXPECTED_SUBDIR="mysql"
+. "${SCRIPT_DIR}/lib.sh"
 
-GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; RESET=$'\033[0m'
-info() { printf '%s\n' "$*" >&2; }
-pass() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
-fail() { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; }
+CONTAINER="my-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
 
 cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
+
+# Identical-image dedupe: some tags are just a second name for the same build
+# (`latest` = `world`), and what a container does is a pure function of its
+# image, so a clean pass need not be re-proven. See lib.sh for the stamp
+# semantics.
+if dedupe_skip; then exit 0; fi
 
 mysql_q() {
   # mysql_q <args...> — run the mariadb client in the test container, returning
@@ -81,18 +76,30 @@ mysql_q() {
 }
 
 # Authoritative counts for every base table in a database, as a JSON object
-# keyed by <db>.<table>. MariaDB has no query_to_xml, so we list the base
-# tables then run an actual count(*) per table and assemble the object with jq.
+# keyed by <db>.<table>. MariaDB has no query_to_xml, so we list the base tables
+# from information_schema and then count them all in a single generated
+# UNION ALL query -- two client round-trips and one jq fold for the whole
+# database, however many tables it has. Counting one table per `docker exec`
+# instead pays a container-exec plus mariadb-client cold start every time, which
+# on the wider datasets (sportsdb ships 107 tables) dominates the run.
 actual_counts() {
-  local db="$1" tables t n json='{}'
+  local db="$1" tables t esc keyesc sql first=1
   tables="$(mysql_q -e "SELECT table_name FROM information_schema.tables \
     WHERE table_type='BASE TABLE' AND table_schema='${db}' ORDER BY table_name")"
+  sql=""
   while IFS= read -r t; do
     [[ -z "$t" ]] && continue
-    n="$(mysql_q -e "SELECT COUNT(*) FROM \`${db}\`.\`${t}\`")"
-    json="$(jq --arg k "${db}.${t}" --argjson v "${n:-0}" '. + {($k): $v}' <<<"$json")"
+    esc="${t//\`/\`\`}"            # escape embedded backticks (identifier)
+    keyesc="$(sql_squote "$t")"    # escape embedded single quotes (string literal)
+    [[ "$first" -eq 0 ]] && sql+=" UNION ALL "
+    sql+="SELECT '${db}.${keyesc}' AS k, COUNT(*) AS n FROM \`${db}\`.\`${esc}\`"
+    first=0
   done <<<"$tables"
-  printf '%s\n' "$json"
+
+  if [[ -z "$sql" ]]; then printf '{}\n'; return; fi
+  # Output `<key>\t<count>` rows (mariadb -N -B is header-less TSV), then fold
+  # into a JSON object.
+  mysql_q -e "$sql" | counts_to_json $'\t'
 }
 
 info "==> ${IMAGE}"
@@ -104,23 +111,19 @@ docker run -d --name "$CONTAINER" "$IMAGE" >/dev/null
 # "Ready for start up." only after every init script has run and just before it
 # execs the real server -- so we wait for that marker first, then for ping.
 #
-# The marker wait has to cover the full init-script import, which for the larger
-# INSERT-based datasets (sportsdb) is the slow part and runs noticeably slower on
-# CI runners than locally. conf/zz-dataset-fast-import.cnf cuts that time, but we
-# still allow a generous budget here so a slow runner doesn't spuriously fail.
+# Both phases share one wall-clock budget, not a fixed iteration count: an
+# iteration costs a `docker exec` round-trip, which on a loaded ARM runner can
+# itself take a second or more, so an N-iteration loop silently waits far less
+# than N seconds. 300s matches the Postgres/CockroachDB budgets. The marker wait
+# has to cover the full init-script import, which for the larger INSERT-based
+# datasets (sportsdb) is the slow part and runs noticeably slower on CI runners
+# than locally. conf/zz-dataset-fast-import.cnf cuts that time, but we still
+# allow a generous budget here so a slow runner doesn't spuriously fail.
+READY_TIMEOUT="${READY_TIMEOUT:-300}"
+deadline=$(( SECONDS + READY_TIMEOUT ))
 ready=0
-for _ in $(seq 1 300); do
-  if docker logs "$CONTAINER" 2>&1 | grep -q "Ready for start up"; then
-    ready=1; break
-  fi
-  if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != "true" ]]; then
-    break
-  fi
-  sleep 1
-done
-if [[ "$ready" -eq 1 ]]; then
-  ready=0
-  for _ in $(seq 1 60); do
+if wait_for_log_marker "Ready for start up" "$deadline"; then
+  while (( SECONDS < deadline )); do
     if docker exec "$CONTAINER" mariadb-admin -uroot -p"$ROOT_PW" ping >/dev/null 2>&1; then
       ready=1; break
     fi
@@ -128,25 +131,18 @@ if [[ "$ready" -eq 1 ]]; then
   done
 fi
 if [[ "$ready" -ne 1 ]]; then
-  fail "${IMAGE}: MariaDB did not become ready in time"
+  fail "${IMAGE}: MariaDB did not become ready in time (${READY_TIMEOUT}s)"
   docker logs "$CONTAINER" 2>&1 | tail -40 >&2
   exit 1
 fi
 
 rc=0
-IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
 for db in "${DATASETS[@]}"; do
   expected_file="${EXPECTED_DIR}/${db}.json"
   actual="$(actual_counts "$db")"
 
   if [[ "$UPDATE" -eq 1 ]]; then
-    mkdir -p "$EXPECTED_DIR"
-    if is_volatile "$db"; then
-      printf '%s\n' "$actual" | jq -S 'map_values(">=" + tostring)' > "$expected_file"
-    else
-      printf '%s\n' "$actual" | jq -S . > "$expected_file"
-    fi
-    pass "${db}: wrote $(jq 'length' <<<"$actual") tables to expected/mysql/${db}.json"
+    write_expected "$db" "$actual"
     continue
   fi
 
@@ -154,44 +150,9 @@ for db in "${DATASETS[@]}"; do
     fail "${db}: missing expected file ${expected_file} (run with --update to create)"
     rc=1; continue
   fi
-  expected="$(cat "$expected_file")"
 
-  missing="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
-    '($e|keys_unsorted) - ($a|keys_unsorted) | .[]')"
-  extra="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
-    '($a|keys_unsorted) - ($e|keys_unsorted) | .[]')"
-  mismatch="$(jq -rn --argjson e "$expected" --argjson a "$actual" '
-    ($e|keys_unsorted) as $ek
-    | ($ek - ($ek - ($a|keys_unsorted)))[] as $k
-    | $e[$k] as $ev | $a[$k] as $av
-    | if ($ev|type) == "number" then
-        (if $av != $ev then "\($k): expected \($ev) got \($av)" else empty end)
-      else
-        ($ev | capture("^(?<op>>=|>)(?<n>[0-9]+)$")) as $m
-        | if $m == null then "\($k): invalid expected spec \"\($ev)\""
-          else ($m.n | tonumber) as $n
-            | if   ($m.op == ">"  and $av >  $n) then empty
-              elif ($m.op == ">=" and $av >= $n) then empty
-              else "\($k): expected \($ev) got \($av)" end
-          end
-      end')"
-
-  db_ok=1
-  if [[ -n "$missing" ]]; then
-    db_ok=0; while IFS= read -r t; do fail "${db}: missing table ${t}"; done <<<"$missing"
-  fi
-  if [[ -n "$extra" ]]; then
-    db_ok=0; while IFS= read -r t; do fail "${db}: unexpected table ${t}"; done <<<"$extra"
-  fi
-  if [[ -n "$mismatch" ]]; then
-    db_ok=0; while IFS= read -r m; do fail "${db}: count mismatch ${m}"; done <<<"$mismatch"
-  fi
-
-  if [[ "$db_ok" -eq 1 ]]; then
-    pass "${db}: $(jq 'length' <<<"$expected") tables present with matching counts"
-  else
-    rc=1
-  fi
+  check_counts "$db" "$(cat "$expected_file")" "$actual" || rc=1
 done
 
+record_pass_stamp "$rc"
 exit "$rc"

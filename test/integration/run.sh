@@ -38,6 +38,7 @@ fi
 
 TAG="${1:?usage: run.sh [--update] <tag> <datasets-csv>}"
 DATASETS_CSV="${2:?usage: run.sh [--update] <tag> <datasets-csv>}"
+IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
 
 REPOSITORY="${REPOSITORY:-aa8y/postgres-dataset}"
 IMAGE="${REPOSITORY}:${TAG}"
@@ -54,33 +55,21 @@ IMAGE="${REPOSITORY}:${TAG}"
 #     by prefix and a new site needs no edit here.
 VOLATILE_DATASETS="omdb moma"
 VOLATILE_TAG_PREFIXES="stackexchange-"
-is_volatile() {
-  # is_volatile <db> — true if this dataset's counts drift between builds,
-  # either because the dataset is explicitly listed or because $TAG matches a
-  # volatile prefix (each image carries a single dataset, so the tag decides).
-  local db="$1"
-  case " $VOLATILE_DATASETS " in *" $db "*) return 0 ;; esac
-  local prefix
-  for prefix in $VOLATILE_TAG_PREFIXES; do
-    case "$TAG" in "$prefix"*) return 0 ;; esac
-  done
-  return 1
-}
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXPECTED_DIR="${SCRIPT_DIR}/../expected"
-CONTAINER="pg-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
 
-# All human-readable logging goes to stderr. `dave test` runs this via
-# child_process.exec and discards a command's stdout, surfacing only stderr
-# when the command fails -- so routing diagnostics to stderr keeps CI
-# failures (which tables/counts mismatched) visible.
-GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; RESET=$'\033[0m'
-info() { printf '%s\n' "$*" >&2; }
-pass() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
-fail() { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXPECTED_SUBDIR=""   # postgres, the original engine, keeps test/expected/ un-nested
+. "${SCRIPT_DIR}/lib.sh"
+
+CONTAINER="pg-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
 
 cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
+
+# Identical-image dedupe: some tags are just a second name for the same build
+# (`latest` = `world`), and what a container does is a pure function of its
+# image, so a clean pass need not be re-proven. See lib.sh for the stamp
+# semantics.
+if dedupe_skip; then exit 0; fi
 
 psql_db() {
   # psql_db <db> <args...> — run psql against <db> in the test container.
@@ -137,19 +126,12 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 
 rc=0
-IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
 for db in "${DATASETS[@]}"; do
   expected_file="${EXPECTED_DIR}/${db}.json"
   actual="$(actual_counts "$db")"
 
   if [[ "$UPDATE" -eq 1 ]]; then
-    mkdir -p "$EXPECTED_DIR"
-    if is_volatile "$db"; then
-      printf '%s\n' "$actual" | jq -S 'map_values(">=" + tostring)' > "$expected_file"
-    else
-      printf '%s\n' "$actual" | jq -S . > "$expected_file"
-    fi
-    pass "${db}: wrote $(jq 'length' <<<"$actual") tables to expected/${db}.json"
+    write_expected "$db" "$actual"
     continue
   fi
 
@@ -157,47 +139,9 @@ for db in "${DATASETS[@]}"; do
     fail "${db}: missing expected file ${expected_file} (run with --update to create)"
     rc=1; continue
   fi
-  expected="$(cat "$expected_file")"
 
-  # Table-set diff: keys present in one side but not the other.
-  missing="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
-    '($e|keys_unsorted) - ($a|keys_unsorted) | .[]')"
-  extra="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
-    '($a|keys_unsorted) - ($e|keys_unsorted) | .[]')"
-  # Count check on tables present in both: a number means exact match, a
-  # ">=N" / ">N" string means a floor.
-  mismatch="$(jq -rn --argjson e "$expected" --argjson a "$actual" '
-    ($e|keys_unsorted) as $ek
-    | ($ek - ($ek - ($a|keys_unsorted)))[] as $k
-    | $e[$k] as $ev | $a[$k] as $av
-    | if ($ev|type) == "number" then
-        (if $av != $ev then "\($k): expected \($ev) got \($av)" else empty end)
-      else
-        ($ev | capture("^(?<op>>=|>)(?<n>[0-9]+)$")) as $m
-        | if $m == null then "\($k): invalid expected spec \"\($ev)\""
-          else ($m.n | tonumber) as $n
-            | if   ($m.op == ">"  and $av >  $n) then empty
-              elif ($m.op == ">=" and $av >= $n) then empty
-              else "\($k): expected \($ev) got \($av)" end
-          end
-      end')"
-
-  db_ok=1
-  if [[ -n "$missing" ]]; then
-    db_ok=0; while IFS= read -r t; do fail "${db}: missing table ${t}"; done <<<"$missing"
-  fi
-  if [[ -n "$extra" ]]; then
-    db_ok=0; while IFS= read -r t; do fail "${db}: unexpected table ${t}"; done <<<"$extra"
-  fi
-  if [[ -n "$mismatch" ]]; then
-    db_ok=0; while IFS= read -r m; do fail "${db}: count mismatch ${m}"; done <<<"$mismatch"
-  fi
-
-  if [[ "$db_ok" -eq 1 ]]; then
-    pass "${db}: $(jq 'length' <<<"$expected") tables present with matching counts"
-  else
-    rc=1
-  fi
+  check_counts "$db" "$(cat "$expected_file")" "$actual" || rc=1
 done
 
+record_pass_stamp "$rc"
 exit "$rc"
