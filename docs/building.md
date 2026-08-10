@@ -13,9 +13,9 @@ docker build -t aa8y/postgres-dataset:world postgres \
   --build-arg EXTRACT_URL=https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz \
   --build-arg SQL_FILES=dbsamples-0.1/world/world.sql
 ```
-and then following the same steps for using your custom image as in that engine's README ([PostgreSQL](../postgres/README.md#usage), [MySQL](../mysql/README.md#usage), [CockroachDB](../cockroach/README.md#usage), [SQLite](../sqlite/README.md#usage)).
+and then following the same steps for using your custom image as in that engine's README ([PostgreSQL](../postgres/README.md#usage), [MySQL](../mysql/README.md#usage), [CockroachDB](../cockroach/README.md#usage), [SQLite](../sqlite/README.md#usage), [DuckDB](../duckdb/README.md#usage)).
 
-Swap `-c postgres` (and the `postgres` build context) for `mysql`, `cockroach`, or `sqlite` to build the other engines.
+Swap `-c postgres` (and the `postgres` build context) for `mysql`, `cockroach`, `sqlite`, or `duckdb` to build the other engines.
 
 ## Build caching
 

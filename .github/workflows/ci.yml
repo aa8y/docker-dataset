@@ -54,11 +54,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 4 contexts x 2 native runners = 8 shards. Sharding by context bounds
+        # 5 contexts x 2 native runners = 10 shards. Sharding by context bounds
         # the critical path at the slowest single context on one arch instead
         # of every context serially on one runner, and each shard's dave run
         # is further parallelized within a command type via --jobs.
-        context: [postgres, mysql, sqlite, cockroach]
+        context: [postgres, mysql, sqlite, cockroach, duckdb]
         arch: [amd64, arm64]
         include:
           - arch: amd64
