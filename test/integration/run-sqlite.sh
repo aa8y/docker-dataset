@@ -86,9 +86,28 @@ actual_counts() {
   sqlite_q "$db" "$sql" | counts_to_json '|'
 }
 
+integrity_ok() {
+  # integrity_ok <db> — cheap corruption gate, run before counting (in --update
+  # mode too, so expectations are never recorded from a damaged artifact).
+  # PRAGMA quick_check walks every table btree and prints exactly "ok" for a
+  # sound file, or a list of problems for a truncated or corrupt one -- damage
+  # that row counts alone can miss. It skips integrity_check's expensive
+  # index-content verification, so it costs about a second per dataset. A
+  # database sqlite cannot open at all prints its error on stderr and yields
+  # no stdout, which the empty-result message below covers; that is a fact
+  # about this one dataset file, not the run, so it must not abort the script.
+  local db="$1" result
+  result="$(sqlite_q "$db" "PRAGMA quick_check")" || true
+  if [[ "$result" != "ok" ]]; then
+    fail "${db}: PRAGMA quick_check failed: ${result:-no output (unreadable database?)}"
+    return 1
+  fi
+}
+
 rc=0
 for db in "${DATASETS[@]}"; do
   info "==> ${IMAGE} (${db})"
+  integrity_ok "$db" || { rc=1; continue; }
   expected_file="${EXPECTED_DIR}/${db}.json"
   actual="$(actual_counts "$db")"
 
