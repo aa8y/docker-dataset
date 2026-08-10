@@ -1020,6 +1020,23 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/moma.yaml
+      # NYC TLC yellow-taxi trip records -- the DuckDB flagship, and the one
+      # dataset here that ships as Parquet rather than SQL or CSV. Parquet is
+      # compiled into the duckdb CLI, so the scripts/nyc-taxi transform hook
+      # only has to author the one `CREATE TABLE trips AS FROM read_parquet(...)`
+      # statement the generic LOAD step runs; the 73.5 MB file itself stays
+      # behind in the loader stage (only /data is copied into the image).
+      #
+      # The month is pinned rather than tracking "latest available" so the tag
+      # is reproducible: TLC publishes a new file every month and revises older
+      # ones, and an unpinned URL would make the row count -- and so the smoke
+      # test's expectation -- drift under CI. 2025-06 is ~4M rows.
+      nyc-taxi:
+        extractUrl: https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-06.parquet
+        sqlFiles: nyc-taxi.sql
+        structureTest:
+          configs:
+            - test/config/duckdb/nyc-taxi.yaml
       # No `latest` alias yet: with a single dataset it would only pin `latest`
       # to `chinook` prematurely. Add it (retagFrom, mirroring the other
       # engines) once the context carries a representative spread of datasets.

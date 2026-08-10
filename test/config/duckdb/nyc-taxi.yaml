@@ -1,0 +1,17 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. nyc-taxi is built at image
+# build time from the pinned TLC Parquet file into /data/nyc-taxi.duckdb, which
+# is also where the shipped-Parquet check bites: the source file must NOT be in
+# the image (it is left behind in the loader stage), so its absence is asserted
+# here. Row counts are asserted by the integration smoke test, which the
+# structure test cannot introspect a binary database file for.
+
+fileExistenceTests:
+  - name: "nyc-taxi database file exists"
+    path: "/data/nyc-taxi.duckdb"
+    shouldExist: true
+
+  - name: "source parquet is not shipped"
+    path: "/data/yellow_tripdata_2025-06.parquet"
+    shouldExist: false

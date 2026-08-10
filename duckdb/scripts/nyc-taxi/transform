@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# The NYC TLC trip-record dataset ships as Parquet, not SQL, so author the one
+# statement that turns it into a table and let the generic LOAD step run it.
+#
+# Parquet support is compiled into the duckdb CLI, so the loader needs no
+# extension and no download at load time: EXTRACT fetches the .parquet into the
+# build dir, the whole build dir travels to the loader stage, and the loader
+# runs with it as its WORKDIR -- which is what lets read_parquet() name the file
+# relatively. Only /data is copied into the final image, so the 73.5 MB Parquet
+# file is left behind in the loader and the image ships nothing but the
+# database.
+#
+# `CREATE TABLE ... AS FROM read_parquet(...)` is DuckDB's FROM-first spelling
+# of `AS SELECT * FROM ...`; the Parquet schema becomes the table's, so the
+# column names and types are the TLC's own (pickup/dropoff timestamps, fare
+# components as DOUBLE, and so on) rather than anything invented here.
+set -e
+for parquet in ./*.parquet; do
+  cat >"${DATASET}.sql" <<EOF
+-- NYC TLC yellow-taxi trip records, loaded from the Parquet file fetched by
+-- EXTRACT_URL. See duckdb/scripts/nyc-taxi/transform.
+CREATE TABLE trips AS FROM read_parquet('${parquet#./}');
+EOF
+done
