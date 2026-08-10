@@ -77,6 +77,13 @@ jobs:
       # manifest templates keep the unsuffixed legacy ref as a read fallback).
       PLATFORM: ${{ matrix.platform }}
       CACHE_ARCH: -${{ matrix.arch }}
+      # True exactly when this run can read repo secrets: a push (on.push only
+      # fires for master) or a PR whose head branch lives in this repository.
+      # Fork PRs get no secrets by GitHub's own model, so for them this is
+      # false -- no login happens, CACHE_TO_SCOPE is never set, and the build
+      # renders no --cache-to at all: fork PRs stay import-only, exactly the
+      # behavior they have always had.
+      REGISTRY_AUTH: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - uses: actions/checkout@v7
 
@@ -116,13 +123,25 @@ jobs:
         with:
           driver: docker
 
-      # Only master pushes publish, so only they need credentials.
+      # Master pushes need credentials to publish; same-repo PRs need them
+      # only so their cache export below can write to the registry.
       - name: Log in to Docker Hub
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: env.REGISTRY_AUTH == 'true'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Opt in to exporting this shard's build cache under a PR scope
+      # (buildcache-<tag>-<arch>-pr), so trusted PR builds upload the layers
+      # they just built without ever clobbering the master-owned
+      # buildcache-<tag>-<arch> refs the import side trusts. Gated on the
+      # same-repo condition above: on fork PRs the guard is false, the
+      # variable stays unset, and the manifest's ${CACHE_TO_SCOPE:+...} guard
+      # erases the --cache-to flag entirely.
+      - name: Export PR build cache
+        if: env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
+        run: echo "CACHE_TO_SCOPE=pr" >> "$GITHUB_ENV"
 
       # Every rendered build/push command embeds $(bin/dataset-checksum ...);
       # uncached, that is one upstream metadata round-trip per tag, serialized
