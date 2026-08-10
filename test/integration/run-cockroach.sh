@@ -46,7 +46,7 @@ IMAGE="${REPOSITORY}:${TAG}"
 #
 # Mirrors run.sh / run-mysql.sh: volatility is detected two ways so we don't
 # hand-maintain a flat list.
-VOLATILE_DATASETS=""
+VOLATILE_DATASETS="geonames openflights"
 VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

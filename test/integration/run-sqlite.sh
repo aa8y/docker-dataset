@@ -44,7 +44,7 @@ IMAGE="${REPOSITORY}:${TAG}"
 # exact counts drift between builds. For these, --update records a floor
 # (">=<count-at-build-time>") instead of an exact count. Mirrors the other
 # run scripts.
-VOLATILE_DATASETS="moma"
+VOLATILE_DATASETS="moma geonames openflights"
 VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

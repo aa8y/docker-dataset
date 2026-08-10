@@ -18,8 +18,9 @@
 #   - a number  -> assert count(*) == N exactly (deterministic datasets), or
 #   - ">=N"     -> assert count(*) >= N (a floor), used for datasets whose
 #                  data is fetched from a live upstream at build time and so
-#                  drifts between builds (omdb, moma, and any `stackexchange-`
-#                  tagged site, whose archive.org dump is refreshed over time).
+#                  drifts between builds (omdb, moma, geonames, openflights,
+#                  and any `stackexchange-` tagged site, whose archive.org dump
+#                  is refreshed over time).
 #
 # Usage:
 #   run.sh <tag> <datasets-csv>            # assert against expected/*.json
@@ -53,7 +54,7 @@ IMAGE="${REPOSITORY}:${TAG}"
 #     StackExchange site ships under a `stackexchange-` tag and is built from a
 #     periodically refreshed archive.org dump, so the whole family is volatile
 #     by prefix and a new site needs no edit here.
-VOLATILE_DATASETS="omdb moma"
+VOLATILE_DATASETS="omdb moma geonames openflights"
 VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

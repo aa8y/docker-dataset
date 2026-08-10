@@ -19,7 +19,7 @@
 #   - a number  -> assert count(*) == N exactly (deterministic datasets), or
 #   - ">=N"     -> assert count(*) >= N (a floor), used for datasets whose data
 #                  is fetched from a live upstream at build time and so drifts
-#                  between builds (moma).
+#                  between builds (moma, geonames, openflights).
 #
 # Usage:
 #   run-mysql.sh <tag> <datasets-csv>            # assert against expected/*.json
@@ -51,7 +51,7 @@ ROOT_PW="${MYSQL_ROOT_PASSWORD:-mysql}"
 #     StackExchange site ships under a `stackexchange-` tag and is built from a
 #     periodically refreshed archive.org dump, so the whole family is volatile
 #     by prefix and a new site needs no edit here.
-VOLATILE_DATASETS="moma"
+VOLATILE_DATASETS="moma geonames openflights"
 VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
