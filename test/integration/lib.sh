@@ -112,6 +112,15 @@ check_counts() {
           end
       end')" || exit
 
+  # A database that yields no tables at all while some were expected is not a
+  # per-table problem -- the database itself is absent (a typo'd name yields
+  # zero information_schema rows, not an error). One clear line beats a wall of
+  # per-table "missing table" lines.
+  if [[ -n "$missing" && "$(jq 'length' <<<"$actual")" -eq 0 ]]; then
+    fail "${db}: no tables found — wrong database name?"
+    return 1
+  fi
+
   db_ok=1
   if [[ -n "$missing" ]]; then
     db_ok=0; while IFS= read -r t; do fail "${db}: missing table ${t}"; done <<<"$missing"
