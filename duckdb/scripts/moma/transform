@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# MoMA publishes no SQL, so stage the authored DuckDB schema (shipped alongside
+# these build scripts) into the build dir as moma.sql and append the COPY
+# statements that bulk-load the CSVs fetched by EXTRACT_URL.
+#
+# The DuckDB counterpart of ../../../sqlite/scripts/moma/transform. Where the
+# sqlite hook appends sqlite3 `.import` dot-commands, DuckDB reads CSV in plain
+# SQL, so the loader needs nothing but the script itself. The CSVs travel from
+# the builder stage to the loader with the rest of the build dir and are read
+# relative to it (the loader's WORKDIR), so nothing but the finished database
+# reaches the image.
+#
+# HEADER skips the CSVs' header row (the column names are positional here --
+# the schema declares them in file order). The MoMA export quotes fields
+# containing commas and newlines and escapes an embedded quote by doubling it,
+# which is DuckDB's CSV default, so no dialect options are needed.
+set -e
+cp /usr/local/lib/scripts/moma/schema.sql moma.sql
+cat >>moma.sql <<'EOF'
+
+COPY artists FROM 'Artists.csv' (FORMAT CSV, HEADER);
+COPY artworks FROM 'Artworks.csv' (FORMAT CSV, HEADER);
+EOF

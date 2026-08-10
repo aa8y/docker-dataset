@@ -1006,6 +1006,20 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/dellstore.yaml
+      # MoMA research collection. Published only as CSV, so the schema is
+      # authored in-repo (duckdb/scripts/moma) and the CSVs are bulk-loaded at
+      # build time by the `COPY ... FROM '<file>.csv'` statements the transform
+      # hook appends -- DuckDB reads CSV in plain SQL, so unlike the sqlite tag
+      # there are no dot-commands involved. Counts drift between builds (the
+      # CSVs are refreshed upstream), so the smoke test records floors.
+      moma:
+        extractUrl: >-
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artworks.csv
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artists.csv
+        sqlFiles: moma.sql
+        structureTest:
+          configs:
+            - test/config/duckdb/moma.yaml
       # No `latest` alias yet: with a single dataset it would only pin `latest`
       # to `chinook` prematurely. Add it (retagFrom, mirroring the other
       # engines) once the context carries a representative spread of datasets.

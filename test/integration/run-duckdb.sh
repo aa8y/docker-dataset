@@ -40,9 +40,8 @@ REPOSITORY="${REPOSITORY:-aa8y/duckdb-dataset}"
 IMAGE="${REPOSITORY}:${TAG}"
 
 # Datasets whose row data is fetched from a live upstream at build time, so
-# exact counts drift between builds. None of these ship on DuckDB yet, but the
-# knobs mirror the other run scripts so porting one is just a manifest tag +
-# expected file.
+# exact counts drift between builds: the MoMA CSVs and the StackExchange dumps
+# are both refreshed in place. Same knobs as the other run scripts.
 VOLATILE_DATASETS="moma"
 VOLATILE_TAG_PREFIXES="stackexchange-"
 

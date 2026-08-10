@@ -1,0 +1,12 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. moma is built at image build
+# time from the upstream CSVs into /data/moma.duckdb. Only file existence is
+# asserted -- the base image is distroless (no shell), so there are no
+# commandTests, and row counts are asserted by the integration smoke test,
+# which the structure test cannot introspect a binary database file for.
+
+fileExistenceTests:
+  - name: "moma database file exists"
+    path: "/data/moma.duckdb"
+    shouldExist: true
