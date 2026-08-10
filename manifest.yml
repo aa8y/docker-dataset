@@ -21,9 +21,43 @@ templates:
   # fingerprint changes, busting EXTRACT -> TRANSFORM -> LOAD; otherwise the
   # cached layers are reused. Computed live via $(...) command substitution, so
   # it stays per-tag without committing anything to this file.
+  #
+  # Environment knobs. Each is an ordinary shell parameter expansion: dave only
+  # renders Mustache, so the literal `${...}` survives into the command and the
+  # shell dave spawns it in does the expanding. Every one carries a default that
+  # reproduces the previous hardcoded behaviour, so with none of them exported
+  # these commands do exactly what they always did. They exist so a single
+  # manifest can drive both one runner building everything and a per-arch
+  # fan-out that merges afterwards:
+  #   PLATFORM        build: restrict the local build to a single platform.
+  #                   push:  the platform list to publish (default: both).
+  #   CACHE_ARCH      suffix for every buildcache ref, so an amd64 and an arm64
+  #                   runner write to separate refs (`-amd64`, `-arm64`) instead
+  #                   of clobbering one shared one. Unset, the ref is that
+  #                   shared legacy ref; the build template also keeps importing
+  #                   the unsuffixed ref while CACHE_ARCH is set, so a per-arch
+  #                   run still gets a warm cache from before the split.
+  #   CACHE_TO_SCOPE  build: additionally EXPORT the cache, under a scoped ref
+  #                   (`...-<scope>`). Absent unless set, so an ordinary local
+  #                   build still never writes to the registry.
+  #   TAG_SUFFIX      push: suffix for the published tag, so per-arch pushes
+  #                   land on `<tag>-amd64` / `<tag>-arm64` for
+  #                   bin/merge-manifests to join into one multi-arch tag.
+  #
+  # `retagFrom: <tag>` marks a tag as a pure alias of another tag in the same
+  # context (`latest`, say). There is nothing to build, test or push for an
+  # alias -- it is the same image under a second name -- so all three templates
+  # are wrapped in an inverted Mustache section on it: for an alias they render
+  # to nothing, and dave drops a type whose template rendered empty. The alias
+  # is instead materialized registry-side by bin/merge-manifests, which retags
+  # the source tag's already-published manifest list. Alias tags also set
+  # `structureTest: false`, because container-structure-test needs a local
+  # image and no build ever produced one for them.
   build: >
-    docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
-    --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}
+    {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+    --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+    ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+    ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
     --build-arg DATASET={{dataset}}
     --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
     --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -32,11 +66,11 @@ templates:
     {{#dbExtension}}--build-arg DB_EXTENSION={{.}}{{/dbExtension}}
     {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
     {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
-    -t {{{repository}}}:{{tag}} {{{context}}}
-  test: REPOSITORY={{{repository}}} bash test/integration/run.sh {{tag}} {{dataset}}
+    -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
+  test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run.sh {{tag}} {{dataset}}{{/retagFrom}}'
   push: >
-    docker buildx build --push --platform {{{platforms}}}
-    --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}},mode=max,image-manifest=true
+    {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+    --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
     --build-arg DATASET={{dataset}}
     --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
     --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -45,7 +79,7 @@ templates:
     {{#dbExtension}}--build-arg DB_EXTENSION={{.}}{{/dbExtension}}
     {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
     {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
-    -t {{{repository}}}:{{tag}} {{{context}}}
+    -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
 contexts:
   postgres:
     tagKeys: dataset
@@ -175,7 +209,7 @@ contexts:
         structureTest:
           configs:
             - test/config/stackexchange-cooking.yaml
-      sportsdb: &sportsdb
+      sportsdb:
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql
@@ -187,9 +221,11 @@ contexts:
         structureTest:
           configs:
             - test/config/yugabyte-sportsdb.yaml
+      # Alias of `sportsdb`, kept for the Yugabyte-prefixed naming the other
+      # Yugabyte-sourced tags use. See the retagFrom note at the top of the file.
       yugabyte-sportsdb:
-        <<: *sportsdb
-        dataset: sportsdb
+        retagFrom: sportsdb
+        structureTest: false
       yugabyte-chinook:
         dataset: chinook
         extractUrl: >-
@@ -224,17 +260,17 @@ contexts:
         structureTest:
           configs:
             - test/config/usda.yaml
-      world: &world
+      world:
         extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz
         sqlFiles: dbsamples-0.1/world/world.sql
         structureTest:
           configs:
             - test/config/world.yaml
       # `all` is retired (multi-dataset images are legacy). `latest` now tracks a
-      # single representative dataset.
+      # single representative dataset -- as an alias of it, not a second build.
       latest:
-        <<: *world
-        dataset: world
+        retagFrom: world
+        structureTest: false
   # MySQL images. Built on a thin Alpine MariaDB base (there is no official
   # Alpine MySQL image; MariaDB is the MySQL drop-in Alpine itself ships) and
   # published under a separate repository. The build/test/push templates are
@@ -251,24 +287,26 @@ contexts:
       # Mirrors the global templates (see top of file), including the always-on
       # registry build cache gated by the DATASET_CHECKSUM fingerprint.
       build: >
-        docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}} {{{context}}}
-      test: REPOSITORY={{{repository}}} bash test/integration/run-mysql.sh {{tag}} {{dataset}}
+        -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-mysql.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        docker buildx build --push --platform {{{platforms}}}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}},mode=max,image-manifest=true
+        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}} {{{context}}}
+        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
     tags:
       # Sakila is MySQL's own sample database (the original of the model pagila
       # ports to Postgres). Ships schema + data as separate files in a tarball.
@@ -280,7 +318,7 @@ contexts:
             - test/config/mysql/sakila.yaml
       # MySQL's canonical `world` sample (city, country, countrylanguage) -- the
       # same three tables as the Postgres `world` dataset.
-      world: &world
+      world:
         extractUrl: https://downloads.mysql.com/docs/world-db.tar.gz
         sqlFiles: world-db/world.sql
         structureTest:
@@ -436,8 +474,8 @@ contexts:
             - test/config/mysql/stackexchange-cooking.yaml
       # `latest` tracks a single representative dataset, mirroring postgres.
       latest:
-        <<: *world
-        dataset: world
+        retagFrom: world
+        structureTest: false
   # CockroachDB images. Built on the official cockroachdb/cockroach image and
   # published under a separate repository. There is no official Alpine image,
   # but the official one is slim (UBI-minimal, ~170 MB) and multi-arch, and its
@@ -459,8 +497,10 @@ contexts:
       # Mirrors the global templates (see top of file), including the always-on
       # registry build cache gated by the DATASET_CHECKSUM fingerprint.
       build: >
-        docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -468,11 +508,11 @@ contexts:
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
         {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
         {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
-        -t {{{repository}}}:{{tag}} {{{context}}}
-      test: REPOSITORY={{{repository}}} bash test/integration/run-cockroach.sh {{tag}} {{dataset}}
+        -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-cockroach.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        docker buildx build --push --platform {{{platforms}}}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}},mode=max,image-manifest=true
+        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -480,13 +520,13 @@ contexts:
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
         {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
         {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
-        -t {{{repository}}}:{{tag}} {{{context}}}
+        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
     tags:
       # Chinook digital-media store, sourced from Yugabyte's PostgreSQL-dialect
       # mirror (the same dump behind the postgres `yugabyte-chinook` tag): plain
       # DDL + INSERT data with quoted CamelCase identifiers, which load on
       # CockroachDB unchanged.
-      chinook: &cockroach-chinook
+      chinook:
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_ddl.sql
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_genres_artists_albums.sql
@@ -633,8 +673,8 @@ contexts:
             - test/config/cockroach/stackexchange-cooking.yaml
       # `latest` tracks a single representative dataset, mirroring postgres/mysql.
       latest:
-        <<: *cockroach-chinook
-        dataset: chinook
+        retagFrom: chinook
+        structureTest: false
   # SQLite images. Built on the Alpine, statically-linked keinos/sqlite3 image
   # and published under a separate repository. SQLite is serverless -- a
   # database is just a file -- so the build *builds the database file* rather
@@ -655,31 +695,33 @@ contexts:
       # registry build cache gated by the DATASET_CHECKSUM fingerprint. Emits
       # SQL_FILES or DB_FILE per tag (Mustache sections), never both.
       build: >
-        docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
         {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}} {{{context}}}
-      test: REPOSITORY={{{repository}}} bash test/integration/run-sqlite.sh {{tag}} {{dataset}}
+        -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-sqlite.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        docker buildx build --push --platform {{{platforms}}}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}},mode=max,image-manifest=true
+        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}} --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
         {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}} {{{context}}}
+        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
     tags:
       # Chinook digital-media store. The vendor ships a native SQLite SQL script
       # (release v1.4.5), which the build runs through the sqlite3 CLI to create
       # /data/chinook.db. Same CamelCase identifiers as the other chinook tags.
-      chinook: &sqlite-chinook
+      chinook:
         extractUrl: https://github.com/lerocha/chinook-database/releases/download/v1.4.5/Chinook_Sqlite.sql
         sqlFiles: Chinook_Sqlite.sql
         structureTest:
@@ -701,7 +743,7 @@ contexts:
       # constraints via ALTER TABLE, so PK/FK/unique from the dump are dropped;
       # tables and row counts still load faithfully. Each dataset's
       # scripts/<dataset> dir is a symlink to scripts/pgsql.
-      world: &sqlite-world
+      world:
         extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz
         sqlFiles: dbsamples-0.1/world/world.sql
         extraPrereqs: python3
@@ -842,5 +884,5 @@ contexts:
             - test/config/sqlite/stackexchange-cooking.yaml
       # `latest` tracks a single representative dataset, mirroring postgres/mysql.
       latest:
-        <<: *sqlite-chinook
-        dataset: chinook
+        retagFrom: chinook
+        structureTest: false
