@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Materializes the published tags after a per-arch push.
+#
+# `dave push` with TAG_SUFFIX set publishes one single-arch image per
+# architecture -- `<repo>:<tag>-amd64`, `<repo>:<tag>-arm64` -- because the two
+# arches are built on their own runners. This joins each pair into the real
+# multi-arch tag `<repo>:<tag>`, then points every alias tag (`retagFrom:` in
+# manifest.yml, e.g. `latest`) at its source. `imagetools create` only writes a
+# manifest list from images already in the registry: nothing is pulled, rebuilt
+# or re-uploaded.
+#
+# The two passes must not overlap -- an alias can only be pointed at a tag that
+# already exists -- so pass 2 starts once pass 1 has fully drained.
+#
+# Usage: merge-manifests [-c <context>] [-n|--dry-run]
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+manifest="$root/manifest.yml"
+context=""
+dry_run=0
+jobs=8
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c|--context) context="${2-}"; shift 2 ;;
+    -n|--dry-run) dry_run=1; shift ;;
+    -h|--help) echo "Usage: merge-manifests [-c <context>] [-n|--dry-run]" >&2; exit 0 ;;
+    *) echo "merge-manifests: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+# Manifest as JSON, so the extraction below is a single jq program regardless of
+# which reader is available. yq is preferred (present on GitHub's runners);
+# otherwise any python3 that can import PyYAML will do. NOTE: the twin of this
+# function lives in bin/dataset-checksums -- keep them in step.
+manifest_json() {
+  local out py
+  if command -v yq >/dev/null 2>&1 && out="$(yq -o=json '.' "$manifest" 2>/dev/null)" && [ -n "$out" ]; then
+    printf '%s' "$out"
+    return 0
+  fi
+  for py in python3 "$root/.venv/bin/python" python; do
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import yaml' 2>/dev/null; then
+      "$py" -c 'import json, sys, yaml; json.dump(yaml.safe_load(open(sys.argv[1])), sys.stdout)' "$manifest"
+      return 0
+    fi
+  done
+  echo "merge-manifests: need yq, or a python3 with PyYAML, to read $manifest" >&2
+  return 1
+}
+
+# One `imagetools create` argument list per line, sorted for a stable run.
+# `pass` 1 is the real tags (join the per-arch images), 2 the aliases (retag an
+# existing tag). A context's own parameters.repository wins over the global one.
+# The arch suffixes come from parameters.platforms, which is also what dave
+# passes to `--platform`, so the names here cannot drift from what CI pushed.
+arg_lines() {
+  manifest_json | jq -r --arg ctx "$context" --arg pass "$1" '
+    (.parameters.repository // "") as $global
+    | (.parameters.platforms // "linux/amd64,linux/arm64"
+       | split(",") | map(sub("^.*/"; ""))) as $arches
+    | [ (.contexts // {})
+        | to_entries[]
+        | select($ctx == "" or .key == $ctx)
+        | (((.value // {}).parameters // {}).repository // $global) as $repo
+        | ((.value // {}).tags // {}) | to_entries[]
+        | .key as $tag
+        | ((.value // {}).retagFrom // "") as $from
+        | select(if $pass == "1" then $from == "" else $from != "" end)
+        | if $pass == "1"
+          then "-t \($repo):\($tag) " + ([$arches[] | "\($repo):\($tag)-\(.)"] | join(" "))
+          else "-t \($repo):\($tag) \($repo):\($from)"
+          end
+      ] | sort[]'
+}
+
+# Dry-run prints what would run; otherwise fan out over $jobs workers. The
+# NUL-delimited hand-off avoids GNU-only `xargs -d`, and `set -f; set -- $1`
+# splits a line back into arguments without an eval.
+run_pass() {
+  local label="$1" lines="$2"
+  [ -n "$lines" ] || { echo "merge-manifests: $label: nothing to do" >&2; return 0; }
+  if [ "$dry_run" -eq 1 ]; then
+    printf '%s\n' "$lines" | sed 's|^|docker buildx imagetools create |'
+    return 0
+  fi
+  printf '%s\n' "$lines" | tr '\n' '\0' \
+    | xargs -0 -P "$jobs" -n 1 sh -c 'set -f; set -- $1; exec docker buildx imagetools create "$@"' sh
+}
+
+# Collected before either pass runs, and via plain assignments so that `set -e`
+# sees a failing extraction (inside a command substitution used as an argument
+# it would be swallowed, and the pass would look merely empty).
+pass1="$(arg_lines 1)"
+pass2="$(arg_lines 2)"
+if [ -z "$pass1" ] && [ -z "$pass2" ]; then
+  echo "merge-manifests: no tags found${context:+ for context '$context'} in $manifest" >&2
+  exit 1
+fi
+
+echo "merge-manifests: pass 1 -- multi-arch tags${context:+ (context $context)}" >&2
+run_pass 'pass 1' "$pass1"
+echo "merge-manifests: pass 2 -- alias tags" >&2
+run_pass 'pass 2' "$pass2"
