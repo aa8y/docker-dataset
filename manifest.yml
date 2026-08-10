@@ -128,6 +128,21 @@ contexts:
         structureTest:
           configs:
             - test/config/omdb.yaml
+      # OpenFlights airports/airlines/routes. Published only as three
+      # comma-separated data files, so the schema is authored in-repo
+      # (postgres/scripts/openflights) and the files ship alongside the init
+      # script for \copy to read at start. Upstream refreshes them in place, so
+      # the smoke test records floors.
+      openflights:
+        extractUrl: >-
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat
+        sqlFiles: openflights.sql
+        cdDir: /docker-entrypoint-initdb.d/openflights
+        structureTest:
+          configs:
+            - test/config/openflights.yaml
       pagila:
         extractUrl: https://github.com/devrimgunduz/pagila.git
         sqlFiles: pagila/pagila-schema.sql pagila/pagila-data.sql
@@ -338,6 +353,20 @@ contexts:
         structureTest:
           configs:
             - test/config/mysql/geonames.yaml
+      # OpenFlights airports/airlines/routes. Published only as three
+      # comma-separated data files, so the schema is authored in-repo
+      # (mysql/scripts/openflights) and the files are bulk-loaded at start with
+      # server-side LOAD DATA INFILE. Upstream refreshes them in place, so the
+      # smoke test records floors.
+      openflights:
+        extractUrl: >-
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat
+        sqlFiles: openflights.sql
+        structureTest:
+          configs:
+            - test/config/mysql/openflights.yaml
       # Tier 1 hand-translated PostgreSQL datasets. These ship only as
       # PostgreSQL dumps, but are plain DDL + data (no PL/pgSQL, no extensions),
       # so the shared scripts/pgsql transform hook rewrites the dialect at build
@@ -610,6 +639,21 @@ contexts:
         structureTest:
           configs:
             - test/config/cockroach/geonames.yaml
+      # OpenFlights airports/airlines/routes. Published only as three
+      # comma-separated data files, so the schema is authored in-repo
+      # (cockroach/scripts/openflights) and the files are bulk-loaded with
+      # IMPORT INTO straight from the node's external-IO dir (they are already
+      # RFC4180 CSV, so unlike moma they need no normalizing). Upstream
+      # refreshes them in place, so the smoke test records floors.
+      openflights:
+        extractUrl: >-
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat
+        sqlFiles: openflights.sql
+        structureTest:
+          configs:
+            - test/config/cockroach/openflights.yaml
       # StackExchange sites all share one schema, so they all build through the
       # shared scripts/stackexchange hooks (each site's scripts/<site> dir is a
       # symlink to it). Adding a site is just a tag here + a structure-test
@@ -826,6 +870,20 @@ contexts:
         structureTest:
           configs:
             - test/config/sqlite/geonames.yaml
+      # OpenFlights airports/airlines/routes. Published only as three
+      # comma-separated data files, so the schema is authored in-repo
+      # (sqlite/scripts/openflights) and the files are bulk-loaded at build time
+      # with the sqlite3 CLI's .import dot-command. Upstream refreshes them in
+      # place, so the smoke test records floors.
+      openflights:
+        extractUrl: >-
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat
+        sqlFiles: openflights.sql
+        structureTest:
+          configs:
+            - test/config/sqlite/openflights.yaml
       # StackExchange sites. Each ships as per-table XML in a 7z archive (no
       # SQL), so -- exactly like the postgres/mysql side -- every site builds
       # through the shared scripts/stackexchange hooks (each site's scripts/<site>

@@ -1,0 +1,39 @@
+schemaVersion: "2.0.0"
+
+# OpenFlights publishes no SQL, so the schema is authored in-repo
+# (cockroach/scripts/openflights/schema.sql) and the transform hook appends the
+# IMPORT INTO statements that bulk-load the three data files from the node's
+# external-IO dir. CockroachDB creates the database (COCKROACH_DATABASE) and
+# runs this script against it, so there is no CREATE DATABASE header.
+
+fileExistenceTests:
+  - name: "openflights init script exists"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    shouldExist: true
+
+  - name: "openflights airports data file exists in the external-IO dir"
+    path: "/csv/airports.dat"
+    shouldExist: true
+
+  - name: "openflights airlines data file exists in the external-IO dir"
+    path: "/csv/airlines.dat"
+    shouldExist: true
+
+  - name: "openflights routes data file exists in the external-IO dir"
+    path: "/csv/routes.dat"
+    shouldExist: true
+
+fileContentTests:
+  - name: "openflights declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    expectedContents:
+      - "CREATE TABLE airports[ (]"
+      - "CREATE TABLE airlines[ (]"
+      - "CREATE TABLE routes[ (]"
+
+  - name: "openflights loads data into every table"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    expectedContents:
+      - "IMPORT INTO airports[ (]"
+      - "IMPORT INTO airlines[ (]"
+      - "IMPORT INTO routes[ (]"

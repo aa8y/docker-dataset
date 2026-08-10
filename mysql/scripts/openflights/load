@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Ship the OpenFlights data files next to the init script so the authored
+# schema's LOAD DATA INFILE directives resolve at container start.
+set -e
+mkdir -p /docker-entrypoint-initdb.d/openflights
+mv airports.dat airlines.dat routes.dat /docker-entrypoint-initdb.d/openflights/

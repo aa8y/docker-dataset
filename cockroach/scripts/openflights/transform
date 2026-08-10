@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# OpenFlights publishes no SQL, so stage the authored CockroachDB schema
+# (shipped alongside these build scripts) into the build dir as openflights.sql
+# and append the bulk loads for the files fetched by EXTRACT_URL.
+#
+# The files are already RFC4180 CSV with no header row, so they are imported
+# as-is -- unlike moma, whose ragged exports have to be normalized first.
+# `nullif` maps the unquoted \N the data dictionary uses for a missing value to
+# NULL, matching the postgres load. IMPORT writes SSTs directly instead of
+# routing every row through the SQL write layer (the same bulk path the moma and
+# stackexchange hooks use).
+#
+# The files themselves are moved to the node's external-IO dir by the load hook
+# (see ../../Dockerfile), so `nodelocal://1/<file>` resolves to them.
+set -e
+cp /usr/local/lib/scripts/openflights/schema.sql openflights.sql
+cat >>openflights.sql <<'EOF'
+
+IMPORT INTO airports (
+  airport_id, name, city, country, iata, icao, latitude, longitude, altitude,
+  timezone, dst, tz, type, source
+) CSV DATA ('nodelocal://1/airports.dat') WITH nullif = '\N';
+
+IMPORT INTO airlines (
+  airline_id, name, alias, iata, icao, callsign, country, active
+) CSV DATA ('nodelocal://1/airlines.dat') WITH nullif = '\N';
+
+IMPORT INTO routes (
+  airline, airline_id, source_airport, source_airport_id, destination_airport,
+  destination_airport_id, codeshare, stops, equipment
+) CSV DATA ('nodelocal://1/routes.dat') WITH nullif = '\N';
+EOF

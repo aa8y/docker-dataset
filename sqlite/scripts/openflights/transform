@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# OpenFlights publishes no SQL, so stage the authored SQLite schema (shipped
+# alongside these build scripts) into the build dir as openflights.sql and
+# append sqlite3 CLI dot-commands to bulk-import the files fetched by
+# EXTRACT_URL (mirrors the moma transform hook).
+#
+# The files quote their string fields RFC4180-style, so `.mode csv` reads them
+# directly. A missing value is written as an unquoted \N, which the CSV importer
+# has no way to map to NULL -- so the trailing UPDATEs rewrite it, column by
+# column, the way postgres' `NULL '\N'` and cockroach's `nullif` do at load
+# time. Every column is covered rather than just the ones that carry a \N today,
+# since a refreshed file may drop a value anywhere.
+set -e
+cp /usr/local/lib/scripts/openflights/schema.sql openflights.sql
+cat >>openflights.sql <<'EOF'
+
+.mode csv
+.import airports.dat airports
+.import airlines.dat airlines
+.import routes.dat routes
+
+UPDATE airports SET airport_id = nullif(airport_id, '\N'),
+                    name       = nullif(name, '\N'),
+                    city       = nullif(city, '\N'),
+                    country    = nullif(country, '\N'),
+                    iata       = nullif(iata, '\N'),
+                    icao       = nullif(icao, '\N'),
+                    latitude   = nullif(latitude, '\N'),
+                    longitude  = nullif(longitude, '\N'),
+                    altitude   = nullif(altitude, '\N'),
+                    timezone   = nullif(timezone, '\N'),
+                    dst        = nullif(dst, '\N'),
+                    tz         = nullif(tz, '\N'),
+                    type       = nullif(type, '\N'),
+                    source     = nullif(source, '\N');
+
+UPDATE airlines SET airline_id = nullif(airline_id, '\N'),
+                    name       = nullif(name, '\N'),
+                    alias      = nullif(alias, '\N'),
+                    iata       = nullif(iata, '\N'),
+                    icao       = nullif(icao, '\N'),
+                    callsign   = nullif(callsign, '\N'),
+                    country    = nullif(country, '\N'),
+                    active     = nullif(active, '\N');
+
+UPDATE routes SET airline                = nullif(airline, '\N'),
+                  airline_id             = nullif(airline_id, '\N'),
+                  source_airport         = nullif(source_airport, '\N'),
+                  source_airport_id      = nullif(source_airport_id, '\N'),
+                  destination_airport    = nullif(destination_airport, '\N'),
+                  destination_airport_id = nullif(destination_airport_id, '\N'),
+                  codeshare              = nullif(codeshare, '\N'),
+                  stops                  = nullif(stops, '\N'),
+                  equipment              = nullif(equipment, '\N');
+EOF
