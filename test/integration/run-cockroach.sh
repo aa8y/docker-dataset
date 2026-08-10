@@ -35,6 +35,7 @@ fi
 
 TAG="${1:?usage: run-cockroach.sh [--update] <tag> <datasets-csv>}"
 DATASETS_CSV="${2:?usage: run-cockroach.sh [--update] <tag> <datasets-csv>}"
+IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
 
 REPOSITORY="${REPOSITORY:-aa8y/cockroach-dataset}"
 IMAGE="${REPOSITORY}:${TAG}"
@@ -47,97 +48,21 @@ IMAGE="${REPOSITORY}:${TAG}"
 # hand-maintain a flat list.
 VOLATILE_DATASETS=""
 VOLATILE_TAG_PREFIXES="stackexchange-"
-is_volatile() {
-  local db="$1"
-  case " $VOLATILE_DATASETS " in *" $db "*) return 0 ;; esac
-  local prefix
-  for prefix in $VOLATILE_TAG_PREFIXES; do
-    case "$TAG" in "$prefix"*) return 0 ;; esac
-  done
-  return 1
-}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXPECTED_DIR="${SCRIPT_DIR}/../expected/cockroach"
-CONTAINER="cr-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
-IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
+EXPECTED_SUBDIR="cockroach"
+. "${SCRIPT_DIR}/lib.sh"
 
-GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; RESET=$'\033[0m'
-info() { printf '%s\n' "$*" >&2; }
-pass() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
-fail() { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; }
+CONTAINER="cr-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
 
 cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-# Identical-image dedupe. Some tags are just a second name for the same build --
-# `latest` is built from the same inputs as `world` -- so a full `dave test` can
-# boot and assert the very same image ID more than once. What a container does is
-# a pure function of its image, so once an image ID has passed a given set of
-# expectations there is nothing left to learn from booting it again.
-#
-# "a given set of expectations" is the point of the stamp: it holds the dataset
-# list plus the bytes of every expected/*.json this run reads, so two tags that
-# share an image but assert different datasets still both run, and editing an
-# expected file invalidates the entry rather than silently skipping past it.
-# Only a clean assert run writes a stamp -- a failure has to stay reproducible --
-# --update neither reads nor writes one, and DDS_DEDUPE=0 opts out entirely. The
-# cache lives under an ephemeral tmp dir, so a stale entry cannot outlive a boot.
-CACHE_DIR="${DDS_TEST_CACHE:-${TMPDIR:-/tmp}/docker-dataset-itest}"
-stamp_file=""
-
-stamp_contents() {
-  local db
-  printf '%s\n' "$DATASETS_CSV"
-  for db in "${DATASETS[@]}"; do
-    cat "${EXPECTED_DIR}/${db}.json" 2>/dev/null || true
-  done
-}
-
-if [[ "$UPDATE" -eq 0 && "${DDS_DEDUPE:-1}" != "0" ]]; then
-  # An image we cannot resolve locally is simply not deduped; `docker run` below
-  # will pull it as before.
-  image_id="$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
-  if [[ -n "$image_id" ]]; then
-    mkdir -p "$CACHE_DIR"
-    stamp_file="${CACHE_DIR}/${image_id//[^a-zA-Z0-9]/-}"
-    if [[ -f "$stamp_file" ]] && stamp_contents | cmp -s - "$stamp_file"; then
-      short_id="${image_id#sha256:}"
-      pass "${IMAGE}: identical image (${short_id:0:12}) already passed as an earlier tag; skipping"
-      exit 0
-    fi
-  fi
-fi
-
-wait_for_log_marker() {
-  # wait_for_log_marker <marker> <deadline> — <deadline> is an absolute $SECONDS
-  # value. A single `docker logs -f` stream fed to `grep -q -m1`, rather than
-  # re-grepping the whole log once a second (which re-reads every byte written so
-  # far on every poll, so the cost of waiting grows with the log -- and CockroachDB
-  # is by far the chattiest of these servers). The follow replays the log from the
-  # start, so a marker printed before we began watching is still seen; grep exits
-  # at the first match; and the stream ends by itself if the container dies, which
-  # turns a crashed container into an immediate failure instead of a full-budget
-  # wait. The loop below therefore only has to enforce the wall-clock deadline.
-  #
-  # grep reads from a process substitution rather than a pipeline on purpose:
-  # bash waits for *every* member of a pipeline, and `docker logs -f` only
-  # notices the closed pipe when it next writes, so a server that goes quiet
-  # right after printing the marker would keep the watcher alive -- and the
-  # match unreported -- until the deadline. A finished or killed watcher may
-  # leave a lingering `docker logs -f`; the EXIT trap's `docker rm -f` reaps it
-  # along with the container.
-  local marker="$1" deadline="$2" watcher
-  ( grep -q -m1 -- "$marker" < <(docker logs -f "$CONTAINER" 2>&1) ) & watcher=$!
-  while kill -0 "$watcher" 2>/dev/null; do
-    if (( SECONDS >= deadline )); then
-      kill "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
-      return 1
-    fi
-    sleep 1
-  done
-  wait "$watcher"
-}
+# Identical-image dedupe: some tags are just a second name for the same build
+# (`latest` = `world`), and what a container does is a pure function of its
+# image, so a clean pass need not be re-proven. See lib.sh for the stamp
+# semantics.
+if dedupe_skip; then exit 0; fi
 
 crdb_q() {
   # crdb_q <db> <args...> — run `cockroach sql` (insecure) against <db> in the
@@ -175,7 +100,7 @@ actual_counts() {
   # Output `<key>\t<count>` rows, then fold into a JSON object. Note that
   # --format=tsv quotes a field that itself contains a tab, newline or quote;
   # every dataset's keys are plain identifiers, so they pass through raw.
-  crdb_q "$db" -e "$sql" | jq -R -s 'split("\n") | map(select(length>0) | split("\t")) | map({(.[0]): (.[1]|tonumber)}) | add // {}'
+  crdb_q "$db" -e "$sql" | counts_to_json $'\t'
 }
 
 info "==> ${IMAGE}"
@@ -187,7 +112,9 @@ docker run -d --name "$CONTAINER" "$IMAGE" >/dev/null
 # (we would then query half-loaded databases). The entrypoint prints
 # "end running init files from /docker-entrypoint-initdb.d" only after every
 # init script has run and just before it brings the server to the foreground --
-# so we wait for that marker first, then for a successful query.
+# so we wait for that marker first, then for a successful query. (CockroachDB is
+# by far the chattiest of these servers, which is what makes the single-stream
+# marker watch in lib.sh matter most here.)
 #
 # Both phases share one wall-clock deadline, not a fixed iteration count: each
 # `docker exec` round-trip on a loaded ARM runner can itself take a second or
@@ -219,13 +146,7 @@ for db in "${DATASETS[@]}"; do
   actual="$(actual_counts "$db")"
 
   if [[ "$UPDATE" -eq 1 ]]; then
-    mkdir -p "$EXPECTED_DIR"
-    if is_volatile "$db"; then
-      printf '%s\n' "$actual" | jq -S 'map_values(">=" + tostring)' > "$expected_file"
-    else
-      printf '%s\n' "$actual" | jq -S . > "$expected_file"
-    fi
-    pass "${db}: wrote $(jq 'length' <<<"$actual") tables to expected/cockroach/${db}.json"
+    write_expected "$db" "$actual"
     continue
   fi
 
@@ -233,51 +154,9 @@ for db in "${DATASETS[@]}"; do
     fail "${db}: missing expected file ${expected_file} (run with --update to create)"
     rc=1; continue
   fi
-  expected="$(cat "$expected_file")"
 
-  missing="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
-    '($e|keys_unsorted) - ($a|keys_unsorted) | .[]')"
-  extra="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
-    '($a|keys_unsorted) - ($e|keys_unsorted) | .[]')"
-  mismatch="$(jq -rn --argjson e "$expected" --argjson a "$actual" '
-    ($e|keys_unsorted) as $ek
-    | ($ek - ($ek - ($a|keys_unsorted)))[] as $k
-    | $e[$k] as $ev | $a[$k] as $av
-    | if ($ev|type) == "number" then
-        (if $av != $ev then "\($k): expected \($ev) got \($av)" else empty end)
-      else
-        ($ev | capture("^(?<op>>=|>)(?<n>[0-9]+)$")) as $m
-        | if $m == null then "\($k): invalid expected spec \"\($ev)\""
-          else ($m.n | tonumber) as $n
-            | if   ($m.op == ">"  and $av >  $n) then empty
-              elif ($m.op == ">=" and $av >= $n) then empty
-              else "\($k): expected \($ev) got \($av)" end
-          end
-      end')"
-
-  db_ok=1
-  if [[ -n "$missing" ]]; then
-    db_ok=0; while IFS= read -r t; do fail "${db}: missing table ${t}"; done <<<"$missing"
-  fi
-  if [[ -n "$extra" ]]; then
-    db_ok=0; while IFS= read -r t; do fail "${db}: unexpected table ${t}"; done <<<"$extra"
-  fi
-  if [[ -n "$mismatch" ]]; then
-    db_ok=0; while IFS= read -r m; do fail "${db}: count mismatch ${m}"; done <<<"$mismatch"
-  fi
-
-  if [[ "$db_ok" -eq 1 ]]; then
-    pass "${db}: $(jq 'length' <<<"$expected") tables present with matching counts"
-  else
-    rc=1
-  fi
+  check_counts "$db" "$(cat "$expected_file")" "$actual" || rc=1
 done
 
-# Record the pass, so a later tag resolving to this same image ID with these same
-# expectations can skip the boot entirely. Clean runs only ($stamp_file is empty
-# in --update mode and when dedupe is off).
-if [[ "$rc" -eq 0 && -n "$stamp_file" ]]; then
-  stamp_contents > "$stamp_file"
-fi
-
+record_pass_stamp "$rc"
 exit "$rc"

@@ -35,6 +35,7 @@ fi
 
 TAG="${1:?usage: run-sqlite.sh [--update] <tag> <datasets-csv>}"
 DATASETS_CSV="${2:?usage: run-sqlite.sh [--update] <tag> <datasets-csv>}"
+IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
 
 REPOSITORY="${REPOSITORY:-aa8y/sqlite-dataset}"
 IMAGE="${REPOSITORY}:${TAG}"
@@ -45,64 +46,16 @@ IMAGE="${REPOSITORY}:${TAG}"
 # run scripts.
 VOLATILE_DATASETS="moma"
 VOLATILE_TAG_PREFIXES="stackexchange-"
-is_volatile() {
-  local db="$1"
-  case " $VOLATILE_DATASETS " in *" $db "*) return 0 ;; esac
-  local prefix
-  for prefix in $VOLATILE_TAG_PREFIXES; do
-    case "$TAG" in "$prefix"*) return 0 ;; esac
-  done
-  return 1
-}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXPECTED_DIR="${SCRIPT_DIR}/../expected/sqlite"
-IFS=',' read -ra DATASETS <<< "$DATASETS_CSV"
+EXPECTED_SUBDIR="sqlite"
+. "${SCRIPT_DIR}/lib.sh"
 
-GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; RESET=$'\033[0m'
-info() { printf '%s\n' "$*" >&2; }
-pass() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
-fail() { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; }
-
-# Identical-image dedupe. Some tags are just a second name for the same build --
-# `latest` is built from the same inputs as `world` -- so a full `dave test` can
-# query the very same image ID more than once. What a container does is a pure
-# function of its image (here, quite literally: the database is a file baked into
-# it), so once an image ID has passed a given set of expectations there is
-# nothing left to learn from running it again.
-#
-# "a given set of expectations" is the point of the stamp: it holds the dataset
-# list plus the bytes of every expected/*.json this run reads, so two tags that
-# share an image but assert different datasets still both run, and editing an
-# expected file invalidates the entry rather than silently skipping past it.
-# Only a clean assert run writes a stamp -- a failure has to stay reproducible --
-# --update neither reads nor writes one, and DDS_DEDUPE=0 opts out entirely. The
-# cache lives under an ephemeral tmp dir, so a stale entry cannot outlive a boot.
-CACHE_DIR="${DDS_TEST_CACHE:-${TMPDIR:-/tmp}/docker-dataset-itest}"
-stamp_file=""
-
-stamp_contents() {
-  local db
-  printf '%s\n' "$DATASETS_CSV"
-  for db in "${DATASETS[@]}"; do
-    cat "${EXPECTED_DIR}/${db}.json" 2>/dev/null || true
-  done
-}
-
-if [[ "$UPDATE" -eq 0 && "${DDS_DEDUPE:-1}" != "0" ]]; then
-  # An image we cannot resolve locally is simply not deduped; `docker run` below
-  # will pull it as before.
-  image_id="$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
-  if [[ -n "$image_id" ]]; then
-    mkdir -p "$CACHE_DIR"
-    stamp_file="${CACHE_DIR}/${image_id//[^a-zA-Z0-9]/-}"
-    if [[ -f "$stamp_file" ]] && stamp_contents | cmp -s - "$stamp_file"; then
-      short_id="${image_id#sha256:}"
-      pass "${IMAGE}: identical image (${short_id:0:12}) already passed as an earlier tag; skipping"
-      exit 0
-    fi
-  fi
-fi
+# Identical-image dedupe: some tags are just a second name for the same build
+# (`latest` = `world`), and what a container does is a pure function of its
+# image -- here quite literally, the database is a file baked into it. See
+# lib.sh for the stamp semantics.
+if dedupe_skip; then exit 0; fi
 
 sqlite_q() {
   # sqlite_q <db> <sql> — run a query against /data/<db>.db in a throwaway
@@ -130,7 +83,7 @@ actual_counts() {
 
   if [[ -z "$sql" ]]; then printf '{}\n'; return; fi
   # Output `<key>|<count>` rows, then fold into a JSON object.
-  sqlite_q "$db" "$sql" | jq -R -s 'split("\n") | map(select(length>0) | split("|")) | map({(.[0]): (.[1]|tonumber)}) | add // {}'
+  sqlite_q "$db" "$sql" | counts_to_json '|'
 }
 
 rc=0
@@ -140,13 +93,7 @@ for db in "${DATASETS[@]}"; do
   actual="$(actual_counts "$db")"
 
   if [[ "$UPDATE" -eq 1 ]]; then
-    mkdir -p "$EXPECTED_DIR"
-    if is_volatile "$db"; then
-      printf '%s\n' "$actual" | jq -S 'map_values(">=" + tostring)' > "$expected_file"
-    else
-      printf '%s\n' "$actual" | jq -S . > "$expected_file"
-    fi
-    pass "${db}: wrote $(jq 'length' <<<"$actual") tables to expected/sqlite/${db}.json"
+    write_expected "$db" "$actual"
     continue
   fi
 
@@ -154,51 +101,9 @@ for db in "${DATASETS[@]}"; do
     fail "${db}: missing expected file ${expected_file} (run with --update to create)"
     rc=1; continue
   fi
-  expected="$(cat "$expected_file")"
 
-  missing="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
-    '($e|keys_unsorted) - ($a|keys_unsorted) | .[]')"
-  extra="$(jq -rn --argjson e "$expected" --argjson a "$actual" \
-    '($a|keys_unsorted) - ($e|keys_unsorted) | .[]')"
-  mismatch="$(jq -rn --argjson e "$expected" --argjson a "$actual" '
-    ($e|keys_unsorted) as $ek
-    | ($ek - ($ek - ($a|keys_unsorted)))[] as $k
-    | $e[$k] as $ev | $a[$k] as $av
-    | if ($ev|type) == "number" then
-        (if $av != $ev then "\($k): expected \($ev) got \($av)" else empty end)
-      else
-        ($ev | capture("^(?<op>>=|>)(?<n>[0-9]+)$")) as $m
-        | if $m == null then "\($k): invalid expected spec \"\($ev)\""
-          else ($m.n | tonumber) as $n
-            | if   ($m.op == ">"  and $av >  $n) then empty
-              elif ($m.op == ">=" and $av >= $n) then empty
-              else "\($k): expected \($ev) got \($av)" end
-          end
-      end')"
-
-  db_ok=1
-  if [[ -n "$missing" ]]; then
-    db_ok=0; while IFS= read -r t; do fail "${db}: missing table ${t}"; done <<<"$missing"
-  fi
-  if [[ -n "$extra" ]]; then
-    db_ok=0; while IFS= read -r t; do fail "${db}: unexpected table ${t}"; done <<<"$extra"
-  fi
-  if [[ -n "$mismatch" ]]; then
-    db_ok=0; while IFS= read -r m; do fail "${db}: count mismatch ${m}"; done <<<"$mismatch"
-  fi
-
-  if [[ "$db_ok" -eq 1 ]]; then
-    pass "${db}: $(jq 'length' <<<"$expected") tables present with matching counts"
-  else
-    rc=1
-  fi
+  check_counts "$db" "$(cat "$expected_file")" "$actual" || rc=1
 done
 
-# Record the pass, so a later tag resolving to this same image ID with these same
-# expectations can skip the queries entirely. Clean runs only ($stamp_file is
-# empty in --update mode and when dedupe is off).
-if [[ "$rc" -eq 0 && -n "$stamp_file" ]]; then
-  stamp_contents > "$stamp_file"
-fi
-
+record_pass_stamp "$rc"
 exit "$rc"
