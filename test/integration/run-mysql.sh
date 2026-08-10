@@ -81,18 +81,31 @@ mysql_q() {
 }
 
 # Authoritative counts for every base table in a database, as a JSON object
-# keyed by <db>.<table>. MariaDB has no query_to_xml, so we list the base
-# tables then run an actual count(*) per table and assemble the object with jq.
+# keyed by <db>.<table>. MariaDB has no query_to_xml, so we list the base tables
+# from information_schema and then count them all in a single generated
+# UNION ALL query -- two client round-trips and one jq fold for the whole
+# database, however many tables it has. Counting one table per `docker exec`
+# instead pays a container-exec plus mariadb-client cold start every time, which
+# on the wider datasets (sportsdb ships 107 tables) dominates the run.
 actual_counts() {
-  local db="$1" tables t n json='{}'
+  local db="$1" tables t esc keyesc sql first=1
+  local sq=\'                      # a literal ' , for doubling inside literals
   tables="$(mysql_q -e "SELECT table_name FROM information_schema.tables \
     WHERE table_type='BASE TABLE' AND table_schema='${db}' ORDER BY table_name")"
+  sql=""
   while IFS= read -r t; do
     [[ -z "$t" ]] && continue
-    n="$(mysql_q -e "SELECT COUNT(*) FROM \`${db}\`.\`${t}\`")"
-    json="$(jq --arg k "${db}.${t}" --argjson v "${n:-0}" '. + {($k): $v}' <<<"$json")"
+    esc="${t//\`/\`\`}"            # escape embedded backticks (identifier)
+    keyesc="${t//$sq/$sq$sq}"      # escape embedded single quotes (string literal)
+    [[ "$first" -eq 0 ]] && sql+=" UNION ALL "
+    sql+="SELECT '${db}.${keyesc}' AS k, COUNT(*) AS n FROM \`${db}\`.\`${esc}\`"
+    first=0
   done <<<"$tables"
-  printf '%s\n' "$json"
+
+  if [[ -z "$sql" ]]; then printf '{}\n'; return; fi
+  # Output `<key>\t<count>` rows (mariadb -N -B is header-less TSV), then fold
+  # into a JSON object.
+  mysql_q -e "$sql" | jq -R -s 'split("\n") | map(select(length>0) | split("\t")) | map({(.[0]): (.[1]|tonumber)}) | add // {}'
 }
 
 info "==> ${IMAGE}"

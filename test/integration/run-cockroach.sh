@@ -77,20 +77,35 @@ crdb_q() {
 }
 
 # Authoritative counts for every base table in a database, as a JSON object
-# keyed by <schema>.<table>. List the base tables then run an actual count(*)
-# per table and assemble the object with jq.
+# keyed by <schema>.<table>. List the base tables from information_schema and
+# then count them all in a single generated UNION ALL query -- two `cockroach
+# sql` round-trips and one jq fold for the whole database, however many tables
+# it has. Counting one table per `docker exec` instead pays a container-exec
+# plus cockroach-client cold start every time, which on the wider datasets
+# (sportsdb ships 107 tables) dominates the run.
 actual_counts() {
-  local db="$1" rows s t n json='{}'
+  local db="$1" rows s t sesc tesc keyesc sql first=1
+  local sq=\'                      # a literal ' , for doubling inside literals
   rows="$(crdb_q "$db" -e "SELECT table_schema, table_name FROM information_schema.tables \
     WHERE table_type='BASE TABLE' \
       AND table_schema NOT IN ('pg_catalog','information_schema','crdb_internal') \
     ORDER BY table_schema, table_name")"
+  sql=""
   while IFS=$'\t' read -r s t; do
     [[ -z "$t" ]] && continue
-    n="$(crdb_q "$db" -e "SELECT count(*) FROM \"${s}\".\"${t}\"")"
-    json="$(jq --arg k "${s}.${t}" --argjson v "${n:-0}" '. + {($k): $v}' <<<"$json")"
+    sesc="${s//\"/\"\"}"           # escape embedded double quotes (identifiers)
+    tesc="${t//\"/\"\"}"
+    keyesc="${s//$sq/$sq$sq}.${t//$sq/$sq$sq}"  # ... and single quotes (literal)
+    [[ "$first" -eq 0 ]] && sql+=" UNION ALL "
+    sql+="SELECT '${keyesc}' AS k, count(*) AS n FROM \"${sesc}\".\"${tesc}\""
+    first=0
   done <<<"$rows"
-  printf '%s\n' "$json"
+
+  if [[ -z "$sql" ]]; then printf '{}\n'; return; fi
+  # Output `<key>\t<count>` rows, then fold into a JSON object. Note that
+  # --format=tsv quotes a field that itself contains a tab, newline or quote;
+  # every dataset's keys are plain identifiers, so they pass through raw.
+  crdb_q "$db" -e "$sql" | jq -R -s 'split("\n") | map(select(length>0) | split("\t")) | map({(.[0]): (.[1]|tonumber)}) | add // {}'
 }
 
 info "==> ${IMAGE}"
