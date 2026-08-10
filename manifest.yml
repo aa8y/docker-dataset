@@ -347,6 +347,16 @@ contexts:
         structureTest:
           configs:
             - test/config/mysql/northwind.yaml
+      # Employees: MySQL's canonical large sample (300k employees, 2.8M salary
+      # rows). Upstream ships a loader script that pulls in six data files with
+      # the mysql client's `source` command, so the scripts/employees transform
+      # hook inlines each of them into a single self-contained init script.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: test_db/employees.sql
+        structureTest:
+          configs:
+            - test/config/mysql/employees.yaml
       # MoMA research collection. Published only as CSV, so the schema is
       # authored in-repo (mysql/scripts/moma) and the CSVs are bulk-loaded at
       # start with server-side LOAD DATA INFILE. Counts drift between builds (the

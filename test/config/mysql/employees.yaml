@@ -1,0 +1,46 @@
+schemaVersion: "2.0.0"
+
+# The datacharmer/test_db employees sample ships a loader script whose data
+# lives in six separate `source`d files; the employees transform hook inlines
+# them, so the init script is self-contained. Verify the wrapper SQL, the six
+# tables, the two views, and that the inlined data is really there.
+
+fileExistenceTests:
+  - name: "employees init script exists"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "employees init script creates and uses the database"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    expectedContents:
+      - "CREATE DATABASE IF NOT EXISTS `employees`"
+      - "USE `employees`"
+
+  - name: "employees declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    expectedContents:
+      - "CREATE TABLE employees[ (]"
+      - "CREATE TABLE departments[ (]"
+      - "CREATE TABLE dept_manager[ (]"
+      - "CREATE TABLE dept_emp[ (]"
+      - "CREATE TABLE titles[ (]"
+      - "CREATE TABLE salaries[ (]"
+
+  - name: "employees declares its views"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    expectedContents:
+      - "CREATE OR REPLACE VIEW dept_emp_latest_date"
+      - "CREATE OR REPLACE VIEW current_dept_emp"
+
+  - name: "employees inlines the sourced data files"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    expectedContents:
+      - "INSERT INTO `departments` VALUES"
+      - "INSERT INTO `employees` VALUES"
+      - "INSERT INTO `salaries` VALUES"
+
+  - name: "employees leaves no unresolved source directives"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    excludedContents:
+      - "^source "
