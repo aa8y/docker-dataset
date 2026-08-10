@@ -70,10 +70,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_DIR="${SCRIPT_DIR}/../expected"
 CONTAINER="pg-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
 
-# All human-readable logging goes to stderr. `dave test` runs this via
-# child_process.exec and discards a command's stdout, surfacing only stderr
-# when the command fails -- so routing diagnostics to stderr keeps CI
-# failures (which tables/counts mismatched) visible.
+# All human-readable logging goes to stderr, which keeps stdout free for
+# machine-readable output (`dave test` streams both live). Diagnostics staying
+# on stderr is also what keeps CI failures -- which tables/counts mismatched --
+# legible when stdout is being piped or captured.
 GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; RESET=$'\033[0m'
 info() { printf '%s\n' "$*" >&2; }
 pass() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
