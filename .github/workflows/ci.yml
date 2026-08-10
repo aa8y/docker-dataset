@@ -116,6 +116,14 @@ jobs:
         with:
           driver: docker
 
+      # Only master pushes publish, so only they need credentials.
+      - name: Log in to Docker Hub
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       # Every rendered build/push command embeds $(bin/dataset-checksum ...);
       # uncached, that is one upstream metadata round-trip per tag, serialized
       # ahead of any Docker work. Warm them all here concurrently so the
@@ -138,26 +146,33 @@ jobs:
       - name: Test images (integration)
         run: dave test -c ${{ matrix.context }} -j "$DAVE_JOBS_TEST"
 
-  push:
+      # Publish this shard's images natively as `<tag>-<arch>`; the merge job
+      # below joins the per-arch pairs into the real multi-arch tags. This
+      # `dave push` re-runs the same buildx build the Build step ran, against
+      # the same daemon on the same runner: under the docker driver every
+      # layer is already in the local image store, so the build resolves as a
+      # full cache hit and the step is effectively upload-only. The images
+      # being pushed are therefore bit-for-bit the ones the tests above
+      # validated.
+      - name: Push (native arch)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          TAG_SUFFIX: -${{ matrix.arch }}
+        run: dave push -c ${{ matrix.context }} -j 3
+
+  # A per-arch push leaves `<tag>-amd64` / `<tag>-arm64` in the registry; this
+  # joins each pair into the real multi-arch `<tag>` (pass 1) and then points
+  # every alias tag -- retagFrom entries such as `latest` -- at its source
+  # (pass 2). Both are `imagetools create` calls: manifest-list writes against
+  # images already in the registry, so nothing is pulled, rebuilt or
+  # re-uploaded, which is why 15 minutes is generous.
+  merge:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: lts/*
-
-      - name: Install dave
-        run: npm install -g dave@"$DAVE_VERSION"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v4
@@ -165,5 +180,5 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Push images (multi-arch)
-        run: dave push
+      - name: Merge per-arch manifests
+        run: bin/merge-manifests
