@@ -80,7 +80,6 @@ crdb_q() {
 # (sportsdb ships 107 tables) dominates the run.
 actual_counts() {
   local db="$1" rows s t sesc tesc keyesc sql first=1
-  local sq=\'                      # a literal ' , for doubling inside literals
   rows="$(crdb_q "$db" -e "SELECT table_schema, table_name FROM information_schema.tables \
     WHERE table_type='BASE TABLE' \
       AND table_schema NOT IN ('pg_catalog','information_schema','crdb_internal') \
@@ -90,7 +89,7 @@ actual_counts() {
     [[ -z "$t" ]] && continue
     sesc="${s//\"/\"\"}"           # escape embedded double quotes (identifiers)
     tesc="${t//\"/\"\"}"
-    keyesc="${s//$sq/$sq$sq}.${t//$sq/$sq$sq}"  # ... and single quotes (literal)
+    keyesc="$(sql_squote "$s").$(sql_squote "$t")"  # ... and single quotes (literal)
     [[ "$first" -eq 0 ]] && sql+=" UNION ALL "
     sql+="SELECT '${keyesc}' AS k, count(*) AS n FROM \"${sesc}\".\"${tesc}\""
     first=0

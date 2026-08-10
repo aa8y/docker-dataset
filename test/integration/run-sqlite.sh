@@ -75,7 +75,7 @@ actual_counts() {
   while IFS= read -r t; do
     [[ -z "$t" ]] && continue
     esc="${t//\"/\"\"}"            # escape embedded double quotes (identifier)
-    keyesc="${t//\'/\'\'}"         # escape embedded single quotes (string literal)
+    keyesc="$(sql_squote "$t")"    # escape embedded single quotes (string literal)
     [[ "$first" -eq 0 ]] && sql+=" UNION ALL "
     sql+="SELECT '${db}.${keyesc}' AS k, count(*) AS n FROM \"${esc}\""
     first=0

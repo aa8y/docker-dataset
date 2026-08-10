@@ -44,6 +44,17 @@ is_volatile() {
   return 1
 }
 
+sql_squote() {
+  # sql_squote <s> — <s> with every embedded single quote doubled: the SQL
+  # string-literal escaping shared by sqlite, MariaDB and CockroachDB. Kept as
+  # a helper because the tempting inline form `${s//\'/\'\'}` is a trap: inside
+  # double quotes bash only treats backslash specially before $ ` " \ and
+  # newline, so the replacement text keeps its backslashes and writes them
+  # into the SQL.
+  local sq=\'
+  printf '%s' "${1//$sq/$sq$sq}"
+}
+
 counts_to_json() {
   # counts_to_json <sep> — fold `<key><sep><count>` rows on stdin into a JSON
   # object {"<key>": <count>, ...}. <sep> is the SQL client's column separator:

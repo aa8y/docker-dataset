@@ -84,14 +84,13 @@ mysql_q() {
 # on the wider datasets (sportsdb ships 107 tables) dominates the run.
 actual_counts() {
   local db="$1" tables t esc keyesc sql first=1
-  local sq=\'                      # a literal ' , for doubling inside literals
   tables="$(mysql_q -e "SELECT table_name FROM information_schema.tables \
     WHERE table_type='BASE TABLE' AND table_schema='${db}' ORDER BY table_name")"
   sql=""
   while IFS= read -r t; do
     [[ -z "$t" ]] && continue
     esc="${t//\`/\`\`}"            # escape embedded backticks (identifier)
-    keyesc="${t//$sq/$sq$sq}"      # escape embedded single quotes (string literal)
+    keyesc="$(sql_squote "$t")"    # escape embedded single quotes (string literal)
     [[ "$first" -eq 0 ]] && sql+=" UNION ALL "
     sql+="SELECT '${db}.${keyesc}' AS k, COUNT(*) AS n FROM \`${db}\`.\`${esc}\`"
     first=0
