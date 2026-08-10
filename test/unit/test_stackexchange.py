@@ -34,7 +34,7 @@ def test_posthistory_text_column_renamed(se_postgres, se_mysql):
         assert ("Text", "PostText") in [(xa, col) for xa, col, _ in ph]
 
 
-# --- shared schema, all four dialects --------------------------------------
+# --- shared schema, all five dialects --------------------------------------
 #
 # _schema() above keys type categories off the dialect's own INT/TS/TXT
 # constants, which only works while the three are distinct strings. They are not
@@ -52,7 +52,7 @@ def _mapping(mod):
 
 def _all_dialects(request):
     return [request.getfixturevalue("se_" + d)
-            for d in ("postgres", "mysql", "sqlite", "cockroach")]
+            for d in ("postgres", "mysql", "sqlite", "cockroach", "duckdb")]
 
 
 def test_column_mapping_matches_across_all_dialects(request):
@@ -66,6 +66,14 @@ def test_schema_matches_for_cockroach(se_postgres, se_cockroach):
     # CockroachDB keeps Postgres' own int/timestamp/text spellings, so the
     # category trick works verbatim here.
     assert _schema(se_cockroach) == _schema(se_postgres)
+
+
+def test_schema_matches_for_duckdb(se_postgres, se_duckdb):
+    # DuckDB keeps distinct INTEGER/TIMESTAMP/TEXT spellings (unlike SQLite,
+    # which collapses timestamps onto TEXT), so the category trick works here
+    # too -- and this is what pins the DuckDB fork's timestamp columns to the
+    # same set every other engine types as timestamps.
+    assert _schema(se_duckdb) == _schema(se_postgres)
 
 
 def test_sqlite_integer_columns_match_postgres_int(se_postgres, se_sqlite):
@@ -115,8 +123,9 @@ def test_index_parity_across_all_dialects(request):
         assert _indexes(mod) == _indexes(postgres), mod.__name__
 
 
-def test_posthistory_text_column_renamed_in_new_dialects(se_sqlite, se_cockroach):
-    for mod in (se_sqlite, se_cockroach):
+def test_posthistory_text_column_renamed_in_new_dialects(se_sqlite, se_cockroach,
+                                                         se_duckdb):
+    for mod in (se_sqlite, se_cockroach, se_duckdb):
         ph = next(cols for _, table, cols, _ in mod.TABLES if table == "PostHistory")
         assert ("Text", "PostText") in [(xa, col) for xa, col, _ in ph]
 
@@ -279,6 +288,59 @@ def test_cockroach_write_csv(se_cockroach, tmp_path):
     assert out.read_text(encoding="utf-8") == '1,"a,b"\n\\N,\n'
 
 
+# --- duckdb dialect: the SQLite emitter, minus PRAGMAs, plus real timestamps -
+
+def test_duckdb_sql_str_doubles_quote_only(se_duckdb):
+    # Standard SQL escaping, as in the SQLite hook: a quote is doubled and a
+    # backslash is not an escape character.
+    assert se_duckdb.sql_str("a'b") == "'a''b'"
+    assert se_duckdb.sql_str("a\\b") == "'a\\b'"
+
+
+def test_duckdb_value_null_rules(se_duckdb):
+    # A missing attribute is NULL; an empty numeric/timestamp is NULL (an empty
+    # string would not cast into INTEGER/TIMESTAMP); an empty TEXT stays ''.
+    assert se_duckdb.value({}, "X", se_duckdb.INT) == "NULL"
+    assert se_duckdb.value({"X": ""}, "X", se_duckdb.INT) == "NULL"
+    assert se_duckdb.value({"X": ""}, "X", se_duckdb.TS) == "NULL"
+    assert se_duckdb.value({"X": ""}, "X", se_duckdb.TXT) == "''"
+
+
+def test_duckdb_value_timestamp_kept_iso(se_duckdb):
+    # Unlike MySQL's hook, no separator rewrite: DuckDB parses the dump's ISO
+    # 8601 `T` form straight into a TIMESTAMP column.
+    assert se_duckdb.value({"X": "2014-01-21T20:26:05.043"}, "X", se_duckdb.TS) == \
+        "'2014-01-21T20:26:05.043'"
+
+
+def test_duckdb_ddl_uses_real_timestamp(se_duckdb):
+    out = se_duckdb.ddl("Users", [
+        ("Id", "Id", se_duckdb.INT), ("CreationDate", "CreationDate", se_duckdb.TS),
+        ("Name", "Name", se_duckdb.TXT)])
+    assert out == ('CREATE TABLE "Users" (\n'
+                   '  "Id" INTEGER PRIMARY KEY,\n'
+                   '  "CreationDate" TIMESTAMP,\n'
+                   '  "Name" TEXT\n'
+                   ');\n')
+
+
+def test_duckdb_index_ddl_needs_no_key_prefix(se_duckdb):
+    assert se_duckdb.index_ddl("Users", "name_idx", ["Name"]) == \
+        'CREATE INDEX "name_idx" ON "Users" ("Name");\n'
+
+
+def test_duckdb_emits_no_sqlite_pragmas(se_duckdb, tmp_path, monkeypatch):
+    # "Catalog Error: unrecognized configuration parameter" would abort the
+    # whole load; the transaction wrapper stays, since DuckDB has real ones.
+    (tmp_path / "Users.xml").write_bytes((FIXTURES / "Users.xml").read_bytes())
+    monkeypatch.setenv("DATASET", "site")
+    monkeypatch.chdir(tmp_path)
+    se_duckdb.main()
+    out = (tmp_path / "site.sql").read_text(encoding="utf-8")
+    assert "PRAGMA" not in out
+    assert "BEGIN;" in out and "COMMIT;" in out
+
+
 # --- golden: full main() run per dialect -----------------------------------
 
 @pytest.mark.parametrize("dialect", ["postgres", "mysql"])
@@ -301,6 +363,18 @@ def test_golden_sqlite(se_sqlite, tmp_path, monkeypatch):
     se_sqlite.main()
     assert (tmp_path / "site.sql").read_text(encoding="utf-8") == \
         (FIXTURES / "expected_sqlite.sql").read_text(encoding="utf-8")
+
+
+def test_golden_duckdb(se_duckdb, tmp_path, monkeypatch):
+    # expected_duckdb.sql was generated by this hook from Users.xml and read
+    # through before committing; diffing it against expected_sqlite.sql shows
+    # the whole fork -- the missing PRAGMA line and the TIMESTAMP columns.
+    (tmp_path / "Users.xml").write_bytes((FIXTURES / "Users.xml").read_bytes())
+    monkeypatch.setenv("DATASET", "site")
+    monkeypatch.chdir(tmp_path)
+    se_duckdb.main()
+    assert (tmp_path / "site.sql").read_text(encoding="utf-8") == \
+        (FIXTURES / "expected_duckdb.sql").read_text(encoding="utf-8")
 
 
 def test_golden_cockroach(se_cockroach, tmp_path, monkeypatch):
