@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# The airlines demo needs two things beyond the shared PostgreSQL->SQLite
+# rewrite: every identifier in the dump is qualified to the `bookings` schema,
+# and the dump ships three convenience views (airplanes, airports, timetable)
+# whose bodies lean on Postgres-only operators (`AT TIME ZONE`, `@>`,
+# `bookings.lang()`), with no mechanical SQLite translation. Both are opt-in
+# knobs on the shared transform -- defaults off, so the datasets that symlink
+# straight to scripts/pgsql are untouched -- which this hook enables before
+# delegating. The database-managing preamble the upstream dump carries
+# (DROP/CREATE DATABASE, \connect, ALTER DATABASE ... SET, CREATE EXTENSION)
+# is Postgres-only noise the shared transform already drops unconditionally.
+set -e
+export PGSQL_EXTRA_SCHEMAS=bookings
+export PGSQL_DROP_VIEWS=1
+exec "$(dirname "$0")/../pgsql/transform"

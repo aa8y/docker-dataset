@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# postgrespro ships the airlines demo database as a single gzipped pg_dump
+# (downloaded by the generic EXTRACT_URL fetch). Decompress it and give it a
+# stable name so SQL_FILES can reference it regardless of the dated upstream
+# filename. Mirrors postgres/scripts/airlines/extract (contexts are separate
+# Docker build contexts, so the file cannot be a symlink across them).
+set -e
+gunzip -f ./*.sql.gz
+mv ./demo-*.sql airlines.sql
