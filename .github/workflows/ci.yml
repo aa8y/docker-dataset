@@ -9,6 +9,13 @@ on:
     paths-ignore:
       - '**/*.md'
 
+# Collapse redundant runs per ref. Superseded PR runs are cancelled as soon as a
+# new commit lands on the branch, but pushes to master are never cancelled
+# mid-run: each master commit must finish its own build and push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CST_VERSION: 1.22.1
   DAVE_VERSION: 0.4.1
@@ -20,6 +27,7 @@ jobs:
     # after the multi-arch build. Pin to the interpreter the alpine:3.21 builder
     # ships (python3 3.12) so tests exercise the same behavior as production.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +54,7 @@ jobs:
             platform: linux/arm64
             cst_arch: arm64
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -81,6 +90,7 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
