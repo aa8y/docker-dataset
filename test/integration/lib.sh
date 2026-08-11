@@ -69,11 +69,15 @@ write_expected() {
   # write_expected <db> <actual-json> — (re)generate the expected file for <db>
   # from freshly measured counts (the --update path). Volatile datasets get a
   # ">=<count>" floor per table instead of an exact number, so counts that
-  # drift upstream between builds don't fail later assert runs.
+  # drift upstream between builds don't fail later assert runs. The floor is
+  # set at 95% of the measured count, not the exact value: volatile upstreams
+  # are not monotonic (omdb merges records away, GeoNames cities drop below
+  # the population threshold), and an exact-count floor breaks on the first
+  # small shrink. 5% slack still catches real load failures.
   local db="$1" actual="$2"
   mkdir -p "$EXPECTED_DIR"
   if is_volatile "$db"; then
-    printf '%s\n' "$actual" | jq -S 'map_values(">=" + tostring)' > "${EXPECTED_DIR}/${db}.json"
+    printf '%s\n' "$actual" | jq -S 'map_values(">=" + (. * 0.95 | floor | tostring))' > "${EXPECTED_DIR}/${db}.json"
   else
     printf '%s\n' "$actual" | jq -S . > "${EXPECTED_DIR}/${db}.json"
   fi
