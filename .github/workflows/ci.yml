@@ -177,7 +177,12 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         env:
           TAG_SUFFIX: -${{ matrix.arch }}
-        run: dave push -c ${{ matrix.context }} -j 3
+        # -j 1: pushes from all matrix shards run simultaneously, so per-shard
+        # concurrency multiplies across 10 jobs. At -j 3 that is ~30 concurrent
+        # registry writers, which trips Docker Hub's 429 rate limiting; serial
+        # pushes per shard keep the fleet at ~10 and uploads are bandwidth-bound
+        # anyway. Raise only alongside a Docker Hub plan with higher limits.
+        run: dave push -c ${{ matrix.context }} -j 1
 
   # A per-arch push leaves `<tag>-amd64` / `<tag>-arm64` in the registry; this
   # joins each pair into the real multi-arch `<tag>` (pass 1) and then points
