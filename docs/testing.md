@@ -74,6 +74,41 @@ has no cheap equivalent, so `run-duckdb.sh` relies on the count pass itself: an
 unopenable database yields zero tables, which lib.sh reports as one clear
 "no tables found" line rather than a wall of missing-table errors.
 
+### Exit codes and retries
+
+These are the only tests here that touch real containers, images and networks,
+so some of their failures say nothing about the images under test. The scripts
+therefore separate the two kinds by exit code (the contract lives at the top of
+`lib.sh`, as `ASSERT_RC`):
+
+| Code | Meaning | Retry? |
+| --- | --- | --- |
+| `0` | everything asserted clean | — |
+| `3` | a real, deterministic failure: a count or table mismatch, a missing expected file, a corrupt SQLite database | never |
+| anything else | possibly transient: a readiness timeout, a docker or network error, `set -e` fallout | yes |
+
+`3` is never retried on purpose. A run script's verdict is a pure function of the
+image ID and the bytes of the expected files, so a second attempt reaches the
+identical conclusion — it hides nothing, and only doubles the time to red on
+every genuine regression.
+
+`test/integration/with-retry.sh <script-basename> <args...>` applies that
+policy, and `manifest.yml` routes every engine's `test:` template through it, so
+`dave test` gets it for free:
+
+```sh
+REPOSITORY=aa8y/postgres-dataset \
+  bash test/integration/with-retry.sh run.sh iso3166 iso3166
+```
+
+It resolves the script relative to its own directory, returns immediately on `0`
+or `3`, and otherwise retries. On exhaustion it returns the last attempt's own
+code, never a wrapper-invented one.
+
+* **`DDS_ITEST_RETRIES`** — extra attempts after the first (default `1`, i.e.
+  two attempts in total). `0` disables retrying.
+* **`DDS_ITEST_RETRY_DELAY`** — seconds between attempts (default `10`).
+
 ### Expected files and floors
 
 Expectations live per-dataset as JSON, keyed by qualified table name, e.g.
@@ -117,8 +152,38 @@ a stamp; `--update` neither reads nor writes one.
 
 * **`DDS_DEDUPE=0`** opts out entirely.
 * **`DDS_TEST_CACHE`** sets the cache directory (default
-  `${TMPDIR:-/tmp}/docker-dataset-itest`), so a stale entry cannot outlive a
-  reboot.
+  `${TMPDIR:-/tmp}/docker-dataset-itest`).
+
+CI persists that directory across **re-run attempts of the same commit**, so a
+re-run skips the tags that already passed instead of re-booting them. That is
+safe because correctness never depended on the cache being thrown away: the key
+is the image ID and the stamp body is the dataset list plus the exact bytes of
+every expected file the run reads. A rebuilt or changed image lands on a
+different key, an edited expectation no longer matches the body, and either way
+the entry misses and the tag runs. The cache can only ever skip a tag whose
+image *and* expectations are identical to the ones that passed. This is also why
+the build must cache-hit for a re-run to benefit — see the `CACHE_TO_SCOPE`
+note in `manifest.yml`: a rebuilt image has a new ID and no stamp to match.
+
+## Flaky upstreams and the dataset fingerprint
+
+Not a test layer, but the same concern: a transient failure should not be
+amplified into work. `bin/dataset-checksum` fingerprints a tag's upstream
+source(s) from cheap metadata and the manifest passes it as a build arg, so the
+Docker EXTRACT layer is reused until upstream actually changes. It is fail-open:
+a source whose metadata cannot be read folds in as `unknown`. That is safe but
+expensive — the fingerprint changes, which busts EXTRACT → TRANSFORM → LOAD and
+forces a full re-download from the very upstream that just failed to answer.
+
+* **`DATASET_CHECKSUM_FALLBACK`** (opt-in) names a directory of last-known-good
+  fingerprints, keyed exactly like the `DATASET_CHECKSUM_CACHE` memo cache but
+  meant to outlive a run. Every clean computation is written there; a degraded
+  one emits the stored fingerprint instead, with a note on stderr (stdout stays
+  just the fingerprint). Degraded and fallback-derived values are never written
+  back, so the directory only ever holds fingerprints computed from real
+  metadata. The trade: if upstream genuinely changed during the blip, one run
+  uses a stale fingerprint, and the next clean run produces the new value and
+  busts the layers then. Unset, the script behaves exactly as it always has.
 
 ## Running them
 

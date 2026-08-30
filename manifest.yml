@@ -39,7 +39,15 @@ templates:
   #                   run still gets a warm cache from before the split.
   #   CACHE_TO_SCOPE  build: additionally EXPORT the cache, under a scoped ref
   #                   (`...-<scope>`). Absent unless set, so an ordinary local
-  #                   build still never writes to the registry.
+  #                   build still never writes to the registry. The build
+  #                   template also IMPORTS that same scoped ref when the
+  #                   variable is set: a same-repo PR exports to its own scope,
+  #                   and without importing it a re-run attempt of that PR could
+  #                   not hit the cache its own earlier attempt just wrote -- it
+  #                   would rebuild, land on a different image ID, and so miss
+  #                   the integration-test skip stamps keyed on that ID. As
+  #                   always, a ref that does not exist yet (the first attempt)
+  #                   is a cache miss, not an error.
   #   TAG_SUFFIX      push: suffix for the published tag, so per-arch pushes
   #                   land on `<tag>-amd64` / `<tag>-arm64` for
   #                   bin/merge-manifests to join into one multi-arch tag.
@@ -57,6 +65,7 @@ templates:
     {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
     --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
     ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+    ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
     ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
     --build-arg DATASET={{dataset}}
     --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -67,7 +76,12 @@ templates:
     {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
     {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
     -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
-  test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run.sh {{tag}} {{dataset}}{{/retagFrom}}'
+  # Every engine's smoke test runs through test/integration/with-retry.sh, which
+  # re-runs the script once (DDS_ITEST_RETRIES) when it fails in a way that might
+  # be infrastructure -- a readiness timeout, a docker or registry hiccup -- and
+  # returns immediately on a pass or on the scripts' dedicated assertion exit
+  # code, which is deterministic and so pointless to repeat. See docs/testing.md.
+  test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run.sh {{tag}} {{dataset}}{{/retagFrom}}'
   push: >
     {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
     --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
@@ -334,6 +348,7 @@ contexts:
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
         ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
         ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -341,7 +356,7 @@ contexts:
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
-      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-mysql.sh {{tag}} {{dataset}}{{/retagFrom}}'
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-mysql.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
@@ -596,6 +611,7 @@ contexts:
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
         ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
         ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -605,7 +621,7 @@ contexts:
         {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
         {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
-      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-cockroach.sh {{tag}} {{dataset}}{{/retagFrom}}'
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-cockroach.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
@@ -837,6 +853,7 @@ contexts:
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
         ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
         ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -845,7 +862,7 @@ contexts:
         {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
-      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-sqlite.sh {{tag}} {{dataset}}{{/retagFrom}}'
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-sqlite.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
@@ -1106,6 +1123,7 @@ contexts:
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
         ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
+        ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
         ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -1114,7 +1132,7 @@ contexts:
         {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
-      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/run-duckdb.sh {{tag}} {{dataset}}{{/retagFrom}}'
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-duckdb.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}

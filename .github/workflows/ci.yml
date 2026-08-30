@@ -143,17 +143,63 @@ jobs:
         if: env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
         run: echo "CACHE_TO_SCOPE=pr" >> "$GITHUB_ENV"
 
+      # Last-known-good upstream fingerprints, carried across runs. When a live
+      # metadata fetch fails, bin/dataset-checksum falls back to the newest
+      # fingerprint recorded here instead of degrading to `unknown`; a single
+      # transient upstream blip would otherwise change the checksum baked into
+      # the build command, bust the EXTRACT layer cache, and force a full
+      # re-download of every dataset from the very upstream that just failed.
+      # Keyed per run+attempt because caches are immutable once written, and
+      # resolved through the context prefix so any earlier run's store is
+      # picked up -- cross-run fallback is the whole point of a last-known-good
+      # store. Fingerprints do not vary by arch, so arch stays out of the
+      # restore prefix and the two shards of a context read each other's
+      # entries; it is in the save key only because keys are reserved
+      # first-writer-wins and the two shards of one run would otherwise race
+      # to claim the same one.
+      - name: Restore checksum fallback store
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/checksum-fallback
+          key: checksum-lkg-${{ matrix.context }}-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: checksum-lkg-${{ matrix.context }}-
+
+      # Integration-test pass stamps from earlier attempts of this same commit.
+      # A stamp is keyed by image ID and holds the dataset list plus the exact
+      # bytes of every expected JSON, and is only written after a clean pass,
+      # so a hit means this exact image already satisfied these exact
+      # expectations. Re-running a failed shard re-imports the registry build
+      # cache, so tags untouched by the retry rebuild to a byte-identical image
+      # ID, hit their stamp, and skip booting the database container entirely;
+      # anything whose image or expectations actually changed misses by
+      # construction and is tested for real. Scoped to this SHA on purpose: the
+      # stamp contents would keep a broader restore correct on their own, but
+      # confining it to the commit keeps the cache small and the reasoning
+      # local. The restore-keys prefix (no attempt suffix) is what lets attempt
+      # N pick up the stamps attempt N-1 wrote.
+      - name: Restore integration test stamps
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/itest-stamps
+          key: itest-stamps-${{ matrix.context }}-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: itest-stamps-${{ matrix.context }}-${{ matrix.arch }}-${{ github.sha }}-
+
       # Every rendered build/push command embeds $(bin/dataset-checksum ...);
       # uncached, that is one upstream metadata round-trip per tag, serialized
       # ahead of any Docker work. Warm them all here concurrently so the
       # per-tag calls become local cache reads. The cache dir is exported via
       # GITHUB_ENV so every later dave step reads from the same warm cache
-      # (the runner context is not available in job-level env).
+      # (the runner context is not available in job-level env). The fallback
+      # dir is exported the same way, and must be in the environment before
+      # this first fetch runs: this step both consumes it (on failure) and
+      # refreshes it (on every clean fetch).
       - name: Warm dataset checksums
         env:
           DATASET_CHECKSUM_CACHE: ${{ runner.temp }}/checksums
+          DATASET_CHECKSUM_FALLBACK: ${{ runner.temp }}/checksum-fallback
         run: |
           echo "DATASET_CHECKSUM_CACHE=$DATASET_CHECKSUM_CACHE" >> "$GITHUB_ENV"
+          echo "DATASET_CHECKSUM_FALLBACK=$DATASET_CHECKSUM_FALLBACK" >> "$GITHUB_ENV"
           bin/dataset-checksums -c ${{ matrix.context }}
 
       - name: Build images
@@ -163,7 +209,21 @@ jobs:
         run: dave structure-test -c ${{ matrix.context }} -j "$DAVE_JOBS_ST"
 
       - name: Test images (integration)
+        env:
+          DDS_TEST_CACHE: ${{ runner.temp }}/itest-stamps
         run: dave test -c ${{ matrix.context }} -j "$DAVE_JOBS_TEST"
+
+      # Saved with `always()` so a shard that failed part-way still banks the
+      # stamps for the tags that did pass -- that partial credit is exactly
+      # what makes the next attempt cheap. The key carries the attempt number
+      # because a cache entry cannot be overwritten once written; the restore
+      # above finds it by prefix.
+      - name: Save integration test stamps
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/itest-stamps
+          key: itest-stamps-${{ matrix.context }}-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
 
       # Publish this shard's images natively as `<tag>-<arch>`; the merge job
       # below joins the per-arch pairs into the real multi-arch tags. This
@@ -182,7 +242,37 @@ jobs:
         # registry writers, which trips Docker Hub's 429 rate limiting; serial
         # pushes per shard keep the fleet at ~10 and uploads are bandwidth-bound
         # anyway. Raise only alongside a Docker Hub plan with higher limits.
-        run: dave push -c ${{ matrix.context }} -j 1
+        # Even at ~10 writers a 429 still slips through occasionally, so retry
+        # up to three times with a lengthening pause: re-running `dave push`
+        # hits the same daemon whose image store already holds every layer, so
+        # the rebuild resolves as a full cache hit and the retry is
+        # upload-only and idempotent -- blobs that already landed are skipped
+        # by digest.
+        run: |
+          for attempt in 1 2 3; do
+            if dave push -c ${{ matrix.context }} -j 1; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "push failed after 3 attempts" >&2
+              exit 1
+            fi
+            delay=$((attempt * 60))
+            echo "push attempt $attempt failed; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
+
+      # The fallback store is refreshed by every clean fetch above, so save it
+      # at the very end of the job to bank whatever the run learned. `always()`
+      # matters here too: a shard that failed in build or test may still have
+      # completed a good metadata fetch, and that fingerprint is worth keeping
+      # for the next run.
+      - name: Save checksum fallback store
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/checksum-fallback
+          key: checksum-lkg-${{ matrix.context }}-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # A per-arch push leaves `<tag>-amd64` / `<tag>-arm64` in the registry; this
   # joins each pair into the real multi-arch `<tag>` (pass 1) and then points
