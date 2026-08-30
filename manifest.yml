@@ -39,15 +39,20 @@ templates:
   #                   run still gets a warm cache from before the split.
   #   CACHE_TO_SCOPE  build: additionally EXPORT the cache, under a scoped ref
   #                   (`...-<scope>`). Absent unless set, so an ordinary local
-  #                   build still never writes to the registry. The build
-  #                   template also IMPORTS that same scoped ref when the
-  #                   variable is set: a same-repo PR exports to its own scope,
-  #                   and without importing it a re-run attempt of that PR could
-  #                   not hit the cache its own earlier attempt just wrote -- it
-  #                   would rebuild, land on a different image ID, and so miss
-  #                   the integration-test skip stamps keyed on that ID. As
-  #                   always, a ref that does not exist yet (the first attempt)
-  #                   is a cache miss, not an error.
+  #                   build still never writes to the registry. CI sets it only
+  #                   on a dedicated serialized re-build step, never on the
+  #                   parallel build itself: a mode=max export is a heavy
+  #                   registry write, and ten shards exporting at build
+  #                   concurrency are ~30 simultaneous writers -- the same
+  #                   arithmetic that forced `dave push` down to -j 1.
+  #   CACHE_FROM_SCOPE  build: additionally IMPORT the scoped ref
+  #                   (`...-<scope>`). Set alongside exports of that scope so a
+  #                   re-run attempt of a same-repo PR hits the cache its own
+  #                   earlier attempt wrote -- without it the retry would
+  #                   rebuild, land on a different image ID, and miss the
+  #                   integration-test skip stamps keyed on that ID. A ref that
+  #                   does not exist yet (the first attempt) is a cache miss,
+  #                   not an error.
   #   TAG_SUFFIX      push: suffix for the published tag, so per-arch pushes
   #                   land on `<tag>-amd64` / `<tag>-arm64` for
   #                   bin/merge-manifests to join into one multi-arch tag.
@@ -65,7 +70,7 @@ templates:
     {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
     --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
     ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
-    ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
+    ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
     ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
     --build-arg DATASET={{dataset}}
     --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -348,7 +353,7 @@ contexts:
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
         ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
-        ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
         ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -611,7 +616,7 @@ contexts:
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
         ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
-        ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
         ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -853,7 +858,7 @@ contexts:
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
         ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
-        ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
         ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -1123,7 +1128,7 @@ contexts:
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
         ${CACHE_ARCH:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}}
-        ${CACHE_TO_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE}}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
         ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"

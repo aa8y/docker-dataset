@@ -132,16 +132,20 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Opt in to exporting this shard's build cache under a PR scope
-      # (buildcache-<tag>-<arch>-pr), so trusted PR builds upload the layers
-      # they just built without ever clobbering the master-owned
-      # buildcache-<tag>-<arch> refs the import side trusts. Gated on the
-      # same-repo condition above: on fork PRs the guard is false, the
-      # variable stays unset, and the manifest's ${CACHE_TO_SCOPE:+...} guard
-      # erases the --cache-to flag entirely.
-      - name: Export PR build cache
+      # Opt in to importing the PR-scoped cache refs (buildcache-<tag>-<arch>-pr)
+      # during every build below, so a re-run attempt of this PR hits the cache
+      # its own earlier attempt exported. Import only: the matching EXPORT
+      # (CACHE_TO_SCOPE) is deliberately not set here but on the dedicated
+      # serialized step after the build -- a mode=max cache export is a heavy
+      # registry write, and with 10 shards building at -j 3 the fleet peaks at
+      # ~30 simultaneous writers, which trips Docker Hub's 429 rate limiting
+      # mid-build (the same arithmetic that forced `dave push` to -j 1). Gated
+      # on the same-repo condition above: on fork PRs the guard is false, the
+      # variable stays unset, and the manifest's ${CACHE_FROM_SCOPE:+...} guard
+      # erases the flag entirely.
+      - name: Import PR build cache
         if: env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
-        run: echo "CACHE_TO_SCOPE=pr" >> "$GITHUB_ENV"
+        run: echo "CACHE_FROM_SCOPE=pr" >> "$GITHUB_ENV"
 
       # Last-known-good upstream fingerprints, carried across runs. When a live
       # metadata fetch fails, bin/dataset-checksum falls back to the newest
@@ -255,6 +259,21 @@ jobs:
             echo "build attempt $attempt failed; retrying in ${delay}s" >&2
             sleep "$delay"
           done
+
+      # The PR cache export, moved out of the build itself (see the Import
+      # step above for the concurrency arithmetic). Re-running `dave build`
+      # with CACHE_TO_SCOPE set resolves every layer from the local store --
+      # the same full-cache-hit trick the Push step uses -- so this is
+      # upload-only, and -j 1 keeps the fleet at ~10 concurrent writers, the
+      # level the registry tolerates. continue-on-error because the cache is
+      # purely an optimization for the next attempt: a throttled export must
+      # never fail a shard whose images built and will be tested regardless.
+      - name: Export PR build cache
+        if: env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          CACHE_TO_SCOPE: pr
+        run: dave build -c ${{ matrix.context }} -j 1
 
       - name: Test images (structure)
         run: dave structure-test -c ${{ matrix.context }} -j "$DAVE_JOBS_ST"
