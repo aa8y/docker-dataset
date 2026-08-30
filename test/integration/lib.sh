@@ -20,6 +20,22 @@
 # machine-readable output (`dave test` streams both live). Diagnostics staying
 # on stderr is also what keeps CI failures -- which tables/counts mismatched --
 # legible when stdout is being piped or captured.
+# Exit-code contract, shared by every run*.sh and relied on by with-retry.sh:
+#
+#   0            everything asserted clean.
+#   $ASSERT_RC   a deterministic, real failure: a count/table mismatch, or an
+#                expected file that isn't there. The image and the expectations
+#                are both fixed inputs, so a second run produces the identical
+#                verdict -- retrying only doubles the CI bill and delays the
+#                red. Never retried.
+#   anything     potentially transient infra trouble: a readiness timeout, a
+#   else         docker or network error, `set -e` fallout from an unexpected
+#                command failure. May be retried.
+#
+# 3 rather than 2, which shells conventionally use for usage errors, and well
+# clear of the 126/127/128+n range the shell assigns itself.
+ASSERT_RC=3
+
 GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; RESET=$'\033[0m'
 info() { printf '%s\n' "$*" >&2; }
 pass() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
@@ -195,8 +211,16 @@ wait_for_log_marker() {
 # share an image but assert different datasets still both run, and editing an
 # expected file invalidates the entry rather than silently skipping past it.
 # Only a clean assert run writes a stamp -- a failure has to stay reproducible --
-# --update neither reads nor writes one, and DDS_DEDUPE=0 opts out entirely. The
-# cache lives under an ephemeral tmp dir, so a stale entry cannot outlive a boot.
+# --update neither reads nor writes one, and DDS_DEDUPE=0 opts out entirely.
+#
+# Correctness here does not depend on the cache being ephemeral. The key is the
+# image ID, and the stamp body is the dataset list plus the exact bytes of every
+# expected file the run reads: change the image and the key moves, change an
+# expectation and the body no longer matches, either way the entry misses and
+# the run happens. That is what makes it safe for CI to persist this directory
+# across re-run attempts of the same commit -- a re-run then skips the tags that
+# already passed, which is the whole point, without ever being able to skip a
+# tag whose image or expectations differ from the ones that passed.
 CACHE_DIR="${DDS_TEST_CACHE:-${TMPDIR:-/tmp}/docker-dataset-itest}"
 stamp_file=""
 

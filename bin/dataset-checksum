@@ -16,6 +16,22 @@
 # any source's metadata could not be read it is folded in as `unknown`, and
 # memoizing that would let a transient upstream blip stick for the whole run.
 #
+# Last-known-good fallback (opt-in): DATASET_CHECKSUM_FALLBACK names a directory
+# of fingerprints keyed exactly like the memo cache above, but meant to outlive
+# a single run (CI persists it across runs). Fail-open is safe for correctness
+# and terrible for cost: folding a source in as `unknown` changes the
+# fingerprint, which busts EXTRACT -> TRANSFORM -> LOAD and forces a full
+# re-download from the very upstream that just failed to answer a HEAD -- the
+# flakier the source, the harder we hammer it. So when a computation comes back
+# degraded and a last-known-good entry exists, that entry is emitted instead.
+# The trade is deliberate: if upstream genuinely changed *during* the blip we
+# reuse a stale fingerprint for at most one run, and the next clean run (which
+# reads real metadata again) produces the new value and busts the layers then.
+# One run of possible staleness is worth not amplifying upstream flakiness into
+# a full rebuild of everything. Only clean results are ever written to the
+# fallback directory -- a degraded or fallback-derived value never overwrites
+# it, or the staleness would compound.
+#
 # Usage: dataset-checksum "<space-separated EXTRACT_URL list>"
 # Output: a 16-char hex fingerprint on stdout.
 set -euo pipefail
@@ -29,11 +45,19 @@ else
   sha256() { shasum -a 256; }
 fi
 
+# Entry key, shared by the memo cache and the fallback directory: sha256 of the
+# URL list, first 16 hex chars. Computing it once (and only when something
+# actually needs it) keeps the two directories addressable by the same name, so
+# a warmed memo entry and its last-known-good twin are trivially correlatable.
+key=""
+if [ -n "${DATASET_CHECKSUM_CACHE:-}" ] || [ -n "${DATASET_CHECKSUM_FALLBACK:-}" ]; then
+  key="$(printf '%s' "${1:-}" | sha256 | cut -c1-16)"
+fi
+
 # Cache lookup. A hit short-circuits every network call below. `-s` (rather
 # than `-f`) so a truncated/empty file is treated as a miss and recomputed.
 cache_file=""
 if [ -n "${DATASET_CHECKSUM_CACHE:-}" ]; then
-  key="$(printf '%s' "${1:-}" | sha256 | cut -c1-16)"
   cache_file="${DATASET_CHECKSUM_CACHE}/${key}"
   if [ -s "$cache_file" ]; then
     cat "$cache_file"
@@ -41,6 +65,26 @@ if [ -n "${DATASET_CHECKSUM_CACHE:-}" ]; then
   fi
   mkdir -p "$DATASET_CHECKSUM_CACHE" 2>/dev/null || cache_file=""
 fi
+
+# Fallback directory. Unlike the memo cache this is never a short-circuit: a
+# fingerprint is only worth reusing once we know this run's own lookup failed,
+# so it is consulted after the computation below, not before. mkdir here (not
+# at write time) so an unusable directory disables the feature once, quietly,
+# rather than failing a build over a cache nicety.
+fallback_file=""
+if [ -n "${DATASET_CHECKSUM_FALLBACK:-}" ]; then
+  fallback_file="${DATASET_CHECKSUM_FALLBACK}/${key}"
+  mkdir -p "$DATASET_CHECKSUM_FALLBACK" 2>/dev/null || fallback_file=""
+fi
+
+# Write-then-rename so a concurrent reader never sees a partial file. Failure to
+# write is swallowed: both directories are optimizations, and a build must not
+# die because one of them is full or read-only.
+write_entry() {
+  local dest="$1" value="$2" tmp
+  tmp="${dest}.$$.tmp"
+  { printf '%s\n' "$value" > "$tmp" && mv -f "$tmp" "$dest"; } || rm -f "$tmp"
+}
 
 # Cheap HTTP fingerprint: HEAD headers (ETag/Last-Modified/Content-Length), with
 # a ranged-GET fallback for servers that reject HEAD. Echoes "" on failure.
@@ -87,11 +131,30 @@ for u in ${1:-}; do
 done
 checksum="$(printf '%s' "$acc" | sha256 | cut -c1-16)"
 
-# Memoize, but only a clean result (see the header). Write-then-rename so a
-# concurrent reader never sees a partial file.
-if [ -n "$cache_file" ] && [ "$degraded" -eq 0 ]; then
-  tmp="${cache_file}.$$.tmp"
-  { printf '%s\n' "$checksum" > "$tmp" && mv -f "$tmp" "$cache_file"; } || rm -f "$tmp"
+if [ "$degraded" -eq 0 ]; then
+  # Memoize, but only a clean result (see the header) -- into the per-run memo
+  # cache, and into the cross-run last-known-good directory, which by
+  # construction then only ever holds fingerprints computed from real metadata.
+  [ -n "$cache_file" ] && write_entry "$cache_file" "$checksum"
+  [ -n "$fallback_file" ] && write_entry "$fallback_file" "$checksum"
+else
+  # Degraded: at least one source folded in as `unknown`, so $checksum is a
+  # value that exists only because upstream was unreachable. Prefer the last
+  # known good one if we have it -- see the header for why one run of possible
+  # staleness beats re-downloading every flaky upstream. `-s` again, so a
+  # truncated entry is no entry. The note goes to stderr; stdout stays exactly
+  # one fingerprint, because the manifest reads it via $(...).
+  if [ -n "$fallback_file" ] && [ -s "$fallback_file" ]; then
+    fallback="$(head -n 1 "$fallback_file" | tr -d '[:space:]')"
+    if [ -n "$fallback" ]; then
+      echo "dataset-checksum: upstream metadata unavailable; reusing last-known-good ${fallback} instead of degraded ${checksum}" >&2
+      checksum="$fallback"
+      # Memo cache only, never the fallback file: memoizing keeps every tag in
+      # this run agreeing on one fingerprint, while writing back would let a
+      # value we did not verify become the new "last known good".
+      [ -n "$cache_file" ] && write_entry "$cache_file" "$checksum"
+    fi
+  fi
 fi
 
 printf '%s\n' "$checksum"

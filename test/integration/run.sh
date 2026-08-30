@@ -123,9 +123,14 @@ done
 if [[ "$ready" -ne 1 ]]; then
   fail "${IMAGE}: Postgres did not become ready in time (${READY_TIMEOUT}s)"
   docker logs "$CONTAINER" 2>&1 | tail -30 >&2
+  # Plain 1, deliberately not $ASSERT_RC: a readiness timeout is exactly the
+  # kind of failure a loaded or emulated runner produces once and not again, so
+  # it stays in the retryable class (see the contract in lib.sh).
   exit 1
 fi
 
+# Assertion outcomes below are deterministic -- same image, same expected bytes,
+# same verdict -- so they exit $ASSERT_RC, which with-retry.sh never retries.
 rc=0
 for db in "${DATASETS[@]}"; do
   expected_file="${EXPECTED_DIR}/${db}.json"
@@ -138,10 +143,10 @@ for db in "${DATASETS[@]}"; do
 
   if [[ ! -f "$expected_file" ]]; then
     fail "${db}: missing expected file ${expected_file} (run with --update to create)"
-    rc=1; continue
+    rc="$ASSERT_RC"; continue
   fi
 
-  check_counts "$db" "$(cat "$expected_file")" "$actual" || rc=1
+  check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"

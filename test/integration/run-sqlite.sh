@@ -104,10 +104,12 @@ integrity_ok() {
   fi
 }
 
+# Assertion outcomes below are deterministic -- same image, same expected bytes,
+# same verdict -- so they exit $ASSERT_RC, which with-retry.sh never retries.
 rc=0
 for db in "${DATASETS[@]}"; do
   info "==> ${IMAGE} (${db})"
-  integrity_ok "$db" || { rc=1; continue; }
+  integrity_ok "$db" || { rc="$ASSERT_RC"; continue; }
   expected_file="${EXPECTED_DIR}/${db}.json"
   actual="$(actual_counts "$db")"
 
@@ -118,10 +120,10 @@ for db in "${DATASETS[@]}"; do
 
   if [[ ! -f "$expected_file" ]]; then
     fail "${db}: missing expected file ${expected_file} (run with --update to create)"
-    rc=1; continue
+    rc="$ASSERT_RC"; continue
   fi
 
-  check_counts "$db" "$(cat "$expected_file")" "$actual" || rc=1
+  check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"
