@@ -132,16 +132,20 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Opt in to exporting this shard's build cache under a PR scope
-      # (buildcache-<tag>-<arch>-pr), so trusted PR builds upload the layers
-      # they just built without ever clobbering the master-owned
-      # buildcache-<tag>-<arch> refs the import side trusts. Gated on the
-      # same-repo condition above: on fork PRs the guard is false, the
-      # variable stays unset, and the manifest's ${CACHE_TO_SCOPE:+...} guard
-      # erases the --cache-to flag entirely.
-      - name: Export PR build cache
+      # Opt in to importing the PR-scoped cache refs (buildcache-<tag>-<arch>-pr)
+      # during every build below, so a re-run attempt of this PR hits the cache
+      # its own earlier attempt exported. Import only: the matching EXPORT
+      # (CACHE_TO_SCOPE) is deliberately not set here but on the dedicated
+      # serialized step after the build -- a mode=max cache export is a heavy
+      # registry write, and with 10 shards building at -j 3 the fleet peaks at
+      # ~30 simultaneous writers, which trips Docker Hub's 429 rate limiting
+      # mid-build (the same arithmetic that forced `dave push` to -j 1). Gated
+      # on the same-repo condition above: on fork PRs the guard is false, the
+      # variable stays unset, and the manifest's ${CACHE_FROM_SCOPE:+...} guard
+      # erases the flag entirely.
+      - name: Import PR build cache
         if: env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
-        run: echo "CACHE_TO_SCOPE=pr" >> "$GITHUB_ENV"
+        run: echo "CACHE_FROM_SCOPE=pr" >> "$GITHUB_ENV"
 
       # Last-known-good upstream fingerprints, carried across runs. When a live
       # metadata fetch fails, bin/dataset-checksum falls back to the newest
@@ -200,10 +204,76 @@ jobs:
         run: |
           echo "DATASET_CHECKSUM_CACHE=$DATASET_CHECKSUM_CACHE" >> "$GITHUB_ENV"
           echo "DATASET_CHECKSUM_FALLBACK=$DATASET_CHECKSUM_FALLBACK" >> "$GITHUB_ENV"
+          # Both persisted dirs exist even if the shard dies before the step
+          # that would first write them, so the always() cache saves below
+          # never warn about a missing path.
+          mkdir -p "$DATASET_CHECKSUM_FALLBACK" "${{ runner.temp }}/itest-stamps"
           bin/dataset-checksums -c ${{ matrix.context }}
 
+      # The builds themselves must not be what pulls the bases: each context
+      # has only two or three distinct FROM images, but ~21 tags per shard
+      # each resolve them against Docker Hub independently, and 10 shards
+      # doing that from one account exhausts the shared hourly pull quota --
+      # once it is gone, no amount of minutes-scale backoff brings it back
+      # within the job timeout. So pull each distinct base exactly once here
+      # (a handful of pulls per shard, well inside the quota) and let every
+      # build resolve FROM from the local image store. Stage aliases (`FROM
+      # engine`) are names defined by an earlier `FROM ... AS`, not registry
+      # refs, and are skipped.
+      - name: Pre-pull base images
+        run: |
+          aliases="$(awk 'toupper($1)=="FROM" && toupper($3)=="AS" {print $4}' ${{ matrix.context }}/Dockerfile | tr '\n' ' ')"
+          images="$(awk 'toupper($1)=="FROM" {print $2}' ${{ matrix.context }}/Dockerfile | sort -u)"
+          for img in $images; do
+            case " $aliases " in *" $img "*) continue ;; esac
+            for attempt in 1 2 3 4 5; do
+              if docker pull --platform "$PLATFORM" "$img"; then
+                break
+              fi
+              if [ "$attempt" -eq 5 ]; then
+                echo "pull of $img failed after 5 attempts" >&2
+                exit 1
+              fi
+              delay=$((attempt * 60))
+              echo "pull of $img attempt $attempt failed; retrying in ${delay}s" >&2
+              sleep "$delay"
+            done
+          done
+
+      # Retried like the push below, and for the same reason: with the bases
+      # pre-pulled above the remaining registry traffic is buildcache manifest
+      # resolution, which can still catch a transient 429. A second
+      # `dave build` finds every already-built layer in the local store, so a
+      # retry redoes only the tags a failure actually killed.
       - name: Build images
-        run: dave build -c ${{ matrix.context }} -j "$DAVE_JOBS_BUILD"
+        run: |
+          for attempt in 1 2 3; do
+            if dave build -c ${{ matrix.context }} -j "$DAVE_JOBS_BUILD"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "build failed after 3 attempts" >&2
+              exit 1
+            fi
+            delay=$((attempt * 60))
+            echo "build attempt $attempt failed; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
+
+      # The PR cache export, moved out of the build itself (see the Import
+      # step above for the concurrency arithmetic). Re-running `dave build`
+      # with CACHE_TO_SCOPE set resolves every layer from the local store --
+      # the same full-cache-hit trick the Push step uses -- so this is
+      # upload-only, and -j 1 keeps the fleet at ~10 concurrent writers, the
+      # level the registry tolerates. continue-on-error because the cache is
+      # purely an optimization for the next attempt: a throttled export must
+      # never fail a shard whose images built and will be tested regardless.
+      - name: Export PR build cache
+        if: env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          CACHE_TO_SCOPE: pr
+        run: dave build -c ${{ matrix.context }} -j 1
 
       - name: Test images (structure)
         run: dave structure-test -c ${{ matrix.context }} -j "$DAVE_JOBS_ST"
