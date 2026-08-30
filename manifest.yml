@@ -199,8 +199,15 @@ contexts:
           configs:
             - test/config/openflights.yaml
       pagila:
-        extractUrl: https://github.com/devrimgunduz/pagila.git
-        sqlFiles: pagila/pagila-schema.sql pagila/pagila-data.sql
+        # A pinned tarball, no longer a clone of upstream git HEAD: pagila
+        # added a pgvector example (CREATE EXTENSION vector) in 2026-07, which
+        # postgres:18-alpine cannot satisfy -- init aborts at that statement
+        # and the container never becomes ready. This commit is the pre-2026-07
+        # HEAD the recorded expected counts were measured against. Bump it
+        # deliberately: alongside pgvector support in the image and re-recorded
+        # expectations, not by tracking HEAD.
+        extractUrl: https://github.com/devrimgunduz/pagila/archive/e0e35a666f31a786b9d3c06cb83799fc46db25d4.tar.gz
+        sqlFiles: pagila-e0e35a666f31a786b9d3c06cb83799fc46db25d4/pagila-schema.sql pagila-e0e35a666f31a786b9d3c06cb83799fc46db25d4/pagila-data.sql
         structureTest:
           configs:
             - test/config/pagila.yaml
