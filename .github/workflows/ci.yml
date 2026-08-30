@@ -200,10 +200,33 @@ jobs:
         run: |
           echo "DATASET_CHECKSUM_CACHE=$DATASET_CHECKSUM_CACHE" >> "$GITHUB_ENV"
           echo "DATASET_CHECKSUM_FALLBACK=$DATASET_CHECKSUM_FALLBACK" >> "$GITHUB_ENV"
+          # Both persisted dirs exist even if the shard dies before the step
+          # that would first write them, so the always() cache saves below
+          # never warn about a missing path.
+          mkdir -p "$DATASET_CHECKSUM_FALLBACK" "${{ runner.temp }}/itest-stamps"
           bin/dataset-checksums -c ${{ matrix.context }}
 
+      # Retried like the push below, and for the same reason: 10 shards each
+      # building at -j 3 resolve base-image and buildcache manifests against
+      # Docker Hub near-simultaneously, and a cold cache (nothing to import, so
+      # every base is really pulled) is exactly when the fleet trips the 429
+      # rate limit. The limit window is short-lived and a second `dave build`
+      # finds every already-built layer in the local store, so a retry redoes
+      # only the tags the 429 actually killed.
       - name: Build images
-        run: dave build -c ${{ matrix.context }} -j "$DAVE_JOBS_BUILD"
+        run: |
+          for attempt in 1 2 3; do
+            if dave build -c ${{ matrix.context }} -j "$DAVE_JOBS_BUILD"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "build failed after 3 attempts" >&2
+              exit 1
+            fi
+            delay=$((attempt * 60))
+            echo "build attempt $attempt failed; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
 
       - name: Test images (structure)
         run: dave structure-test -c ${{ matrix.context }} -j "$DAVE_JOBS_ST"
