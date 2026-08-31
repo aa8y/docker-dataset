@@ -8,12 +8,23 @@ schemaVersion: "2.0.0"
 # pagila is sourced from https://github.com/devrimgunduz/pagila (a maintained
 # fork; pgFoundry's original no longer loads on modern Postgres). Its `payment`
 # table is range-partitioned by month, so data is COPYed into the partitions
-# (payment_p2022_NN), not the parent. We assert the partitioned parent exists
-# and that at least the first partition is created and loaded.
+# (payment_pYYYY_NN, currently spanning 2022-01 through 2026-07), not the
+# parent. We assert the partitioned parent exists and that at least the first
+# partition is created and loaded.
+#
+# The dump also does `CREATE EXTENSION vector` (its film_embedding example),
+# so we assert the pgvector artifacts the Dockerfile compiles in are actually
+# present in the image -- without them init aborts at that statement.
 
 fileExistenceTests:
   - name: "pagila init script exists"
     path: "/docker-entrypoint-initdb.d/pagila.sql"
+    shouldExist: true
+  - name: "pgvector shared library is installed"
+    path: "/usr/local/lib/postgresql/vector.so"
+    shouldExist: true
+  - name: "pgvector extension control file is installed"
+    path: "/usr/local/share/postgresql/extension/vector.control"
     shouldExist: true
 
 fileContentTests:
@@ -35,6 +46,7 @@ fileContentTests:
       - "CREATE TABLE public.film[ (]"
       - "CREATE TABLE public.film_actor[ (]"
       - "CREATE TABLE public.film_category[ (]"
+      - "CREATE TABLE public.film_embedding[ (]"
       - "CREATE TABLE public.inventory[ (]"
       - "CREATE TABLE public.language[ (]"
       - "CREATE TABLE public.payment[ (]"
@@ -55,6 +67,7 @@ fileContentTests:
       - "COPY public.film[ (]"
       - "COPY public.film_actor[ (]"
       - "COPY public.film_category[ (]"
+      - "COPY public.film_embedding[ (]"
       - "COPY public.inventory[ (]"
       - "COPY public.language[ (]"
       - "COPY public.payment_p2022_01[ (]"

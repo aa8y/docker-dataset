@@ -127,7 +127,26 @@ RUN bash -c ' \
       h="/usr/local/lib/scripts/${DATASET}/load"; if [ -f "$h" ]; then "$h"; fi'
 
 # ---------------------------------------------------------------------------
-# Final image: official postgres + the assembled init artifacts only.
+# pgvector: compiled against the same base the final image runs on.
+# ---------------------------------------------------------------------------
+# pagila's upstream dump does `CREATE EXTENSION vector` (its film_embedding
+# example), which the official postgres image cannot satisfy, so the extension
+# is built here and its installed artifacts are COPY'd into the final image.
+# Pinned to a release tag; bump deliberately, like any other upstream pin.
+# OPTFLAGS= drops pgvector's default -march=native (unportable across the
+# multi-platform build) and with_llvm=no skips the JIT bitcode, so the build
+# needs no clang/llvm and the final image ships only the .so + extension
+# control/sql files.
+FROM postgres:18-alpine AS pgvector
+
+ARG PGVECTOR_VERSION=0.8.6
+RUN apk add --no-cache --virtual .build-deps build-base ca-certificates wget && \
+    wget -qO- "https://github.com/pgvector/pgvector/archive/refs/tags/v${PGVECTOR_VERSION}.tar.gz" | tar -xzf - -C /tmp && \
+    make -C "/tmp/pgvector-${PGVECTOR_VERSION}" OPTFLAGS= with_llvm=no install && \
+    apk del .build-deps
+
+# ---------------------------------------------------------------------------
+# Final image: official postgres + pgvector + the assembled init artifacts.
 # ---------------------------------------------------------------------------
 FROM postgres:18-alpine
 
@@ -157,6 +176,8 @@ RUN mkdir -p $PG_HOME && \
     touch $PG_HOME/.psql_history && \
     chown -R $PG_USER:$PG_USER $PG_HOME
 
+COPY --from=pgvector /usr/local/lib/postgresql/vector.so /usr/local/lib/postgresql/
+COPY --from=pgvector /usr/local/share/postgresql/extension/vector* /usr/local/share/postgresql/extension/
 COPY --from=builder /docker-entrypoint-initdb.d /docker-entrypoint-initdb.d
 
 USER $PG_USER
