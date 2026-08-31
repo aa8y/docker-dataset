@@ -12,6 +12,19 @@
 # The two passes must not overlap -- an alias can only be pointed at a tag that
 # already exists -- so pass 2 starts once pass 1 has fully drained.
 #
+# Done-stamps (opt-in): when MERGE_STAMP_DIR names a directory, each target tag
+# that merges cleanly leaves a stamp there, and a stamped tag is skipped on the
+# next invocation. Every `imagetools create` costs several registry manifest
+# reads plus a write, all counted against Docker Hub's hourly pull quota, and
+# the create is not incremental -- re-running it for an already-merged tag
+# spends the same quota again. Without stamps a partially rate-limited run can
+# never converge: each retry redoes the whole tag list and dies at the same
+# depth. With them, each retry only pays for the remainder. CI persists the
+# directory across re-run attempts of the same commit; the stamps are keyed by
+# target ref only, which is safe exactly because the cache scope is one
+# commit's attempts -- the per-arch source tags cannot change under a stamp
+# within that scope.
+#
 # Usage: merge-manifests [-c <context>] [-n|--dry-run]
 set -euo pipefail
 
@@ -77,7 +90,11 @@ arg_lines() {
 
 # Dry-run prints what would run; otherwise fan out over $jobs workers. The
 # NUL-delimited hand-off avoids GNU-only `xargs -d`, and `set -f; set -- $1`
-# splits a line back into arguments without an eval.
+# splits a line back into arguments without an eval. Each worker checks and
+# writes the done-stamp itself ($2 is the target ref, the word after -t), so
+# stamps stay accurate under -P parallelism: only the tags that actually
+# merged are stamped, whichever those turn out to be when the registry starts
+# throttling.
 run_pass() {
   local label="$1" lines="$2"
   [ -n "$lines" ] || { echo "merge-manifests: $label: nothing to do" >&2; return 0; }
@@ -86,8 +103,23 @@ run_pass() {
     return 0
   fi
   printf '%s\n' "$lines" | tr '\n' '\0' \
-    | xargs -0 -P "$jobs" -n 1 sh -c 'set -f; set -- $1; exec docker buildx imagetools create "$@"' sh
+    | xargs -0 -P "$jobs" -n 1 sh -c '
+        set -f; set -- $1
+        if [ -n "${MERGE_STAMP_DIR:-}" ]; then
+          stamp="${MERGE_STAMP_DIR}/$(printf %s "$2" | tr -c "A-Za-z0-9._-" "-")"
+          if [ -f "$stamp" ]; then
+            echo "merge-manifests: $2 already merged in an earlier attempt; skipping" >&2
+            exit 0
+          fi
+        fi
+        docker buildx imagetools create "$@" || exit 1
+        if [ -n "${MERGE_STAMP_DIR:-}" ]; then : > "$stamp"; fi
+      ' sh
 }
+
+# The stamp dir exists up front so a run that fails before its first clean
+# merge still leaves a valid (empty) directory for CI to persist.
+[ -z "${MERGE_STAMP_DIR:-}" ] || mkdir -p "$MERGE_STAMP_DIR"
 
 # Collected before either pass runs, and via plain assignments so that `set -e`
 # sees a failing extraction (inside a command substitution used as an argument

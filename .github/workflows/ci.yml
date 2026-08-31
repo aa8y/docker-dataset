@@ -364,5 +364,27 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Done-stamps persisted across re-run attempts of this commit, same idea
+      # as the integration-test stamps: `imagetools create` re-reads its
+      # sources and re-writes the target even for an already-merged tag, so
+      # without stamps a rate-limited merge can never converge -- every retry
+      # redoes all ~110 tags and dies at the same quota depth. With them, each
+      # retry only pays for the tags the previous attempt did not land.
+      - name: Restore merge stamps
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/merge-stamps
+          key: merge-stamps-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: merge-stamps-${{ github.sha }}-
+
       - name: Merge per-arch manifests
+        env:
+          MERGE_STAMP_DIR: ${{ runner.temp }}/merge-stamps
         run: bin/merge-manifests
+
+      - name: Save merge stamps
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/merge-stamps
+          key: merge-stamps-${{ github.sha }}-${{ github.run_attempt }}
