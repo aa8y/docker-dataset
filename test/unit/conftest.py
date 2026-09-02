@@ -68,6 +68,13 @@ def duckdb_pgsql():
 
 
 @pytest.fixture(scope="session")
+def duckdb_airlines():
+    # Also a pre-processor for the shared duckdb pgsql hook: main() ends in an
+    # os.execv of it and never returns, so the tests drive convert() directly.
+    return _load("duckdb_airlines_transform", "duckdb/scripts/airlines/transform")
+
+
+@pytest.fixture(scope="session")
 def duckdb_sakila():
     # A pre-processor for the shared duckdb pgsql hook: main() ends in an
     # os.execv of it and never returns, so the tests drive convert() directly.
