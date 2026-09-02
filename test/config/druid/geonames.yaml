@@ -1,0 +1,41 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. GeoNames publishes no
+# SQL, so the schema is authored in-repo (druid/scripts/geonames/schema.sql) and
+# the transform hook staples the tab-separated export onto it as a COPY block
+# before handing the result to the shared scripts/pgsql hook.
+#
+# This is the one dataset here whose `__time` is real data, so the spec is
+# checked for it: `modification_date` is present on every row of the export, so
+# it becomes the primary timestamp while staying a dimension in its own right.
+# If a future export ever left it blank the hook would demote the table to the
+# constant timestamp at build time -- and this assertion would catch that the
+# dataset had changed shape, rather than letting it pass unnoticed.
+
+fileExistenceTests:
+  - name: "cities ingestion spec exists"
+    path: "/opt/druid/dataset/specs/cities.json"
+    shouldExist: true
+  - name: "cities data file exists"
+    path: "/opt/druid/dataset/data/cities.csv"
+    shouldExist: true
+
+  - name: "the raw export is not shipped"
+    path: "/opt/druid/dataset/data/cities15000.txt"
+    shouldExist: false
+
+fileContentTests:
+  - name: "cities takes __time from modification_date and keeps it as a dimension"
+    path: "/opt/druid/dataset/specs/cities.json"
+    expectedContents:
+      - '"dataSource": "cities"'
+      - '"rollup": false'
+      - '"column": "modification_date"'
+      - '"format": "yyyy-MM-dd"'
+      - '"name": "modification_date"'
+
+  - name: "cities keeps its coordinates as doubles and its population as a long"
+    path: "/opt/druid/dataset/specs/cities.json"
+    expectedContents:
+      - '"type": "double",\n +"name": "latitude"'
+      - '"type": "long",\n +"name": "population"'

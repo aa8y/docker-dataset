@@ -1,0 +1,47 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. OpenFlights publishes no
+# SQL, so the schema is authored in-repo (druid/scripts/openflights/schema.sql,
+# three tables) and the transform hook re-emits the three comma-separated data
+# files as COPY blocks underneath it before handing the result to the shared
+# scripts/pgsql hook.
+#
+# None of the three files carries a date, so every row gets the constant
+# `__time`; the spec is checked for it, since a table that silently acquired a
+# natural timestamp would mean the schema had changed under us.
+
+fileExistenceTests:
+  - name: "airports ingestion spec exists"
+    path: "/opt/druid/dataset/specs/airports.json"
+    shouldExist: true
+  - name: "airports data file exists"
+    path: "/opt/druid/dataset/data/airports.csv"
+    shouldExist: true
+
+  - name: "airlines ingestion spec exists"
+    path: "/opt/druid/dataset/specs/airlines.json"
+    shouldExist: true
+  - name: "airlines data file exists"
+    path: "/opt/druid/dataset/data/airlines.csv"
+    shouldExist: true
+
+  - name: "routes ingestion spec exists"
+    path: "/opt/druid/dataset/specs/routes.json"
+    shouldExist: true
+  - name: "routes data file exists"
+    path: "/opt/druid/dataset/data/routes.csv"
+    shouldExist: true
+
+  - name: "the raw data files are not shipped"
+    path: "/opt/druid/dataset/data/airports.dat"
+    shouldExist: false
+
+fileContentTests:
+  - name: "routes keeps every column and uses the constant __time"
+    path: "/opt/druid/dataset/specs/routes.json"
+    expectedContents:
+      - '"dataSource": "routes"'
+      - '"rollup": false'
+      - '"missingValue": "2000-01-01T00:00:00Z"'
+      - '"destination_airport_id"'
+      - '"equipment"'

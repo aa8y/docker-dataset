@@ -143,3 +143,21 @@ def clickhouse_pgsql():
 @pytest.fixture(scope="session")
 def se_clickhouse():
     return _load("se_clickhouse_transform", "clickhouse/scripts/stackexchange/transform")
+
+
+@pytest.fixture(scope="session")
+def druid_pgsql():
+    # DATA_DIR, SPEC_DIR and RUNTIME_DATA_DIR are bound from the environment at
+    # import time (the Dockerfile sets them), so a test that runs main() must
+    # monkeypatch.setattr them on the module object -- setting the env vars
+    # inside the test is too late. Same shape as the cockroach moma/stackexchange
+    # hooks above; test_druid_pgsql.py wraps it in a per-test fixture that does.
+    return _load("druid_pgsql_transform", "druid/scripts/pgsql/transform")
+
+
+@pytest.fixture(scope="session")
+def pgdump():
+    # An ordinary module rather than a hook, but loaded the same way for
+    # symmetry (and because the hooks that use it reach it by absolute path
+    # inside the builder, not by package import).
+    return _load("druid_pgdump", "druid/scripts/pgdump.py")

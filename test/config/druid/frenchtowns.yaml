@@ -1,0 +1,43 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. frenchtowns is the
+# pgFoundry three-table sample. Its dump declares `Regions`/`Departments`/
+# `Towns` and loads `regions`/`departments`/`towns`; unquoted PostgreSQL
+# identifiers fold to lower case, so those are the same table and the shared
+# scripts/pgsql hook folds them the same way. The lower-case datasource names
+# asserted here are what makes these tags match the PostgreSQL, MySQL, SQLite
+# and CockroachDB spelling (the DuckDB tag keeps the declared case instead,
+# because DuckDB is case-preserving).
+
+fileExistenceTests:
+  - name: "regions ingestion spec exists"
+    path: "/opt/druid/dataset/specs/regions.json"
+    shouldExist: true
+  - name: "regions data file exists"
+    path: "/opt/druid/dataset/data/regions.csv"
+    shouldExist: true
+
+  - name: "departments ingestion spec exists"
+    path: "/opt/druid/dataset/specs/departments.json"
+    shouldExist: true
+  - name: "departments data file exists"
+    path: "/opt/druid/dataset/data/departments.csv"
+    shouldExist: true
+
+  - name: "towns ingestion spec exists"
+    path: "/opt/druid/dataset/specs/towns.json"
+    shouldExist: true
+  - name: "towns data file exists"
+    path: "/opt/druid/dataset/data/towns.csv"
+    shouldExist: true
+
+  - name: "the declared-case spelling is not a second datasource"
+    path: "/opt/druid/dataset/specs/Regions.json"
+    shouldExist: false
+
+fileContentTests:
+  - name: "towns spec names its datasource and disables rollup"
+    path: "/opt/druid/dataset/specs/towns.json"
+    expectedContents:
+      - '"dataSource": "towns"'
+      - '"rollup": false'

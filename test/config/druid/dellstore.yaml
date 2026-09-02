@@ -1,0 +1,85 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. dellstore is the
+# pgFoundry DVD-store sample. Two things about it are specific to this engine
+# and both are asserted here.
+#
+# First, `reorder` ships with zero rows upstream, and Druid has no empty
+# datasource: an ingestion task that produces no segments succeeds and leaves
+# nothing behind to query, so the entrypoint would wait forever for a
+# datasource that can never appear. The shared scripts/pgsql hook therefore
+# skips a zero-row table (loudly, at build time), which is why this tag carries
+# seven datasources where the other engines have eight -- asserted as the
+# *absence* of reorder.json, so a hook that silently started emitting it again
+# would fail here rather than hang a container.
+#
+# Second, `orders` and `orderlines` both have a NOT NULL `orderdate` date
+# column, so it becomes their primary timestamp with an explicit `yyyy-MM-dd`
+# format while remaining a dimension in its own right.
+
+fileExistenceTests:
+  - name: "categories ingestion spec exists"
+    path: "/opt/druid/dataset/specs/categories.json"
+    shouldExist: true
+  - name: "categories data file exists"
+    path: "/opt/druid/dataset/data/categories.csv"
+    shouldExist: true
+
+  - name: "cust_hist ingestion spec exists"
+    path: "/opt/druid/dataset/specs/cust_hist.json"
+    shouldExist: true
+  - name: "cust_hist data file exists"
+    path: "/opt/druid/dataset/data/cust_hist.csv"
+    shouldExist: true
+
+  - name: "customers ingestion spec exists"
+    path: "/opt/druid/dataset/specs/customers.json"
+    shouldExist: true
+  - name: "customers data file exists"
+    path: "/opt/druid/dataset/data/customers.csv"
+    shouldExist: true
+
+  - name: "inventory ingestion spec exists"
+    path: "/opt/druid/dataset/specs/inventory.json"
+    shouldExist: true
+  - name: "inventory data file exists"
+    path: "/opt/druid/dataset/data/inventory.csv"
+    shouldExist: true
+
+  - name: "orderlines ingestion spec exists"
+    path: "/opt/druid/dataset/specs/orderlines.json"
+    shouldExist: true
+  - name: "orderlines data file exists"
+    path: "/opt/druid/dataset/data/orderlines.csv"
+    shouldExist: true
+
+  - name: "orders ingestion spec exists"
+    path: "/opt/druid/dataset/specs/orders.json"
+    shouldExist: true
+  - name: "orders data file exists"
+    path: "/opt/druid/dataset/data/orders.csv"
+    shouldExist: true
+
+  - name: "products ingestion spec exists"
+    path: "/opt/druid/dataset/specs/products.json"
+    shouldExist: true
+  - name: "products data file exists"
+    path: "/opt/druid/dataset/data/products.csv"
+    shouldExist: true
+
+  - name: "the zero-row reorder table ships no spec"
+    path: "/opt/druid/dataset/specs/reorder.json"
+    shouldExist: false
+  - name: "the zero-row reorder table ships no data file"
+    path: "/opt/druid/dataset/data/reorder.csv"
+    shouldExist: false
+
+fileContentTests:
+  - name: "orders takes __time from orderdate and keeps it as a dimension"
+    path: "/opt/druid/dataset/specs/orders.json"
+    expectedContents:
+      - '"dataSource": "orders"'
+      - '"rollup": false'
+      - '"column": "orderdate"'
+      - '"format": "yyyy-MM-dd"'
+      - '"name": "orderdate"'

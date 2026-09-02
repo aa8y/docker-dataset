@@ -1,0 +1,46 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. pgexercises is the
+# Yugabyte `clubdata` sample (facilities, members, bookings) and the one dataset
+# here whose data arrives as multi-row INSERT statements rather than COPY
+# blocks, so its presence proves the shared scripts/pgsql hook's second data
+# path works.
+#
+# It is also the only tag with real timestamp columns in more than one table, so
+# the bookings spec is checked for the natural `__time` mapping: `starttime` is
+# NOT NULL and every value parsed at build time, so it becomes the primary
+# timestamp (with an explicit Joda format -- pg_dump writes `2012-07-03
+# 11:00:00`, which Druid's `auto` format does not accept) while staying a
+# dimension in its own right, so no column is lost.
+
+fileExistenceTests:
+  - name: "facilities ingestion spec exists"
+    path: "/opt/druid/dataset/specs/facilities.json"
+    shouldExist: true
+  - name: "facilities data file exists"
+    path: "/opt/druid/dataset/data/facilities.csv"
+    shouldExist: true
+
+  - name: "members ingestion spec exists"
+    path: "/opt/druid/dataset/specs/members.json"
+    shouldExist: true
+  - name: "members data file exists"
+    path: "/opt/druid/dataset/data/members.csv"
+    shouldExist: true
+
+  - name: "bookings ingestion spec exists"
+    path: "/opt/druid/dataset/specs/bookings.json"
+    shouldExist: true
+  - name: "bookings data file exists"
+    path: "/opt/druid/dataset/data/bookings.csv"
+    shouldExist: true
+
+fileContentTests:
+  - name: "bookings takes __time from starttime and keeps it as a dimension"
+    path: "/opt/druid/dataset/specs/bookings.json"
+    expectedContents:
+      - '"dataSource": "bookings"'
+      - '"rollup": false'
+      - '"column": "starttime"'
+      - '"format": "yyyy-MM-dd HH:mm:ss"'
+      - '"name": "starttime"'

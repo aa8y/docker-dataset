@@ -1,0 +1,34 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. iso3166 is the pgFoundry
+# two-table sample (country, subcountry). Its dump is the one here whose COPY
+# blocks are pipe-separated rather than tab-separated, which the shared
+# scripts/pgsql hook honours via the COPY header's DELIMITER clause -- if it
+# ever stopped, every row would collapse into a single column, so the spec's
+# column list is asserted below.
+
+fileExistenceTests:
+  - name: "country ingestion spec exists"
+    path: "/opt/druid/dataset/specs/country.json"
+    shouldExist: true
+  - name: "country data file exists"
+    path: "/opt/druid/dataset/data/country.csv"
+    shouldExist: true
+
+  - name: "subcountry ingestion spec exists"
+    path: "/opt/druid/dataset/specs/subcountry.json"
+    shouldExist: true
+  - name: "subcountry data file exists"
+    path: "/opt/druid/dataset/data/subcountry.csv"
+    shouldExist: true
+
+fileContentTests:
+  - name: "subcountry spec keeps all four columns"
+    path: "/opt/druid/dataset/specs/subcountry.json"
+    expectedContents:
+      - '"dataSource": "subcountry"'
+      - '"rollup": false'
+      - '"country"'
+      - '"subcountry_name"'
+      - '"subdivision"'
+      - '"subcountry_level"'

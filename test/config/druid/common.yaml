@@ -1,0 +1,80 @@
+schemaVersion: "2.0.0"
+
+# Shared assertions for every aa8y/druid-dataset tag: the DATASET env the
+# entrypoint keys its ready marker on, the repository label, the supervisor
+# entrypoint itself, and enough of the trimmed Apache Druid distribution to
+# prove the engine stage did its job -- lib/ (the jars every service runs
+# from), the bundled nano-quickstart profile the entrypoint boots, and
+# bin/run-java, which is how a service is actually launched.
+#
+# The trim is asserted from both sides: the extensions Druid does not need here
+# must be gone (they are 474 MB of the 687 MB distribution, so a regression
+# that stopped deleting them would quietly triple the image), and so must the
+# tutorial quickstart/ tree. commandTests are possible on this base (unlike the
+# distroless DuckDB one) but deliberately not used: every command worth running
+# needs a booted cluster, which is the integration test's job.
+#
+# DATASET is per-dataset, so we only assert it is set (non-empty).
+
+metadataTest:
+  envVars:
+    - key: DATASET
+      value: ".+"
+      isRegex: true
+  labels:
+    - key: "org.opencontainers.image.title"
+      value: "aa8y/druid-dataset"
+  entrypoint: ["/druid-dataset.sh"]
+  workdir: "/opt/druid"
+  user: "druid"
+  exposedPorts: ["8888"]
+
+fileExistenceTests:
+  - name: "supervisor entrypoint exists and is executable"
+    path: "/druid-dataset.sh"
+    shouldExist: true
+    permissions: "-rwxr-xr-x"
+
+  - name: "druid distribution exists"
+    path: "/opt/druid/lib"
+    shouldExist: true
+
+  - name: "run-java launcher exists"
+    path: "/opt/druid/bin/run-java"
+    shouldExist: true
+
+  - name: "nano-quickstart profile exists"
+    path: "/opt/druid/conf/druid/single-server/nano-quickstart/_common/common.runtime.properties"
+    shouldExist: true
+
+  - name: "zookeeper config exists"
+    path: "/opt/druid/conf/zk/zoo.cfg"
+    shouldExist: true
+
+  - name: "writable var directory exists"
+    path: "/opt/druid/var"
+    shouldExist: true
+
+  - name: "ingestion spec directory exists"
+    path: "/opt/druid/dataset/specs"
+    shouldExist: true
+
+  - name: "data directory exists"
+    path: "/opt/druid/dataset/data"
+    shouldExist: true
+
+  - name: "tutorial quickstart tree is trimmed"
+    path: "/opt/druid/quickstart"
+    shouldExist: false
+
+  - name: "unused deep-storage extension is trimmed"
+    path: "/opt/druid/extensions/druid-hdfs-storage"
+    shouldExist: false
+
+  - name: "unused streaming extension is trimmed"
+    path: "/opt/druid/extensions/druid-kafka-indexing-service"
+    shouldExist: false
+
+  - name: "unused cloud extension is trimmed"
+    path: "/opt/druid/extensions/druid-s3-extensions"
+    shouldExist: false

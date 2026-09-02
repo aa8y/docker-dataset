@@ -1,0 +1,69 @@
+{
+  "type": "index_parallel",
+  "spec": {
+    "dataSchema": {
+      "dataSource": "items",
+      "timestampSpec": {
+        "column": "!no-timestamp-column!",
+        "format": "auto",
+        "missingValue": "2000-01-01T00:00:00Z"
+      },
+      "dimensionsSpec": {
+        "dimensions": [
+          {
+            "type": "long",
+            "name": "id"
+          },
+          {
+            "type": "string",
+            "name": "name"
+          },
+          {
+            "type": "double",
+            "name": "price"
+          },
+          {
+            "type": "string",
+            "name": "note"
+          },
+          {
+            "type": "string",
+            "name": "created"
+          }
+        ]
+      },
+      "granularitySpec": {
+        "type": "uniform",
+        "segmentGranularity": "ALL",
+        "queryGranularity": "NONE",
+        "rollup": false
+      }
+    },
+    "ioConfig": {
+      "type": "index_parallel",
+      "inputSource": {
+        "type": "local",
+        "baseDir": "/opt/druid/dataset/data",
+        "filter": "items.csv"
+      },
+      "inputFormat": {
+        "type": "csv",
+        "findColumnsFromHeader": false,
+        "columns": [
+          "id",
+          "name",
+          "price",
+          "note",
+          "created"
+        ]
+      }
+    },
+    "tuningConfig": {
+      "type": "index_parallel",
+      "maxNumConcurrentSubTasks": 1,
+      "partitionsSpec": {
+        "type": "dynamic"
+      }
+    }
+  }
+}

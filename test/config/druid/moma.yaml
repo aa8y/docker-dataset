@@ -1,0 +1,42 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. MoMA publishes no SQL,
+# so the schema is authored in-repo (druid/scripts/moma/schema.sql, every column
+# text) and the transform hook re-emits the two exports as COPY blocks
+# underneath it before handing the result to the shared scripts/pgsql hook.
+#
+# The 150 MB Artworks.csv must not reach the image -- only the normalized data
+# file the hook writes does -- so its absence is asserted, the same
+# source-is-not-shipped check the DuckDB nyc-taxi config makes.
+
+fileExistenceTests:
+  - name: "artists ingestion spec exists"
+    path: "/opt/druid/dataset/specs/artists.json"
+    shouldExist: true
+  - name: "artists data file exists"
+    path: "/opt/druid/dataset/data/artists.csv"
+    shouldExist: true
+
+  - name: "artworks ingestion spec exists"
+    path: "/opt/druid/dataset/specs/artworks.json"
+    shouldExist: true
+  - name: "artworks data file exists"
+    path: "/opt/druid/dataset/data/artworks.csv"
+    shouldExist: true
+
+  - name: "the upstream export is not shipped"
+    path: "/opt/druid/dataset/data/Artworks.csv"
+    shouldExist: false
+
+fileContentTests:
+  - name: "artworks keeps all thirty columns as strings"
+    path: "/opt/druid/dataset/specs/artworks.json"
+    expectedContents:
+      - '"dataSource": "artworks"'
+      - '"rollup": false'
+      - '"accession_number"'
+      - '"seat_height_cm"'
+      - '"duration_sec"'
+    excludedContents:
+      - '"type": "long"'
+      - '"type": "double"'
