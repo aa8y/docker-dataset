@@ -995,6 +995,21 @@ contexts:
         structureTest:
           configs:
             - test/config/sqlite/airlines.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows -- by far the heaviest sqlite image). Upstream
+      # ships no SQLite port, but its PostgreSQL one is near dialect-free, so
+      # the scripts/employees transform hook uses that schema with three
+      # rewrites SQLite forces (no DB management, no multi-table DROP TABLE, no
+      # `CREATE OR REPLACE VIEW`) and appends the eight data dumps unchanged,
+      # backticks stripped, inside one transaction. The dataset is fixed, so
+      # the smoke test records exact counts, identical to the mysql and
+      # postgres employees tags.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        structureTest:
+          configs:
+            - test/config/sqlite/employees.yaml
       # Sakila: MySQL's own sample database (the original of pagila). The
       # bradleygrant/sakila-sqlite3 port publishes a prebuilt database file,
       # shipped as-is (mirrors the northwind dbFile pattern).
