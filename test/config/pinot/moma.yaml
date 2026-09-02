@@ -1,0 +1,61 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. MoMA publishes only CSV,
+# so the two schemas are authored in-repo (pinot/scripts/moma/schema.sql) and
+# parsed by the transform hook with the same CREATE TABLE reader the
+# scripts/pgsql hook uses on real dumps.
+#
+# Every column is STRING, and that is the assertion worth having here. It is not
+# laziness: MoMA's exports carry approximate dates ("c. 1950"), blank
+# measurements and multi-valued ConstituentIDs, and on Pinot a value a column's
+# data type cannot parse does not raise -- it is replaced by that type's default
+# value. An INT column here would fill with Integer.MIN_VALUE and nothing would
+# say so.
+#
+# Counts drift as MoMA refreshes its exports, so the smoke test records floors.
+
+fileExistenceTests:
+  - name: "artists CSV exists"
+    path: "/opt/pinot/dataset/artists.csv"
+    shouldExist: true
+  - name: "artists schema exists"
+    path: "/opt/pinot/dataset/artists.schema.json"
+    shouldExist: true
+  - name: "artists table config exists"
+    path: "/opt/pinot/dataset/artists.table.json"
+    shouldExist: true
+
+  - name: "artworks CSV exists"
+    path: "/opt/pinot/dataset/artworks.csv"
+    shouldExist: true
+  - name: "artworks schema exists"
+    path: "/opt/pinot/dataset/artworks.schema.json"
+    shouldExist: true
+  - name: "artworks table config exists"
+    path: "/opt/pinot/dataset/artworks.table.json"
+    shouldExist: true
+
+  - name: "the raw exports do not ship in the image"
+    path: "/opt/pinot/dataset/Artworks.csv"
+    shouldExist: false
+
+fileContentTests:
+  - name: "moma declares both expected tables in the manifest"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^artists[[:space:]]'
+      - '(?m)^artworks[[:space:]]'
+
+  - name: "artists keeps the column names the other engines use"
+    path: "/opt/pinot/dataset/artists.csv"
+    expectedContents:
+      - '(?m)^constituent_id,display_name,artist_bio,nationality,gender,begin_date,end_date,wiki_qid,ulan$'
+
+  - name: "every artists column is STRING, deliberately"
+    path: "/opt/pinot/dataset/artists.schema.json"
+    expectedContents:
+      - '"name": "begin_date",\n      "dataType": "STRING"'
+      - '"name": "ulan",\n      "dataType": "STRING"'
+    excludedContents:
+      - '"dataType": "INT"'
+      - '"dataType": "TIMESTAMP"'

@@ -1,0 +1,88 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. world is the pgFoundry
+# three-table sample (city, country, countrylanguage), decompiled at build time
+# by the shared scripts/pgsql transform hook into one CSV plus a Pinot schema
+# and OFFLINE table config per table. Row counts are the integration test's job;
+# what is asserted here is that all three tables produced a complete artifact
+# set, and that the two type-mapping decisions most likely to regress silently
+# are the ones the hook actually made.
+
+fileExistenceTests:
+  - name: "city artifacts exist"
+    path: "/opt/pinot/dataset/city.csv"
+    shouldExist: true
+  - name: "city schema exists"
+    path: "/opt/pinot/dataset/city.schema.json"
+    shouldExist: true
+  - name: "city table config exists"
+    path: "/opt/pinot/dataset/city.table.json"
+    shouldExist: true
+
+  - name: "country artifacts exist"
+    path: "/opt/pinot/dataset/country.csv"
+    shouldExist: true
+  - name: "country schema exists"
+    path: "/opt/pinot/dataset/country.schema.json"
+    shouldExist: true
+  - name: "country table config exists"
+    path: "/opt/pinot/dataset/country.table.json"
+    shouldExist: true
+
+  - name: "countrylanguage artifacts exist"
+    path: "/opt/pinot/dataset/countrylanguage.csv"
+    shouldExist: true
+  - name: "countrylanguage schema exists"
+    path: "/opt/pinot/dataset/countrylanguage.schema.json"
+    shouldExist: true
+  - name: "countrylanguage table config exists"
+    path: "/opt/pinot/dataset/countrylanguage.table.json"
+    shouldExist: true
+
+fileContentTests:
+  # (?m) so ^ anchors per line: container-structure-test matches the regex
+  # against the whole file as one string, so without it only the first line
+  # could ever match.
+  - name: "world declares all expected tables in the manifest"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^city[[:space:]]'
+      - '(?m)^country[[:space:]]'
+      - '(?m)^countrylanguage[[:space:]]'
+
+  # PostgreSQL `boolean` has to reach Pinot as BOOLEAN *and* as true/false
+  # rather than COPY's t/f, or every value silently reads as false. The schema
+  # half of that pair is asserted here; the CSV half is the "true" below.
+  - name: "countrylanguage keeps its boolean column typed and normalized"
+    path: "/opt/pinot/dataset/countrylanguage.schema.json"
+    expectedContents:
+      - '"name": "isofficial"'
+      - '"dataType": "BOOLEAN"'
+  - name: "countrylanguage CSV writes booleans Pinot can parse"
+    path: "/opt/pinot/dataset/countrylanguage.csv"
+    expectedContents:
+      - ",true,"
+
+  # `real` -> FLOAT and `numeric(10,2)` -> DOUBLE, the two numeric mappings
+  # world exercises, plus the NULL sentinel the entrypoint's batch config is
+  # keyed on -- country.gnpold is NULL for most rows.
+  - name: "country maps its numeric types"
+    path: "/opt/pinot/dataset/country.schema.json"
+    expectedContents:
+      - '"name": "surfacearea",\n      "dataType": "FLOAT"'
+      - '"name": "gnp",\n      "dataType": "DOUBLE"'
+  # `\\N` is the regex for one literal backslash followed by N -- the sentinel
+  # the transform writes for SQL NULL and the entrypoint passes to Pinot as
+  # recordReader.prop.nullStringValue.
+  - name: "country CSV marks SQL NULL with the sentinel the entrypoint expects"
+    path: "/opt/pinot/dataset/country.csv"
+    expectedContents:
+      - ',\\N,'
+
+  - name: "table configs are OFFLINE with null handling on and no time column"
+    path: "/opt/pinot/dataset/city.table.json"
+    expectedContents:
+      - '"tableType": "OFFLINE"'
+      - '"nullHandlingEnabled": true'
+    excludedContents:
+      - "timeColumnName"

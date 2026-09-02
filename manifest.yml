@@ -1516,3 +1516,154 @@ contexts:
       latest:
         retagFrom: chinook
         structureTest: false
+  # Apache Pinot images, published under their own repository. Pinot is a
+  # distributed OLAP store, not a SQL database with a bulk-load path: its unit
+  # of storage is an immutable segment, its DDL is a pair of JSON documents per
+  # table (a schema and a table config) POSTed to a running controller, and the
+  # official image's entrypoint is `pinot-admin.sh` rather than anything that
+  # replays init scripts. So the build cannot hand a dump to a client the way
+  # postgres/cockroach do, and cannot bake a database file the way sqlite/duckdb
+  # do. Instead each tag's transform hook decompiles its source into per-table
+  # CSV + schema + table config + a manifest of exact row counts, and the
+  # image's wrapper entrypoint starts a one-container cluster (ZooKeeper, then
+  # controller + broker + server) and replays them over REST at container start
+  # -- still the repo's init-at-start model, carried over HTTP instead of SQL.
+  # The build templates are the Pinot flavours (no init-script assembly; test
+  # runs the Pinot smoke-test script) and override the global postgres ones for
+  # this context.
+  pinot:
+    tagKeys: dataset
+    parameters:
+      repository: aa8y/pinot-dataset
+    structureTest:
+      configs:
+        - test/config/pinot/common.yaml
+    templates:
+      # Mirrors the global templates (see top of file), including the always-on
+      # registry build cache gated by the DATASET_CHECKSUM fingerprint.
+      # SQL_FILES is emitted per tag (a Mustache section) because the datasets
+      # sourced from published CSV/TSV have no SQL input to name.
+      build: >
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-pinot.sh {{tag}} {{dataset}}{{/retagFrom}}'
+      push: >
+        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+    tags:
+      # PostgreSQL-dump datasets, the same sources the sqlite/duckdb tags use.
+      # None of them can be *run* on Pinot, so the shared scripts/pgsql hook
+      # decompiles each dump instead: it parses the CREATE TABLE DDL for column
+      # names and types, reads the COPY blocks (world, iso3166, frenchtowns,
+      # usda, dellstore) and multi-row INSERTs (pgexercises) for the data, and
+      # emits one CSV plus a Pinot schema and OFFLINE table config per table,
+      # with the exact row count recorded in tables.tsv so the entrypoint can
+      # wait for it. Row counts match the postgres/duckdb tags exactly. Each
+      # dataset's scripts/<dataset> dir is a symlink to scripts/pgsql.
+      world:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz
+        sqlFiles: dbsamples-0.1/world/world.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/pinot/world.yaml
+      iso3166:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz
+        sqlFiles: iso-3166/iso-3166.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/pinot/iso3166.yaml
+      frenchtowns:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz
+        sqlFiles: french-towns-communes-francaises.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/pinot/frenchtowns.yaml
+      usda:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
+        sqlFiles: usda-r18-1.0/usda.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/pinot/usda.yaml
+      pgexercises:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_data.sql
+        sqlFiles: clubdata_ddl.sql clubdata_data.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/pinot/pgexercises.yaml
+      dellstore:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz
+        sqlFiles: dellstore2-normal-1.0/dellstore2-normal-1.0.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/pinot/dellstore.yaml
+      # Datasets published only as CSV/TSV, with no SQL anywhere upstream. Their
+      # schemas are authored in-repo (pinot/scripts/<dataset>/schema.sql, in
+      # plain PostgreSQL DDL exactly as the cockroach tags do) and their
+      # transform hooks parse that DDL with the *same* CREATE TABLE reader the
+      # scripts/pgsql hook uses on real dumps -- so one PostgreSQL-type-to-Pinot
+      # mapping serves every tag in this context. All three are refreshed
+      # upstream in place, so their smoke tests record floors, not exact counts.
+      #
+      # GeoNames cities15000: a zipped tab-separated export with no header and
+      # no quoting at all, so the extract hook unzips it and the transform
+      # splits on tabs rather than parsing CSV.
+      geonames:
+        extractUrl: https://download.geonames.org/export/dump/cities15000.zip
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/pinot/geonames.yaml
+      # OpenFlights airports/airlines/routes: three RFC4180 CSV files with no
+      # header, using an unquoted \N for a missing value -- which is already the
+      # NULL sentinel the entrypoint hands Pinot.
+      openflights:
+        extractUrl: >-
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/pinot/openflights.yaml
+      # MoMA research collection: ~177k rows, and the bulkiest tag here (82 MB
+      # of shipped CSV, since artworks is 30 columns of free text; usda has
+      # more rows in a fifth of the space).
+      # Every column is STRING, deliberately -- the exports carry approximate
+      # dates and blank measurements, and on Pinot a value a column's type
+      # cannot parse becomes that type's *default* rather than an error.
+      moma:
+        extractUrl: >-
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artworks.csv
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artists.csv
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/pinot/moma.yaml
+      # `latest` tracks a single representative dataset, mirroring the other
+      # engines. world rather than chinook: chinook is not ported here, and
+      # world is the tag this engine's README uses in every example.
+      latest:
+        retagFrom: world
+        structureTest: false

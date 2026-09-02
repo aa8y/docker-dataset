@@ -1,0 +1,78 @@
+schemaVersion: "2.0.0"
+
+# Shared assertions for every aa8y/pinot-dataset tag.
+#
+# Everything here is metadata (inspected, not executed) or file existence
+# (checked against the image filesystem). No commandTests: the only interesting
+# thing to run in this image is the cluster itself, which takes two JVMs and
+# half a minute to say anything, and the integration test already boots it and
+# queries it for real.
+#
+# What is worth pinning down statically is the wiring that a careless edit could
+# silently break -- the heap override (the base image asks for -Xms4G -Xmx4G,
+# which would make these images unrunnable on a small CI runner), the wrapper
+# entrypoint that replaces pinot-admin.sh, the three service configs the
+# one-container topology is built from, and the dataset manifest the entrypoint
+# refuses to start without. DATASET is per-dataset, so we only assert it is set
+# (non-empty).
+
+metadataTest:
+  envVars:
+    - key: DATASET
+      value: ".+"
+      isRegex: true
+    # The heap override, asserted exactly: -Xmx4G from the base image would
+    # reserve twice what these single-node images need, and dropping
+    # -Dpinot.admin.system.exit=false would make pinot-admin.sh exit the JVM as
+    # soon as StartServiceManager finished bootstrapping, killing the cluster.
+    - key: JAVA_OPTS
+      value: "-Xms512M -Xmx2G -Dpinot.admin.system.exit=false"
+  labels:
+    - key: "org.opencontainers.image.title"
+      value: "aa8y/pinot-dataset"
+  entrypoint: ["/usr/local/bin/pinot-dataset-entrypoint"]
+  workdir: "/opt/pinot"
+
+fileExistenceTests:
+  - name: "dataset entrypoint exists and is executable"
+    path: "/usr/local/bin/pinot-dataset-entrypoint"
+    shouldExist: true
+    permissions: "-rwxr-xr-x"
+
+  - name: "controller config exists"
+    path: "/opt/pinot/conf/controller.conf"
+    shouldExist: true
+
+  - name: "broker config exists"
+    path: "/opt/pinot/conf/broker.conf"
+    shouldExist: true
+
+  - name: "server config exists"
+    path: "/opt/pinot/conf/server.conf"
+    shouldExist: true
+
+  - name: "dataset manifest exists"
+    path: "/opt/pinot/dataset/tables.tsv"
+    shouldExist: true
+
+  - name: "pinot-admin CLI exists"
+    path: "/opt/pinot/bin/pinot-admin.sh"
+    shouldExist: true
+
+fileContentTests:
+  - name: "service configs point at the container's own ZooKeeper and cluster"
+    path: "/opt/pinot/conf/controller.conf"
+    expectedContents:
+      - "pinot.cluster.name=pinot-dataset"
+      - "pinot.zk.server=localhost:2181"
+      - "controller.port=9000"
+
+  - name: "broker serves queries on the port the base image exposes"
+    path: "/opt/pinot/conf/broker.conf"
+    expectedContents:
+      - "pinot.broker.client.queryPort=8099"
+
+  - name: "server keeps its data out of the base image's declared volumes"
+    path: "/opt/pinot/conf/server.conf"
+    expectedContents:
+      - "pinot.server.instance.dataDir=/var/lib/pinot/server/index"

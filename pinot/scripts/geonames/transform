@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Build GeoNames' Pinot ingestion artifacts from the tab-separated export.
+
+GeoNames publishes no SQL, so the table schema is authored alongside this hook
+(schema.sql) and the data arrives as cities15000.txt, unpacked from the zip by
+the extract hook. This turns the pair into the same artifact set every Pinot tag
+ships -- dataset/cities.{csv,schema.json,table.json} plus the tables.tsv row
+count -- which the image's entrypoint then replays against a live cluster.
+
+The DDL parsing and artifact emission are *not* reimplemented here: this hook
+loads ../pgsql/transform as a library and calls into it (see load_shared). Both
+hooks live under this engine's own scripts/ tree, all of which is COPY'd into
+the builder, so the import always resolves. The point is that there is exactly
+one PostgreSQL-type-to-Pinot-data-type mapping in this image, exercised by every
+tag: an authored schema.sql gets the same treatment as a real pgFoundry dump's
+CREATE TABLE, and adding a type to the map fixes it everywhere at once.
+
+The export's own quirks:
+  * It is genuinely tab-separated with **no quoting at all**, so it is split on
+    tabs rather than parsed as CSV -- a double quote in a place name is a
+    literal character, and handing the line to csv.reader would swallow it and
+    everything after it. (This is the same reasoning behind the CockroachDB
+    tag's `DELIMITED DATA` rather than `CSV DATA`.)
+  * There is no header row; the column order is the one documented in the
+    export's readme.txt, which schema.sql mirrors.
+  * A blank field means "not known" -- most rows have no `elevation` -- so it
+    becomes SQL NULL, written as the sentinel the entrypoint tells Pinot to read
+    as null.
+"""
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+# The export unpacked by the extract hook, and the table it loads into.
+SOURCE = "cities15000.txt"
+TABLE = "cities"
+
+# Authored schema, staged alongside these build scripts. Overridable for tests.
+SCHEMA = os.environ.get(
+    "PINOT_SCHEMA_SQL", "/usr/local/lib/scripts/geonames/schema.sql")
+
+# The shared hook, loaded as a library. Overridable for tests.
+SHARED_HOOK = os.environ.get(
+    "PINOT_PGSQL_HOOK", "/usr/local/lib/scripts/pgsql/transform")
+
+
+def load_shared():
+    """Import scripts/pgsql/transform as a module.
+
+    The hooks are deliberately extensionless (the Dockerfile locates them by
+    exact path), so they cannot be imported by name; this is the same explicit
+    source-loader dance test/unit/conftest.py does.
+    """
+    loader = importlib.machinery.SourceFileLoader("pinot_pgsql", SHARED_HOOK)
+    spec = importlib.util.spec_from_loader("pinot_pgsql", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def read_rows(path):
+    """Yield the export's rows as lists of fields, blanks as None.
+
+    Split on tabs, not parsed as CSV: the export applies no quoting whatsoever.
+    """
+    with open(path, encoding="utf-8", newline="") as fh:
+        for line in fh:
+            line = line.rstrip("\n").rstrip("\r")
+            if not line:
+                continue
+            yield [f if f != "" else None for f in line.split("\t")]
+
+
+def main():
+    shared = load_shared()
+    out_dir = shared.OUT_DIR
+    os.makedirs(out_dir, exist_ok=True)
+
+    if not os.path.isfile(SOURCE):
+        sys.exit("geonames transform: {} not found".format(SOURCE))
+
+    tables = shared.parse_tables(shared.transcode(SCHEMA))
+    if TABLE not in tables:
+        sys.exit("geonames transform: no CREATE TABLE for {}".format(TABLE))
+    table, columns = TABLE, tables[TABLE]
+
+    names = [name for name, _ in columns]
+    writer = shared.TableWriter(out_dir, table, columns)
+    for row in read_rows(SOURCE):
+        # Pad or truncate to the declared width so a refreshed export that grew
+        # or lost a trailing column still loads rather than failing the build.
+        writer.write(names, (row + [None] * len(names))[:len(names)])
+    writer.close()
+
+    shared.write_artifacts(out_dir, {table: columns}, {table: writer})
+
+
+if __name__ == "__main__":
+    main()

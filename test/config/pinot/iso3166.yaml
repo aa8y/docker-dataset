@@ -1,0 +1,41 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. iso3166 is the pgFoundry
+# country/subcountry sample, and the one dump in this family whose COPY blocks
+# use a non-default separator (`FROM stdin DELIMITER '|'`) -- so the CSV
+# assertion below is really a check that the transform honoured it rather than
+# splitting on tabs and producing one giant column per row.
+
+fileExistenceTests:
+  - name: "country artifacts exist"
+    path: "/opt/pinot/dataset/country.csv"
+    shouldExist: true
+  - name: "country schema exists"
+    path: "/opt/pinot/dataset/country.schema.json"
+    shouldExist: true
+  - name: "country table config exists"
+    path: "/opt/pinot/dataset/country.table.json"
+    shouldExist: true
+
+  - name: "subcountry artifacts exist"
+    path: "/opt/pinot/dataset/subcountry.csv"
+    shouldExist: true
+  - name: "subcountry schema exists"
+    path: "/opt/pinot/dataset/subcountry.schema.json"
+    shouldExist: true
+  - name: "subcountry table config exists"
+    path: "/opt/pinot/dataset/subcountry.table.json"
+    shouldExist: true
+
+fileContentTests:
+  - name: "iso3166 declares all expected tables in the manifest"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^country[[:space:]]'
+      - '(?m)^subcountry[[:space:]]'
+
+  - name: "country columns survive the pipe-delimited COPY"
+    path: "/opt/pinot/dataset/country.csv"
+    expectedContents:
+      - '(?m)^name,two_letter,country_id$'
+      - '(?m)^Afghanistan,AF,4$'

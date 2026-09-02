@@ -1,0 +1,64 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. dellstore is the
+# pgFoundry DVD-store sample: eight tables, ~180k rows, and the two things worth
+# pinning here are both about what is *absent*.
+#
+#   * `reorder` is empty in the upstream dump -- its COPY block has no rows. It
+#     still ships as a header-only CSV, because Pinot needs a real (0-row)
+#     segment for the table to be queryable at all: a table with no segments
+#     answers nothing, where one with an empty segment answers `count(*) = 0`,
+#     which is what the other engines report.
+#   * the dump's PL/pgSQL `new_customer` function has no Pinot equivalent and is
+#     dropped. The transform only ever looks at CREATE TABLE and data, so this
+#     is really an assertion that a stored procedure did not accidentally get
+#     read as a table.
+
+fileExistenceTests:
+  - name: "customers artifacts exist"
+    path: "/opt/pinot/dataset/customers.csv"
+    shouldExist: true
+  - name: "orders schema exists"
+    path: "/opt/pinot/dataset/orders.schema.json"
+    shouldExist: true
+  - name: "orderlines table config exists"
+    path: "/opt/pinot/dataset/orderlines.table.json"
+    shouldExist: true
+  - name: "empty reorder table still ships a CSV"
+    path: "/opt/pinot/dataset/reorder.csv"
+    shouldExist: true
+  - name: "empty reorder table still ships a table config"
+    path: "/opt/pinot/dataset/reorder.table.json"
+    shouldExist: true
+
+fileContentTests:
+  - name: "dellstore declares all eight expected tables in the manifest"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^categories[[:space:]]'
+      - '(?m)^cust_hist[[:space:]]'
+      - '(?m)^customers[[:space:]]'
+      - '(?m)^inventory[[:space:]]'
+      - '(?m)^orderlines[[:space:]]'
+      - '(?m)^orders[[:space:]]'
+      - '(?m)^products[[:space:]]'
+      - '(?m)^reorder[[:space:]]'
+    excludedContents:
+      # The PL/pgSQL helper, and the sequences the dump also creates.
+      - "new_customer"
+
+  - name: "reorder ships as a header-only CSV with a zero row count"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^reorder[[:space:]]+0$'
+
+  - name: "orders maps date and numeric columns"
+    path: "/opt/pinot/dataset/orders.schema.json"
+    expectedContents:
+      - '"name": "orderdate",\n      "dataType": "TIMESTAMP"'
+      - '"name": "netamount",\n      "dataType": "DOUBLE"'
+
+  - name: "customers keeps its quoted reserved-word column"
+    path: "/opt/pinot/dataset/customers.schema.json"
+    expectedContents:
+      - '"name": "password"'

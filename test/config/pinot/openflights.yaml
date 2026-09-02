@@ -1,0 +1,62 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. OpenFlights publishes no
+# SQL, so the three schemas are authored in-repo
+# (pinot/scripts/openflights/schema.sql) and parsed by the transform hook with
+# the same CREATE TABLE reader the scripts/pgsql hook uses on real dumps.
+#
+# The published files are already RFC4180 CSV with no header, and they mark a
+# missing value with an unquoted \N -- which happens to be exactly the NULL
+# sentinel the entrypoint hands Pinot, so those fields pass through unchanged.
+# Counts drift as upstream refreshes the files, so the smoke test records floors.
+
+fileExistenceTests:
+  - name: "airports CSV exists"
+    path: "/opt/pinot/dataset/airports.csv"
+    shouldExist: true
+  - name: "airports schema exists"
+    path: "/opt/pinot/dataset/airports.schema.json"
+    shouldExist: true
+  - name: "airports table config exists"
+    path: "/opt/pinot/dataset/airports.table.json"
+    shouldExist: true
+
+  - name: "airlines CSV exists"
+    path: "/opt/pinot/dataset/airlines.csv"
+    shouldExist: true
+  - name: "airlines schema exists"
+    path: "/opt/pinot/dataset/airlines.schema.json"
+    shouldExist: true
+  - name: "airlines table config exists"
+    path: "/opt/pinot/dataset/airlines.table.json"
+    shouldExist: true
+
+  - name: "routes CSV exists"
+    path: "/opt/pinot/dataset/routes.csv"
+    shouldExist: true
+  - name: "routes schema exists"
+    path: "/opt/pinot/dataset/routes.schema.json"
+    shouldExist: true
+  - name: "routes table config exists"
+    path: "/opt/pinot/dataset/routes.table.json"
+    shouldExist: true
+
+fileContentTests:
+  - name: "openflights declares all three expected tables in the manifest"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^airports[[:space:]]'
+      - '(?m)^airlines[[:space:]]'
+      - '(?m)^routes[[:space:]]'
+
+  - name: "each table gets a header row the source files do not have"
+    path: "/opt/pinot/dataset/routes.csv"
+    expectedContents:
+      - '(?m)^airline,airline_id,source_airport,source_airport_id,destination_airport,destination_airport_id,codeshare,stops,equipment$'
+
+  - name: "airports maps the authored DDL through the shared type map"
+    path: "/opt/pinot/dataset/airports.schema.json"
+    expectedContents:
+      - '"name": "airport_id",\n      "dataType": "INT"'
+      - '"name": "longitude",\n      "dataType": "DOUBLE"'
+      - '"name": "tz",\n      "dataType": "STRING"'
