@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# GeoNames publishes no SQL, so stage the authored ClickHouse schema (shipped
+# alongside these build scripts) into the build dir as geonames.sql and append
+# the load for the export unpacked by the extract hook. The export itself is
+# shipped next to the init script by the load hook and read at container start
+# -- `FROM INFILE` is a client-side read, so the path is the one inside this
+# image.
+#
+# FORMAT TabSeparated, because the export is exactly that: tab-delimited, no
+# header row and no quoting at all, so a double quote in a place name is a
+# literal character and a CSV reader would swallow the rest of the line.
+#
+# format_tsv_null_representation is set to the empty string for the load. TSV's
+# NULL marker is `\N`, which this export never uses -- a missing value is simply
+# an empty field -- and an empty field would otherwise land as 0 in the nullable
+# integer columns (`elevation` is blank on most rows), quietly turning "not
+# recorded" into "sea level". Pointing the NULL marker at the empty string
+# instead makes every blank field NULL, which is exactly what the postgres load
+# gets from reading the file in CSV mode. It is set for the session rather than
+# on the statement because ClickHouse's parser does not accept a SETTINGS clause
+# on `INSERT ... FROM INFILE`, and put back afterwards so nothing else in the
+# session inherits it.
+set -e
+cp /usr/local/lib/scripts/geonames/schema.sql geonames.sql
+cat >>geonames.sql <<EOF
+
+SET format_tsv_null_representation = '';
+INSERT INTO \`cities\` FROM INFILE '/docker-entrypoint-initdb.d/${DATASET}/cities15000.txt' FORMAT TabSeparated;
+SET format_tsv_null_representation = '\\\\N';
+EOF

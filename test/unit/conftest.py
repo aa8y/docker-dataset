@@ -133,3 +133,13 @@ def pinot_pgsql():
     # (or reload the module with the env var already set, as the golden test in
     # test_pinot_pgsql.py does) -- setting the env var inside a test is too late.
     return _load("pinot_pgsql_transform", "pinot/scripts/pgsql/transform")
+
+
+@pytest.fixture(scope="session")
+def clickhouse_pgsql():
+    return _load("clickhouse_pgsql_transform", "clickhouse/scripts/pgsql/transform")
+
+
+@pytest.fixture(scope="session")
+def se_clickhouse():
+    return _load("se_clickhouse_transform", "clickhouse/scripts/stackexchange/transform")

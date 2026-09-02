@@ -1,0 +1,43 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script and the data it reads.
+# GeoNames publishes only a zipped tab-separated export, so the schema is
+# authored in-repo (clickhouse/scripts/geonames/schema.sql) and the transform
+# hook appends the `INSERT ... FROM INFILE ... FORMAT TabSeparated` that loads
+# it. `FROM INFILE` is a client-side read at container start, so the export
+# ships in the image next to the init script.
+#
+# The load is bracketed by a `format_tsv_null_representation = ''` setting: the
+# export marks a missing value with an empty field rather than TSV's `\N`, and
+# without the override a blank would land as 0 in the nullable integer columns
+# (`elevation` is blank on most rows).
+#
+# The table assertion uses `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "geonames init script exists"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    shouldExist: true
+
+  - name: "the cities export ships alongside the init script"
+    path: "/docker-entrypoint-initdb.d/geonames/cities15000.txt"
+    shouldExist: true
+
+fileContentTests:
+  - name: "geonames selects its database"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    expectedContents:
+      - "USE `geonames`;"
+
+  - name: "geonames declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `cities` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "geonames loads the cities table from its shipped export"
+    path: "/docker-entrypoint-initdb.d/geonames.sql"
+    expectedContents:
+      - "SET format_tsv_null_representation = '';"
+      - "INSERT INTO `cities` FROM INFILE '/docker-entrypoint-initdb.d/geonames/cities15000.txt' FORMAT TabSeparated;"

@@ -1,0 +1,10 @@
+{
+  "boardgames.Badges": ">=68484",
+  "boardgames.Comments": ">=52526",
+  "boardgames.PostHistory": ">=123655",
+  "boardgames.PostLinks": ">=3191",
+  "boardgames.Posts": ">=39150",
+  "boardgames.Tags": ">=964",
+  "boardgames.Users": ">=30997",
+  "boardgames.Votes": ">=239068"
+}

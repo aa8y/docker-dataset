@@ -1667,3 +1667,244 @@ contexts:
       latest:
         retagFrom: world
         structureTest: false
+  # ClickHouse images. Built on the official clickhouse/clickhouse-server
+  # Alpine image and published under a separate repository. ClickHouse is the
+  # first columnar OLAP engine here, so its *data model* differs from the
+  # PostgreSQL sample dumps and not just its SQL spelling: every table names an
+  # engine (MergeTree) and a sorting key, columns are NOT NULL unless declared
+  # Nullable, and there are no constraints, sequences or secondary indexes. The
+  # dumps therefore go through a real dialect translation
+  # (clickhouse/scripts/pgsql/transform) rather than the thin filters the
+  # DuckDB and CockroachDB contexts use. The official entrypoint honours the
+  # same /docker-entrypoint-initdb.d convention the postgres image does (plus a
+  # CLICKHOUSE_DB env var), so -- like the other server engines -- these images
+  # ship an init script and load on first container start. The build templates
+  # are the ClickHouse flavours (same arg surface as cockroach minus the
+  # index/cd knobs; test runs the ClickHouse smoke-test script) and override
+  # the global postgres ones for this context.
+  clickhouse:
+    tagKeys: dataset
+    parameters:
+      repository: aa8y/clickhouse-dataset
+    structureTest:
+      configs:
+        - test/config/clickhouse/common.yaml
+    templates:
+      # Mirrors the global templates (see top of file), including the always-on
+      # registry build cache gated by the DATASET_CHECKSUM fingerprint.
+      build: >
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        --build-arg 'SQL_FILES={{{sqlFiles}}}'
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-clickhouse.sh {{tag}} {{dataset}}{{/retagFrom}}'
+      push: >
+        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        --build-arg 'SQL_FILES={{{sqlFiles}}}'
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+    tags:
+      # PostgreSQL-dump datasets -- the pgFoundry family plus the two Yugabyte
+      # mirrors -- all from the same sources the duckdb/cockroach tags use and
+      # all through the shared scripts/pgsql transform hook (each dataset's
+      # scripts/<dataset> dir is a symlink to scripts/pgsql). That hook rebuilds
+      # every CREATE TABLE with ClickHouse types, a MergeTree engine and the
+      # dump's primary key as the sorting key, turns COPY blocks (and chinook's
+      # 15,607 single-row INSERTs) into batched multi-row INSERTs, and doubles
+      # the backslashes ClickHouse would otherwise read as escapes. Row counts
+      # match the postgres/duckdb tags exactly.
+      world:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz
+        sqlFiles: dbsamples-0.1/world/world.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/clickhouse/world.yaml
+      iso3166:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz
+        sqlFiles: iso-3166/iso-3166.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/clickhouse/iso3166.yaml
+      frenchtowns:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz
+        sqlFiles: french-towns-communes-francaises.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/clickhouse/frenchtowns.yaml
+      usda:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
+        sqlFiles: usda-r18-1.0/usda.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/clickhouse/usda.yaml
+      pgexercises:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_data.sql
+        sqlFiles: clubdata_ddl.sql clubdata_data.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/clickhouse/pgexercises.yaml
+      dellstore:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz
+        sqlFiles: dellstore2-normal-1.0/dellstore2-normal-1.0.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/clickhouse/dellstore.yaml
+      chinook:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_genres_artists_albums.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_songs.sql
+        sqlFiles: chinook_ddl.sql chinook_genres_artists_albums.sql chinook_songs.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/clickhouse/chinook.yaml
+      # NYC TLC yellow-taxi trip records -- the ClickHouse flagship here, and
+      # the only dataset that ships as Parquet. The scripts/nyc_taxi transform
+      # hook authors an explicit CREATE TABLE (the TLC's own column names, types
+      # read out of the Parquet schema) plus the `INSERT ... FROM INFILE ...
+      # FORMAT Parquet` that loads it; the 73.5 MB file ships in the image,
+      # because unlike DuckDB this engine loads at container start.
+      #
+      # The month is pinned rather than tracking "latest available" so the tag
+      # is reproducible: TLC publishes a new file every month and revises older
+      # ones, and an unpinned URL would make the row count -- and so the smoke
+      # test's expectation -- drift under CI. 2025-06 is 4,322,960 rows.
+      #
+      # `dataset: nyc_taxi` (with an underscore) while the tag keeps the hyphen
+      # every other engine uses: the database name has to be a bare ClickHouse
+      # identifier, since the official entrypoint interpolates CLICKHOUSE_DB
+      # straight into `CREATE DATABASE IF NOT EXISTS $CLICKHOUSE_DB` unquoted,
+      # and `nyc-taxi` there is a subtraction.
+      nyc-taxi:
+        dataset: nyc_taxi
+        extractUrl: https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-06.parquet
+        sqlFiles: nyc_taxi.sql
+        structureTest:
+          configs:
+            - test/config/clickhouse/nyc-taxi.yaml
+      # Datasets published only as CSV/TSV, so their schemas are authored
+      # in-repo (clickhouse/scripts/<dataset>/schema.sql, same columns and types
+      # as the other engines') and the transform hook appends an
+      # `INSERT ... FROM INFILE` per table. The data files ship next to the init
+      # script and are read by the client at container start. All three are
+      # refreshed in place upstream, so the smoke test records floors.
+      moma:
+        extractUrl: >-
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artworks.csv
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artists.csv
+        sqlFiles: moma.sql
+        structureTest:
+          configs:
+            - test/config/clickhouse/moma.yaml
+      geonames:
+        extractUrl: https://download.geonames.org/export/dump/cities15000.zip
+        sqlFiles: geonames.sql
+        structureTest:
+          configs:
+            - test/config/clickhouse/geonames.yaml
+      openflights:
+        extractUrl: >-
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat
+        sqlFiles: openflights.sql
+        structureTest:
+          configs:
+            - test/config/clickhouse/openflights.yaml
+      # StackExchange sites. Each ships as per-table XML in a 7z archive (no
+      # SQL), so -- exactly like the other engines -- every site builds through
+      # the shared scripts/stackexchange hooks (each site's scripts/<site> dir
+      # is a symlink to it): the extract hook un-7z's the dump and the transform
+      # hook converts the XML to a ClickHouse init script (MergeTree tables
+      # keyed on Id + batched INSERTs; no indexes, which ClickHouse has no
+      # equivalent of). Adding a site is just a tag here + a structure-test
+      # config + an expected/clickhouse/<site>.json floor file.
+      stackexchange-beer:
+        dataset: beer
+        extractUrl: https://archive.org/download/stackexchange/beer.stackexchange.com.7z
+        sqlFiles: beer.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/clickhouse/stackexchange-beer.yaml
+      stackexchange-coffee:
+        dataset: coffee
+        extractUrl: https://archive.org/download/stackexchange/coffee.stackexchange.com.7z
+        sqlFiles: coffee.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/clickhouse/stackexchange-coffee.yaml
+      stackexchange-poker:
+        dataset: poker
+        extractUrl: https://archive.org/download/stackexchange/poker.stackexchange.com.7z
+        sqlFiles: poker.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/clickhouse/stackexchange-poker.yaml
+      stackexchange-woodworking:
+        dataset: woodworking
+        extractUrl: https://archive.org/download/stackexchange/woodworking.stackexchange.com.7z
+        sqlFiles: woodworking.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/clickhouse/stackexchange-woodworking.yaml
+      stackexchange-chess:
+        dataset: chess
+        extractUrl: https://archive.org/download/stackexchange/chess.stackexchange.com.7z
+        sqlFiles: chess.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/clickhouse/stackexchange-chess.yaml
+      stackexchange-cooking:
+        dataset: cooking
+        extractUrl: https://archive.org/download/stackexchange/cooking.stackexchange.com.7z
+        sqlFiles: cooking.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/clickhouse/stackexchange-cooking.yaml
+      stackexchange-outdoors:
+        dataset: outdoors
+        extractUrl: https://archive.org/download/stackexchange/outdoors.stackexchange.com.7z
+        sqlFiles: outdoors.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/clickhouse/stackexchange-outdoors.yaml
+      stackexchange-boardgames:
+        dataset: boardgames
+        extractUrl: https://archive.org/download/stackexchange/boardgames.stackexchange.com.7z
+        sqlFiles: boardgames.sql
+        extraPrereqs: p7zip python3 py3-lxml
+        structureTest:
+          configs:
+            - test/config/clickhouse/stackexchange-boardgames.yaml
+      # `latest` tracks a single representative dataset, mirroring the other
+      # engines. nyc-taxi rather than chinook here: it is the one tag that shows
+      # what this engine is for -- 4.3M rows of Parquet in a MergeTree table.
+      latest:
+        retagFrom: nyc-taxi
+        structureTest: false

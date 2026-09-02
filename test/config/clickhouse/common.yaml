@@ -1,0 +1,28 @@
+schemaVersion: "2.0.0"
+
+# Shared assertions for every aa8y/clickhouse-dataset tag: the two env vars the
+# Dockerfile sets (CLICKHOUSE_DB names the database the official entrypoint
+# creates before it runs the init scripts, and CLICKHOUSE_SKIP_USER_SETUP keeps
+# the base image's stock password-less `default` user reachable from any
+# address instead of letting the entrypoint lock it to localhost), plus the
+# init-script directory that entrypoint reads on a first, empty-data-dir start.
+# CLICKHOUSE_DB is per-dataset, so we only assert it is set (non-empty).
+#
+# No commandTests: these run `docker create` + exec against a stopped image, so
+# anything that needs a running server belongs in the integration smoke test.
+
+metadataTest:
+  envVars:
+    - key: CLICKHOUSE_DB
+      value: ".+"
+      isRegex: true
+    - key: CLICKHOUSE_SKIP_USER_SETUP
+      value: "1"
+  labels:
+    - key: "org.opencontainers.image.title"
+      value: "aa8y/clickhouse-dataset"
+
+fileExistenceTests:
+  - name: "docker-entrypoint-initdb.d exists"
+    path: "/docker-entrypoint-initdb.d"
+    shouldExist: true

@@ -1,0 +1,54 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. dellstore is the pgFoundry
+# Dell DVD Store sample (8 tables), translated from its Latin-1 PostgreSQL dump
+# by the shared scripts/pgsql hook, which also drops the dump's PL/pgSQL
+# `new_customer` function and its `serial`/`setval` sequence machinery.
+#
+# `reorder` is declared but never loaded: its COPY block is empty upstream (the
+# table ships with zero rows, which the smoke test asserts), so there is no
+# INSERT to look for.
+#
+# The table assertions use `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "dellstore init script exists"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "dellstore selects its database"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "USE `dellstore`;"
+
+  - name: "dellstore declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `categories` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `cust_hist` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `customers` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `inventory` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `orderlines` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `orders` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `products` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `reorder` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "dellstore loads data into every non-empty table"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    expectedContents:
+      - "INSERT INTO `categories` \\("
+      - "INSERT INTO `cust_hist` \\("
+      - "INSERT INTO `customers` \\("
+      - "INSERT INTO `inventory` \\("
+      - "INSERT INTO `orderlines` \\("
+      - "INSERT INTO `orders` \\("
+      - "INSERT INTO `products` \\("
+
+  - name: "dellstore drops the PL/pgSQL helper function"
+    path: "/docker-entrypoint-initdb.d/dellstore.sql"
+    excludedContents:
+      - "CREATE FUNCTION"
+      - "LANGUAGE plpgsql"

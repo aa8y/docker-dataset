@@ -1,0 +1,42 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script and the data it reads. The
+# NYC TLC yellow-taxi dataset ships as Parquet, so the scripts/nyc_taxi
+# transform hook authors an explicit CREATE TABLE (the TLC's own column names,
+# types read out of the Parquet schema) plus the `INSERT ... FROM INFILE ...
+# FORMAT Parquet` that loads it. `FROM INFILE` is a client-side read at
+# container start, so unlike the DuckDB tag the Parquet file itself has to be
+# in the image -- which is what the second existence test is for.
+#
+# The database is `nyc_taxi`, not `nyc-taxi`: the official entrypoint
+# interpolates CLICKHOUSE_DB into `CREATE DATABASE IF NOT EXISTS
+# $CLICKHOUSE_DB` unquoted, and a hyphen there parses as a subtraction.
+#
+# The table assertion uses `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "nyc_taxi init script exists"
+    path: "/docker-entrypoint-initdb.d/nyc_taxi.sql"
+    shouldExist: true
+
+  - name: "the pinned Parquet file ships alongside the init script"
+    path: "/docker-entrypoint-initdb.d/nyc_taxi/yellow_tripdata_2025-06.parquet"
+    shouldExist: true
+
+fileContentTests:
+  - name: "nyc_taxi selects its database"
+    path: "/docker-entrypoint-initdb.d/nyc_taxi.sql"
+    expectedContents:
+      - "USE `nyc_taxi`;"
+
+  - name: "nyc_taxi declares the trips table as MergeTree, keyed on pickup time"
+    path: "/docker-entrypoint-initdb.d/nyc_taxi.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `trips` \\(.*?\\) ENGINE = MergeTree ORDER BY \\(`tpep_pickup_datetime`\\);"
+
+  - name: "nyc_taxi loads the trips table from the shipped Parquet"
+    path: "/docker-entrypoint-initdb.d/nyc_taxi.sql"
+    expectedContents:
+      - "INSERT INTO `trips` FROM INFILE '/docker-entrypoint-initdb.d/nyc_taxi/yellow_tripdata_2025-06.parquet' FORMAT Parquet;"

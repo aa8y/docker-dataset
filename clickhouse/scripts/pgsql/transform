@@ -1,0 +1,762 @@
+#!/usr/bin/env python3
+"""Translate a PostgreSQL SQL dump into ClickHouse SQL at build time.
+
+Where the DuckDB hook (../../../duckdb/scripts/pgsql/transform) only has to
+delete the handful of things DuckDB cannot run -- its parser *is* PostgreSQL's
+-- ClickHouse shares neither the parser nor the data model, so this hook is a
+real dialect translation: every ``CREATE TABLE`` is parsed into columns and
+constraints and re-emitted with ClickHouse types, a ``MergeTree`` engine and a
+sorting key, and every value that reaches a string literal is re-escaped for a
+parser that, unlike PostgreSQL's, does interpret backslashes.
+
+Everything below was verified against ClickHouse 26.8.2 (the pinned server) with
+the actual dumps behind the seven tags that use this hook (world, iso3166,
+frenchtowns, usda, pgexercises, dellstore, chinook); each rule names the error it
+avoids.
+
+CREATE TABLE
+------------
+Each one is parsed into column definitions plus table constraints and re-emitted
+as::
+
+    CREATE TABLE `city` (
+      `id` Int32,
+      ...
+    ) ENGINE = MergeTree ORDER BY (`id`);
+
+Rebuilding rather than patching is deliberate, and the reason is *not* that
+ClickHouse rejects the original. 26.8 is surprisingly tolerant: it accepts
+PostgreSQL's type spellings as aliases (``integer`` -> Int32, ``character
+varying(40)`` -> String, ``boolean`` -> Bool), it accepts ``NOT NULL``, and with
+``default_table_engine = MergeTree`` (the default) a statement with no engine at
+all is accepted too. It even swallows world's ``CHECK`` constraint, casts and
+all. The problem is what that costs, silently:
+
+* A column with no ``Nullable`` is NOT NULL, and ClickHouse does not *reject* a
+  NULL written into one -- it stores the type's zero. ``INSERT INTO t (a, b, c)
+  VALUES (1, NULL, NULL)`` into ``smallint``/``text``/``timestamp`` columns
+  yields ``0``, ``''`` and ``1970-01-01 00:00:00``. Every ``\\N`` in every COPY
+  block would land that way, and no row count would ever show it.
+* Without an ``ORDER BY``, the default engine gives the table ``ORDER BY
+  tuple()`` -- no sorting key at all -- so the dump's primary key and the sparse
+  index that makes MergeTree worth using are simply dropped on the floor. And it
+  cannot be added afterwards: ``ALTER TABLE ... ADD CONSTRAINT ... PRIMARY KEY``
+  is a syntax error ("Expected one of: CHECK, ASSUME").
+* ``date`` and ``timestamp`` map to ``Date`` and ``DateTime``, which begin at
+  1970-01-01 and silently clamp anything earlier -- chinook's
+  ``Employee.BirthDate`` of 1947-02-18 comes back as 1970-01-01.
+
+and, on top of that, the parts that genuinely are errors: ``serial``
+("Unknown data type family: serial"), ``SERIAL UNIQUE NOT NULL`` and table-level
+``UNIQUE (a, b)`` and ``CONSTRAINT x PRIMARY KEY (...)`` and inline column
+``REFERENCES`` (all syntax errors), ``DEFAULT nextval('s'::regclass)``
+("Unknown data type family: regclass") and ``WITHOUT OIDS``.
+
+* **Sorting key.** MergeTree's ``ORDER BY`` is the closest thing ClickHouse has
+  to a primary key (it is the physical sort order and the sparse index), so the
+  dump's primary key becomes the sorting key. Collecting it needs a first pass
+  over every file, because ``pg_dump`` emits ``ALTER TABLE ... ADD CONSTRAINT
+  ... PRIMARY KEY`` *after* the data (world, usda, dellstore) -- by the time the
+  ``CREATE TABLE`` is reached the key is thousands of lines away, and in
+  pgexercises' case in a different file. Inline column-level ``PRIMARY KEY``
+  (iso3166, pgexercises) and table-level ``CONSTRAINT x PRIMARY KEY (...)``
+  (chinook) are picked up from the statement itself. A table with no primary key
+  at all (frenchtowns' three tables, which declare only ``UNIQUE``; usda's
+  ``footnote``; iso3166's ``subcountry``) gets an explicit ``ORDER BY tuple()``,
+  ClickHouse's documented "no sorting key" -- the same thing the default would
+  have produced, said out loud so the absence reads as a decision.
+* **Nullability.** PostgreSQL columns are nullable unless declared ``NOT NULL``;
+  ClickHouse columns are the opposite, so every column without ``NOT NULL``
+  becomes ``Nullable(T)``. The exception is a sorting-key column: MergeTree
+  rejects those with "Sorting key contains nullable columns, but merge tree
+  setting `allow_nullable_key` is disabled" (code 44), so a key column is forced
+  non-Nullable. That is faithful rather than lossy -- a PostgreSQL primary key
+  implies ``NOT NULL`` anyway, and every key column in these dumps is already
+  declared so.
+* **Types** are mapped by TYPES below: exact-width integers, ``real`` ->
+  Float32, ``double precision`` -> Float64, ``numeric(p,s)`` -> ``Decimal(p,s)``
+  and unconstrained ``numeric`` -> Float64 (ClickHouse's Decimal needs a
+  precision; pgexercises' bare ``numeric`` money columns have no scale to carry
+  over), every char/varchar/text -> String (ClickHouse has one string type and no
+  length limit; whatever blank padding a ``character(n)`` column carried is
+  already materialized in the dump's data), ``boolean`` -> Bool, ``date`` ->
+  Date32 and ``timestamp`` -> DateTime64(6). The last two are the ones that
+  differ from what ClickHouse would infer on its own, and they are the point:
+  its ``date`` alias is ``Date`` and its ``timestamp`` alias is ``DateTime``,
+  both of which begin at 1970-01-01 and *clamp* anything earlier without
+  complaint -- chinook's ``Employee.BirthDate`` of 1947-02-18 comes back as
+  1970-01-01. Date32 and DateTime64 span 1900-2299 and hold it, and
+  DateTime64(6) also matches PostgreSQL ``timestamp``'s microsecond resolution.
+  Anything else (``time``, ``interval``, ``bytea``, ...) falls back to String;
+  none of these dumps use one.
+* **Dropped from the table body**: ``DEFAULT`` expressions,
+  ``FOREIGN KEY`` / ``REFERENCES``, ``UNIQUE`` and ``CHECK``. Most of these are
+  outright errors -- an inline column ``REFERENCES`` (iso3166, frenchtowns) and
+  a table-level ``UNIQUE (a, b)`` (frenchtowns' Towns, iso3166's subcountry) are
+  syntax errors, and ``DEFAULT nextval('s'::regclass)`` (dellstore) is "Unknown
+  data type family: regclass". The two that are not still go: a table-level
+  ``FOREIGN KEY`` parses but is silently discarded (ClickHouse has no
+  referential integrity, so keeping it would only suggest otherwise), and
+  world's ``CHECK`` constraint is accepted verbatim, casts and all, but
+  ClickHouse's ``CHECK`` is evaluated on *every INSERT* rather than being a
+  stored constraint -- a single value the PostgreSQL-authored expression
+  disagrees with would abort the load rather than reject a row. Dropping the
+  defaults costs nothing: every dump writes its id values explicitly, and
+  chinook's omitted columns are all Nullable, whose ClickHouse default is NULL --
+  the same value PostgreSQL would have stored.
+
+Whole statements dropped
+------------------------
+Each raises a ClickHouse error and none is needed to reproduce the data:
+
+* ``SET ...`` -- ``SET client_encoding = 'LATIN1'`` is "Setting client_encoding
+  is neither a builtin setting nor started with the prefix 'SQL_'"
+  (UNKNOWN_SETTING), while the multi-value ``SET search_path = public,
+  pg_catalog`` and ``SET SESSION CHARACTERISTICS AS TRANSACTION ...`` (chinook,
+  pgexercises) are outright syntax errors.
+* ``BEGIN;`` / ``COMMIT;`` (world, usda, dellstore, frenchtowns wrap everything
+  in one) -- "Syntax error ... Expected TRANSACTION": ClickHouse's transactions
+  are an experimental, differently-spelled feature, and a MergeTree INSERT is
+  atomic per part regardless.
+* ``ANALYZE ...`` (world, usda) -- not a statement in ClickHouse at all
+  (SYNTAX_ERROR).
+* ``SELECT pg_catalog.setval(...)`` (dellstore) -- "Function with name
+  `pg_catalog.setval` does not exist" (UNKNOWN_FUNCTION). There are no sequences
+  to set, either.
+* ``CREATE INDEX`` / ``CREATE UNIQUE INDEX`` -- ``USING btree`` is a syntax
+  error, and there is nothing to rewrite it to: ClickHouse's ``CREATE INDEX``
+  declares a *data-skipping* index (``TYPE``/``GRANULARITY``) with different
+  semantics, and the ordinary lookup job is the sorting key's. Dropped as a
+  block, because pgexercises wraps each of its seven indexes over four lines.
+* ``ALTER TABLE`` in every spelling -- the PRIMARY KEY form has already been
+  consumed into the sorting key above (and is itself a syntax error here:
+  "Expected one of: CHECK, ASSUME"), and FOREIGN KEY / UNIQUE / OWNER TO have no
+  equivalent.
+* ``CREATE SEQUENCE`` / ``ALTER SEQUENCE``, ``COMMENT ON``, ``GRANT`` /
+  ``REVOKE``, ``CREATE SCHEMA`` / ``DROP SCHEMA``, ``CREATE DOMAIN`` /
+  ``CREATE TYPE``, and psql's ``\\connect`` / ``\\.`` meta-commands -- every one
+  a syntax error (ClickHouse's ``GRANT`` exists but takes privileges on a
+  database or table, not PostgreSQL's ``ON TABLE x TO y`` shape).
+* PL/pgSQL functions -- dellstore's ``new_customer``, whose body is one long
+  quoted string ending in ``LANGUAGE plpgsql;``.
+
+Identifiers
+-----------
+PostgreSQL folds unquoted identifiers to lower case; ClickHouse is
+case-sensitive and folds nothing, so a dump that declares ``CREATE TABLE
+Regions`` and then loads ``COPY regions`` (frenchtowns does exactly this) would
+end up with a table nothing ever inserts into ("Unknown table expression
+identifier"). Unquoted identifiers are therefore lower-cased and quoted ones
+kept verbatim, exactly reproducing PostgreSQL's own rule -- which is also what
+keeps chinook's quoted ``"InvoiceLine"`` CamelCase intact. Every emitted
+identifier is backtick-quoted, so ``usda``'s ``min``/``max`` and ``"year"``
+columns can never be read as function names. ``public.`` / ``cd.`` qualifiers
+are stripped: ClickHouse's "schema" is the database, each image holds exactly
+one dataset in one database, and pgexercises' ``cd`` schema would otherwise have
+to exist as a second database.
+
+Data
+----
+* ``COPY tbl (cols) FROM stdin`` + TEXT-format rows + ``\\.`` become batched
+  multi-row ``INSERT ... VALUES``. ClickHouse's ``INSERT ... FORMAT TabSeparated``
+  could take the rows nearly as-is, but only as the *last* thing in a statement
+  stream the client reads itself -- inside a multi-statement init script the
+  rows would be parsed as SQL. Batching matters more here than on the other
+  engines: every INSERT into a MergeTree table writes a new part, so a row per
+  statement would leave hundreds of thousands of parts to merge.
+* Consecutive single-row ``INSERT``s that share an ``INSERT INTO t (cols)``
+  prefix are coalesced into the same batched form, for the same reason (chinook
+  ships 15,607 of them; the cockroach yugabyte hook does this for its own).
+  Multi-row ``INSERT``s (pgexercises) are passed through as they are.
+* **Backslashes are doubled in every emitted or passed-through string literal.**
+  These dumps are read with ``standard_conforming_strings`` on, where a
+  backslash in a literal is just a backslash; ClickHouse always interprets
+  escape sequences, so chinook's ``'Cavalleria Rusticana \\ Act'`` and any
+  value containing ``\\n`` would silently change meaning
+  (``length('a\\nb')`` is 3 in ClickHouse, 4 in PostgreSQL). ``''`` stays the
+  quote escape, which both dialects share.
+* Latin-1 dumps (world, usda, dellstore) are transcoded to UTF-8: ClickHouse
+  stores String as raw bytes, so the mojibake would be silent rather than an
+  error -- ``Curaçao`` would come back as ``Cura\\xe7ao``.
+
+Every dataset that needs this symlinks its scripts/<dataset> directory to
+scripts/pgsql, exactly like the DuckDB and SQLite sides; the conversion is
+dataset-agnostic and keyed only on $SQL_FILES, which it rewrites in place.
+"""
+import glob
+import os
+import re
+import sys
+
+# Rows per emitted INSERT. Larger than the other engines' 500 on purpose: each
+# INSERT into a MergeTree table creates a part, and usda's nut_data alone is
+# 253,825 rows.
+BATCH = 1000
+
+# --- PostgreSQL -> ClickHouse type map -------------------------------------
+# Keyed by the base type name with any (length) argument removed and internal
+# whitespace collapsed. numeric/decimal *with* a precision is handled
+# separately, before this map is consulted.
+TYPES = {
+    "smallint": "Int16", "int2": "Int16",
+    "smallserial": "Int16", "serial2": "Int16",
+    "integer": "Int32", "int": "Int32", "int4": "Int32",
+    "serial": "Int32", "serial4": "Int32",
+    "bigint": "Int64", "int8": "Int64",
+    "bigserial": "Int64", "serial8": "Int64",
+    "real": "Float32", "float4": "Float32",
+    "double precision": "Float64", "float8": "Float64", "float": "Float64",
+    "numeric": "Float64", "decimal": "Float64",
+    "boolean": "Bool", "bool": "Bool",
+    "character varying": "String", "varchar": "String",
+    "character": "String", "char": "String", "bpchar": "String",
+    "text": "String", "name": "String",
+    "date": "Date32",
+    "timestamp": "DateTime64(6)",
+    "timestamp without time zone": "DateTime64(6)",
+    "timestamp with time zone": "DateTime64(6)",
+    "timestamptz": "DateTime64(6)",
+}
+FALLBACK_TYPE = "String"
+
+NUMERIC_RE = re.compile(
+    r"^(?:numeric|decimal)\s*\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)$", re.IGNORECASE)
+
+# A COPY header: COPY <table> (<cols>) FROM stdin [DELIMITER 'x'];
+COPY_RE = re.compile(
+    r"^COPY\s+(\S+?)\s*\(([^)]*)\)\s+FROM\s+stdin"
+    r"(?:\s+DELIMITER\s+'([^']*)')?\s*;",
+    re.IGNORECASE)
+
+# Whole lines dropped outright. See the module docstring for the error each one
+# avoids. \c is psql's \connect abbreviation; \. terminates a COPY block that
+# COPY_RE did not consume.
+DROP_LINE_RE = re.compile(
+    r"^\s*(SET\s|SELECT\s+(pg_catalog\.)?setval|GRANT\s|REVOKE\s|"
+    r"BEGIN\s*;|BEGIN\s+WORK|COMMIT\s*;|COMMIT\s+WORK|ROLLBACK\b|"
+    r"START\s+TRANSACTION|ANALYZE\b|VACUUM\b|CHECKPOINT\b|"
+    r"CREATE\s+SCHEMA|DROP\s+SCHEMA|CREATE\s+DATABASE|DROP\s+DATABASE|"
+    r"\\connect|\\c\s|\\\.)",
+    re.IGNORECASE)
+
+# Statements buffered to their terminating ';' and then discarded whole, because
+# they span several lines (pgexercises wraps each CREATE INDEX over four).
+DROP_BLOCK_RE = re.compile(
+    r"^\s*(ALTER\s+TABLE|CREATE\s+(UNIQUE\s+)?INDEX|DROP\s+INDEX|"
+    r"CREATE\s+SEQUENCE|ALTER\s+SEQUENCE|DROP\s+SEQUENCE|"
+    r"COMMENT\s+ON|CREATE\s+DOMAIN|CREATE\s+TYPE|CREATE\s+TRIGGER|"
+    r"CREATE\s+(OR\s+REPLACE\s+)?(VIEW|RULE))\b",
+    re.IGNORECASE)
+
+CREATE_TABLE_RE = re.compile(r"^\s*CREATE\s+TABLE\b", re.IGNORECASE)
+INSERT_RE = re.compile(r"^\s*INSERT\s+INTO\b", re.IGNORECASE)
+
+# PL/pgSQL stored functions: dellstore's new_customer, whose body is a single
+# quoted string spanning ~60 lines and closing with `' LANGUAGE plpgsql;`.
+FUNC_START_RE = re.compile(r"^\s*CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b",
+                           re.IGNORECASE)
+FUNC_END_RE = re.compile(r"\bLANGUAGE\s+\w+\s*;\s*$", re.IGNORECASE)
+
+# `ALTER TABLE [ONLY] <table> ADD CONSTRAINT <name> PRIMARY KEY (<cols>)`, the
+# form pg_dump emits after the data. \s spans newlines, so the two-line spelling
+# these dumps use is matched as-is.
+ALTER_PK_RE = re.compile(
+    r"ALTER\s+TABLE\s+(?:ONLY\s+)?(\S+)\s+ADD\s+CONSTRAINT\s+\S+\s+"
+    r"PRIMARY\s+KEY\s*\(([^)]*)\)",
+    re.IGNORECASE)
+
+# One column's type in a CREATE TABLE body: the multi-word PostgreSQL spellings
+# first (longest match wins), then any single word with an optional argument.
+TYPE_RE = re.compile(
+    r"""^\s*(
+        double\s+precision
+      | character\s+varying (\s*\([^)]*\))?
+      | bit\s+varying (\s*\([^)]*\))?
+      | timestamp (\s*\([^)]*\))? (\s+with(out)?\s+time\s+zone)?
+      | time (\s*\([^)]*\))? (\s+with(out)?\s+time\s+zone)?
+      | [A-Za-z_][A-Za-z_0-9]* (\s*\([^)]*\))?
+    )""",
+    re.IGNORECASE | re.VERBOSE)
+
+# A table-level constraint rather than a column: [CONSTRAINT <name>] <kind> ...
+CONSTRAINT_RE = re.compile(
+    r"^\s*(?:CONSTRAINT\s+(?:\"(?:[^\"]|\"\")*\"|[A-Za-z_][\w$]*)\s+)?"
+    r"(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK|EXCLUDE)\b",
+    re.IGNORECASE)
+PK_COLS_RE = re.compile(r"PRIMARY\s+KEY\s*\(([^)]*)\)", re.IGNORECASE)
+NOT_NULL_RE = re.compile(r"\bNOT\s+NULL\b", re.IGNORECASE)
+INLINE_PK_RE = re.compile(r"\bPRIMARY\s+KEY\b", re.IGNORECASE)
+
+# The `INSERT INTO <table> (<cols>)` prefix and its single VALUES tuple, used to
+# coalesce chinook's one-row-per-statement dump into batches.
+SINGLE_INSERT_RE = re.compile(
+    r"^\s*INSERT\s+INTO\s+(.+?)\s*\(([^)]*)\)\s+VALUES\s*(\(.*\))\s*;\s*$",
+    re.IGNORECASE | re.DOTALL)
+
+
+def transcode(path):
+    """Read a dump as UTF-8, falling back to Latin-1 (world, usda, dellstore)."""
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+# --- identifiers -----------------------------------------------------------
+
+def parse_ident(text):
+    """Read one (optionally quoted, optionally qualified) identifier.
+
+    Returns (name, rest). The name is PostgreSQL-folded: a quoted identifier
+    keeps its case, an unquoted one is lower-cased. Any schema qualifier is
+    dropped -- only the last component survives.
+    """
+    rest = text.lstrip()
+    name = None
+    while True:
+        if rest.startswith('"'):
+            end = 1
+            while end < len(rest):
+                if rest[end] == '"':
+                    if end + 1 < len(rest) and rest[end + 1] == '"':
+                        end += 2
+                        continue
+                    break
+                end += 1
+            name = rest[1:end].replace('""', '"')
+            rest = rest[end + 1:]
+        else:
+            m = re.match(r"[A-Za-z_][A-Za-z_0-9$]*", rest)
+            if not m:
+                return name, rest
+            name = m.group(0).lower()
+            rest = rest[m.end():]
+        if rest.startswith("."):
+            rest = rest[1:]
+            continue
+        return name, rest
+
+
+def fold_ident(raw):
+    """PostgreSQL-fold a bare identifier token (`Regions` -> `regions`)."""
+    name, _ = parse_ident(raw)
+    return name
+
+
+def quote(name):
+    """Backtick-quote an identifier for ClickHouse."""
+    return "`{}`".format(name.replace("`", "\\`"))
+
+
+def split_ident_list(text):
+    """Fold a comma-separated identifier list (`a, "B"`) into names."""
+    return [fold_ident(part) for part in text.split(",") if part.strip()]
+
+
+# --- types -----------------------------------------------------------------
+
+def map_type(pg_type):
+    """Map one PostgreSQL type spelling onto a ClickHouse type."""
+    spelling = " ".join(pg_type.split())
+    m = NUMERIC_RE.match(spelling)
+    if m:
+        return "Decimal({}, {})".format(m.group(1), m.group(2) or 0)
+    base = re.sub(r"\s*\([^)]*\)", "", spelling).strip().lower()
+    base = re.sub(r"\s+", " ", base)
+    return TYPES.get(base, FALLBACK_TYPE)
+
+
+# --- literals --------------------------------------------------------------
+
+def escape_backslashes(text):
+    """Double every backslash inside the string literals of a statement.
+
+    PostgreSQL (standard_conforming_strings) reads a backslash in a literal as
+    itself; ClickHouse reads it as the start of an escape sequence. Only literal
+    bodies are touched -- identifiers and numbers are left alone -- and ``''``
+    is skipped as the quote escape both dialects share.
+    """
+    out, i, n, in_string = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_string:
+            if c == "'":
+                if i + 1 < n and text[i + 1] == "'":
+                    out.append("''")
+                    i += 2
+                    continue
+                in_string = False
+                out.append(c)
+            elif c == "\\":
+                out.append("\\\\")
+            else:
+                out.append(c)
+        else:
+            if c == "'":
+                in_string = True
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+_UNESCAPE = {"t": "\t", "n": "\n", "r": "\r", "b": "\b", "f": "\f",
+             "v": "\v", "\\": "\\"}
+_ESCAPE = {"\\": "\\\\", "'": "''", "\t": "\\t", "\n": "\\n", "\r": "\\r",
+           "\b": "\\b", "\f": "\\f", "\v": "\\v"}
+
+
+def split_copy_row(line, delim):
+    """Split a COPY TEXT row on unescaped delimiters, keeping escape pairs."""
+    fields, cur, i, n = [], [], 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n:
+            cur.append(line[i:i + 2])
+            i += 2
+            continue
+        if c == delim:
+            fields.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    fields.append("".join(cur))
+    return fields
+
+
+def copy_value(field):
+    """Render one COPY TEXT field as a ClickHouse string literal.
+
+    The field is first un-escaped from COPY's own encoding (``\\N`` is the NULL
+    sentinel, ``\\t``/``\\n`` stand for control characters) and then re-escaped
+    for ClickHouse, which needs the backslash doubled and the quote either
+    doubled or backslash-escaped. Every value is emitted as a string literal and
+    left to ClickHouse's own conversion on INSERT -- ``'1'`` into Int32,
+    ``'828.0'`` into Decimal(10,2), ``'t'`` into Bool -- which keeps this
+    function independent of the column's declared type.
+    """
+    if field == "\\N":
+        return "NULL"
+    raw, i = [], 0
+    while i < len(field):
+        if field[i] == "\\" and i + 1 < len(field):
+            raw.append(_UNESCAPE.get(field[i + 1], field[i + 1]))
+            i += 2
+        else:
+            raw.append(field[i])
+            i += 1
+    return "'" + "".join(_ESCAPE.get(c, c) for c in raw) + "'"
+
+
+# --- statement scanning ----------------------------------------------------
+
+def ends_statement(line, in_string):
+    """Track quote state across a line; report whether a ';' closes outside it.
+
+    Data lines of a multi-row INSERT may hold a semicolon inside a literal, and
+    ``''`` inside one is an escaped quote rather than a close, so finding the
+    end of a statement needs quote state and not a bare ``';' in line``.
+    """
+    i, n, done = 0, len(line), False
+    while i < n:
+        c = line[i]
+        if in_string:
+            if c == "'" and i + 1 < n and line[i + 1] == "'":
+                i += 2
+                continue
+            if c == "'":
+                in_string = False
+        elif c == "'":
+            in_string = True
+        elif c == ";":
+            done = True
+        i += 1
+    return in_string, done
+
+
+def read_statement(lines, i):
+    """Collect lines[i:] up to the ';' that closes the statement.
+
+    Returns the joined statement and the index just past it.
+    """
+    block = [lines[i]]
+    in_string, done = ends_statement(lines[i], False)
+    while not done and i + 1 < len(lines):
+        i += 1
+        block.append(lines[i])
+        in_string, done = ends_statement(lines[i], in_string)
+    return "\n".join(block), i + 1
+
+
+def split_body(body):
+    """Split a CREATE TABLE body on its top-level commas.
+
+    Nested parens (``numeric(10,2)``, a CHECK expression), string literals and
+    ``--`` comments all hold commas that must not split an element; frenchtowns
+    has all three.
+    """
+    parts, cur, depth, i, n = [], [], 0, 0, len(body)
+    in_string = False
+    while i < n:
+        c = body[i]
+        if in_string:
+            cur.append(c)
+            if c == "'":
+                if i + 1 < n and body[i + 1] == "'":
+                    cur.append("'")
+                    i += 2
+                    continue
+                in_string = False
+            i += 1
+            continue
+        if c == "'":
+            in_string = True
+            cur.append(c)
+        elif c == '"':
+            end = i + 1
+            while end < n and body[end] != '"':
+                end += 1
+            cur.append(body[i:end + 1])
+            i = end + 1
+            continue
+        elif c == "-" and i + 1 < n and body[i + 1] == "-":
+            end = body.find("\n", i)
+            i = n if end == -1 else end
+            continue
+        elif c == "(":
+            depth += 1
+            cur.append(c)
+        elif c == ")":
+            depth -= 1
+            cur.append(c)
+        elif c == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+        i += 1
+    if "".join(cur).strip():
+        parts.append("".join(cur))
+    return parts
+
+
+def parse_create_table(statement):
+    """Parse a CREATE TABLE statement into (table, columns, pk_columns).
+
+    ``columns`` is a list of (name, pg_type, not_null); ``pk_columns`` holds the
+    names of any primary key declared inside the statement itself (inline on a
+    column, or as a table-level constraint).
+    """
+    head = re.sub(r"^\s*CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?", "",
+                  statement, count=1, flags=re.IGNORECASE)
+    table, rest = parse_ident(head)
+    start = rest.find("(")
+    if table is None or start == -1:
+        return None, [], []
+    depth, end = 0, -1
+    for i in range(start, len(rest)):
+        if rest[i] == "(":
+            depth += 1
+        elif rest[i] == ")":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        return None, [], []
+
+    columns, pk = [], []
+    for element in split_body(rest[start + 1:end]):
+        element = re.sub(r"--[^\n]*", "", element).strip()
+        if not element:
+            continue
+        if CONSTRAINT_RE.match(element):
+            m = PK_COLS_RE.search(element)
+            if m:
+                pk = split_ident_list(m.group(1))
+            continue
+        name, tail = parse_ident(element)
+        if name is None:
+            continue
+        m = TYPE_RE.match(tail)
+        if not m:
+            continue
+        pg_type, modifiers = m.group(1), tail[m.end():]
+        columns.append((name, pg_type, bool(NOT_NULL_RE.search(modifiers))))
+        if INLINE_PK_RE.search(modifiers):
+            pk = [name]
+    return table, columns, pk
+
+
+def render_create_table(table, columns, pk):
+    """Emit the ClickHouse CREATE TABLE for a parsed PostgreSQL one."""
+    keys = [c for c in pk if c in {name for name, _, _ in columns}]
+    defs = []
+    for name, pg_type, not_null in columns:
+        ch_type = map_type(pg_type)
+        # A sorting-key column may not be Nullable (code 44); a PostgreSQL
+        # primary key implies NOT NULL, so forcing it loses nothing.
+        if not not_null and name not in keys:
+            ch_type = "Nullable({})".format(ch_type)
+        defs.append("  {} {}".format(quote(name), ch_type))
+    order_by = ("({})".format(", ".join(quote(c) for c in keys))
+                if keys else "tuple()")
+    return "CREATE TABLE {} (\n{}\n) ENGINE = MergeTree ORDER BY {};\n".format(
+        quote(table), ",\n".join(defs), order_by)
+
+
+def rewrite_insert_prefix(prefix):
+    """Normalize `INSERT INTO <table> (<cols>)` into ClickHouse identifiers."""
+    head = re.sub(r"^\s*INSERT\s+INTO\s+", "", prefix, count=1,
+                  flags=re.IGNORECASE)
+    table, rest = parse_ident(head)
+    cols = rest.strip()
+    if cols.startswith("(") and cols.endswith(")"):
+        names = split_ident_list(cols[1:-1])
+        return "INSERT INTO {} ({})".format(
+            quote(table), ", ".join(quote(c) for c in names))
+    return "INSERT INTO {}".format(quote(table))
+
+
+def collect_alter_primary_keys(texts):
+    """First pass: primary keys pg_dump emits as ALTER TABLE, after the data."""
+    keys = {}
+    for text in texts:
+        for m in ALTER_PK_RE.finditer(text):
+            table = fold_ident(m.group(1))
+            keys[table] = split_ident_list(m.group(2))
+    return keys
+
+
+def convert_file(text, out, alter_keys=None):
+    """Translate one dump into ClickHouse SQL, writing to `out`."""
+    alter_keys = alter_keys or {}
+    lines = text.split("\n")
+    i, n = 0, len(lines)
+    drop_func = False
+    batch_key, batch = None, []
+
+    def flush_batch():
+        if batch:
+            out.write(batch_key + " VALUES\n" + ",\n".join(batch) + ";\n")
+            del batch[:]
+
+    while i < n:
+        line = lines[i]
+
+        if drop_func:
+            if FUNC_END_RE.search(line):
+                drop_func = False
+            i += 1
+            continue
+
+        m = COPY_RE.match(line)
+        if m:
+            flush_batch()
+            table = fold_ident(m.group(1))
+            cols = split_ident_list(m.group(2))
+            delim = m.group(3) or "\t"
+            head = "INSERT INTO {} ({}) VALUES\n".format(
+                quote(table), ", ".join(quote(c) for c in cols))
+            rows = []
+            i += 1
+            while i < n and lines[i].rstrip() != "\\.":
+                row = split_copy_row(lines[i], delim)
+                rows.append("(" + ", ".join(copy_value(f) for f in row) + ")")
+                if len(rows) >= BATCH:
+                    out.write(head + ",\n".join(rows) + ";\n")
+                    rows = []
+                i += 1
+            if rows:
+                out.write(head + ",\n".join(rows) + ";\n")
+            i += 1  # skip the \. terminator
+            continue
+
+        if FUNC_START_RE.match(line):
+            flush_batch()
+            drop_func = not FUNC_END_RE.search(line)
+            i += 1
+            continue
+
+        if CREATE_TABLE_RE.match(line):
+            flush_batch()
+            statement, i = read_statement(lines, i)
+            table, columns, pk = parse_create_table(statement)
+            if table and columns:
+                out.write(render_create_table(
+                    table, columns, pk or alter_keys.get(table, [])))
+            continue
+
+        if DROP_BLOCK_RE.match(line):
+            flush_batch()
+            _, i = read_statement(lines, i)
+            continue
+
+        if DROP_LINE_RE.match(line):
+            flush_batch()
+            i += 1
+            continue
+
+        if INSERT_RE.match(line):
+            statement, i = read_statement(lines, i)
+            statement = escape_backslashes(statement)
+            single = SINGLE_INSERT_RE.match(statement)
+            if single:
+                # chinook ships one INSERT per row; coalesce a run of them
+                # sharing a prefix into one batched statement, so the load
+                # writes tens of MergeTree parts instead of tens of thousands.
+                key = rewrite_insert_prefix(
+                    "INSERT INTO {} ({})".format(single.group(1),
+                                                 single.group(2)))
+                if key != batch_key or len(batch) >= BATCH:
+                    flush_batch()
+                    batch_key = key
+                batch.append(single.group(3))
+                continue
+            flush_batch()
+            # A multi-row INSERT (pgexercises) travels through untouched except
+            # for its prefix, whose identifiers still need folding and quoting.
+            prefix_end = re.search(r"\)\s*VALUES", statement,
+                                   re.IGNORECASE | re.DOTALL)
+            if prefix_end:
+                prefix = statement[:prefix_end.end() - len("VALUES")]
+                out.write(rewrite_insert_prefix(prefix) + " VALUES"
+                          + statement[prefix_end.end():] + "\n")
+            else:
+                out.write(statement + "\n")
+            continue
+
+        stripped = line.lstrip()
+        if stripped.startswith("--") or not stripped:
+            flush_batch()
+            out.write(line + "\n")
+        else:
+            # Anything unrecognized reaches ClickHouse as-is rather than being
+            # dropped: a dump that grows a statement this hook does not know
+            # should fail loudly at container start, not lose data silently.
+            flush_batch()
+            out.write(escape_backslashes(line) + "\n")
+        i += 1
+
+    flush_batch()
+
+
+def main():
+    files = os.environ.get("SQL_FILES", "").split() or sorted(glob.glob("*.sql"))
+    files = [f for f in files if os.path.isfile(f)]
+    if not files:
+        sys.exit("pgsql transform: no SQL files to convert")
+
+    texts = [transcode(path) for path in files]
+    alter_keys = collect_alter_primary_keys(texts)
+
+    for path, text in zip(files, texts):
+        with open(path, "w", encoding="utf-8") as out:
+            convert_file(text, out, alter_keys)
+
+
+if __name__ == "__main__":
+    main()

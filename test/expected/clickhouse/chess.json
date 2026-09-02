@@ -1,0 +1,10 @@
+{
+  "chess.Badges": ">=50574",
+  "chess.Comments": ">=42778",
+  "chess.PostHistory": ">=87727",
+  "chess.PostLinks": ">=2502",
+  "chess.Posts": ">=29440",
+  "chess.Tags": ">=383",
+  "chess.Users": ">=28553",
+  "chess.Votes": ">=182134"
+}
