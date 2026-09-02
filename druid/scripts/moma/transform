@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Build MoMA's PostgreSQL dump, then let the shared pgsql hook finish.
+
+MoMA publishes only CSV, so the schema is authored alongside this hook
+(schema.sql) and the exports have to be turned into something the shared
+scripts/pgsql transform can read -- which is where every Druid-specific
+decision already lives, under unit test. That hook reads PostgreSQL dumps, so
+this one writes the dump MoMA never shipped: the authored DDL followed by one
+`COPY ... FROM stdin` block per export. See ../pgdump.py for why that
+indirection beats a second implementation of the Druid half.
+
+MoMA's exports are the messiest data in this repo -- variable column counts,
+embedded newlines, embedded quotes -- and each of those is handled on the way
+through rather than papered over:
+
+  * each row is padded or truncated to the schema's width by pgdump.copy_block,
+    so a refreshed export that grows or loses a trailing column still loads
+    instead of shifting every value one place;
+  * embedded newlines survive COPY (which escapes them as ``\\n``) and are
+    flattened to spaces by the shared hook when it writes the Druid CSV, since
+    Druid's CSV reader splits on lines before parsing them. That is the one
+    lossy step, and the shared hook reports how many values it touched;
+  * an empty cell becomes NULL, matching the `nullif = ''` the CockroachDB load
+    uses. Every column is text, so this is cosmetic either way.
+
+The header row is skipped: the column names are positional here, the authored
+schema declares them in file order.
+"""
+import os
+import sys
+
+sys.path.insert(0, "/usr/local/lib/scripts")
+import pgdump  # noqa: E402  (path has to be set first: hooks are not a package)
+
+SCHEMA = "/usr/local/lib/scripts/moma/schema.sql"
+DUMP = "moma.sql"
+
+# One entry per published export: (file, table, columns, has header, null
+# spelling). The columns are the authored schema's, in the same order.
+TABLES = [
+    ("Artists.csv", "artists", [
+        "constituent_id", "display_name", "artist_bio", "nationality",
+        "gender", "begin_date", "end_date", "wiki_qid", "ulan",
+    ], True, ""),
+    ("Artworks.csv", "artworks", [
+        "title", "artist", "constituent_id", "artist_bio", "nationality",
+        "begin_date", "end_date", "gender", "date", "medium", "dimensions",
+        "credit_line", "accession_number", "classification", "department",
+        "date_acquired", "cataloged", "object_id", "url", "image_url",
+        "on_view", "circumference_cm", "depth_cm", "diameter_cm", "height_cm",
+        "length_cm", "weight_kg", "width_cm", "seat_height_cm", "duration_sec",
+    ], True, ""),
+]
+
+
+def main():
+    for path, _, _, _, _ in TABLES:
+        if not os.path.exists(path):
+            sys.exit("moma transform: {} not found".format(path))
+    pgdump.build(SCHEMA, DUMP, TABLES)
+    os.environ["SQL_FILES"] = DUMP
+    os.execv("/usr/local/lib/scripts/pgsql/transform",
+             ["/usr/local/lib/scripts/pgsql/transform"])
+
+
+if __name__ == "__main__":
+    main()

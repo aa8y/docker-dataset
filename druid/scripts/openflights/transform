@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Build OpenFlights' PostgreSQL dump, then let the shared pgsql hook finish.
+
+OpenFlights publishes three comma-separated data files and no SQL, so the
+schema is authored alongside this hook (schema.sql) and the data has to be
+turned into something the shared scripts/pgsql transform can read -- which is
+where every Druid-specific decision already lives, under unit test. That hook
+reads PostgreSQL dumps, so this one writes the dump OpenFlights never shipped:
+the authored DDL followed by one `COPY ... FROM stdin` block per file. See
+../pgdump.py for why that indirection beats a second implementation of the
+Druid half.
+
+The files are already RFC 4180 CSV with no header row, so each is parsed with
+csv.reader and re-emitted as COPY TEXT; ../pgdump.py handles the escaping. The
+data dictionary's `\\N` is the missing-value spelling, which maps onto COPY's
+own `\\N` and so reaches Druid as null -- matching the `nullif = '\\N'` the
+CockroachDB and PostgreSQL loads use.
+
+`routes` deliberately keeps its dangling references: it is compiled from
+published timetables and names airports and airlines that are not all in the
+other two files, and ~479 routes carry `\\N` for the airline. Druid has no
+foreign keys to reject them with, so this is one place where its lack of
+constraints costs nothing.
+"""
+import os
+import sys
+
+sys.path.insert(0, "/usr/local/lib/scripts")
+import pgdump  # noqa: E402  (path has to be set first: hooks are not a package)
+
+SCHEMA = "/usr/local/lib/scripts/openflights/schema.sql"
+DUMP = "openflights.sql"
+
+# One entry per published file: (file, table, columns, has header, null spelling).
+# The columns are the authored schema's, in the same order, because the files
+# are positional.
+TABLES = [
+    ("airports.dat", "airports", [
+        "airport_id", "name", "city", "country", "iata", "icao", "latitude",
+        "longitude", "altitude", "timezone", "dst", "tz", "type", "source",
+    ], False, "\\N"),
+    ("airlines.dat", "airlines", [
+        "airline_id", "name", "alias", "iata", "icao", "callsign", "country",
+        "active",
+    ], False, "\\N"),
+    ("routes.dat", "routes", [
+        "airline", "airline_id", "source_airport", "source_airport_id",
+        "destination_airport", "destination_airport_id", "codeshare", "stops",
+        "equipment",
+    ], False, "\\N"),
+]
+
+
+def main():
+    for path, _, _, _, _ in TABLES:
+        if not os.path.exists(path):
+            sys.exit("openflights transform: {} not found".format(path))
+    pgdump.build(SCHEMA, DUMP, TABLES)
+    os.environ["SQL_FILES"] = DUMP
+    os.execv("/usr/local/lib/scripts/pgsql/transform",
+             ["/usr/local/lib/scripts/pgsql/transform"])
+
+
+if __name__ == "__main__":
+    main()

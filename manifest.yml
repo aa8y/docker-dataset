@@ -1908,3 +1908,158 @@ contexts:
       latest:
         retagFrom: nyc-taxi
         structureTest: false
+  # Apache Druid images. Built on the multi-arch Eclipse Temurin JRE from the
+  # pinned Apache Druid binary release rather than FROM apache/druid, which is
+  # published for amd64 only (its own build compiles the web console, which does
+  # not resolve on arm64) while this repo ships both architectures -- see
+  # druid/Dockerfile. Druid is a real-time OLAP store with no DDL +
+  # INSERT/COPY load path: data enters only through an ingestion task that
+  # writes immutable segments, so the build cannot bake a loaded database into
+  # the image the way the DuckDB/SQLite builds do. Instead every dataset ships
+  # as one CSV plus one native batch ingestion spec per table, and the
+  # entrypoint submits them on first boot and waits for the segments to load
+  # before announcing readiness. One table becomes one datasource of the same
+  # name, so the smoke test's keys read like the other engines'.
+  druid:
+    tagKeys: dataset
+    parameters:
+      repository: aa8y/druid-dataset
+    structureTest:
+      configs:
+        - test/config/druid/common.yaml
+    templates:
+      # Mirrors the global templates (see top of file), including the always-on
+      # registry build cache gated by the DATASET_CHECKSUM fingerprint.
+      build: >
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
+        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        --build-arg 'SQL_FILES={{{sqlFiles}}}'
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
+      test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-druid.sh {{tag}} {{dataset}}{{/retagFrom}}'
+      push: >
+        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --build-arg DATASET={{dataset}}
+        --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
+        --build-arg 'EXTRACT_URL={{{extractUrl}}}'
+        --build-arg 'SQL_FILES={{{sqlFiles}}}'
+        {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
+        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+    tags:
+      # PostgreSQL-dump datasets, the same sources the DuckDB and SQLite tags
+      # use. None of the dumps' SQL survives -- Druid runs none of it -- so the
+      # shared scripts/pgsql hook reads them instead of rewriting them: it
+      # parses the CREATE TABLE DDL for column names, types and NOT NULL flags,
+      # decodes the COPY / multi-row INSERT data, and writes one CSV plus one
+      # ingestion spec per table. Row counts match the DuckDB tags exactly
+      # (dellstore aside; see its comment). Each dataset's scripts/<dataset> dir
+      # is a symlink to scripts/pgsql. SQL_FILES keeps its name for manifest
+      # uniformity: here it names the ordered list of source files the transform
+      # reads, not files fed to a SQL client.
+      world:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/world/world-1.0/world-1.0.tar.gz
+        sqlFiles: dbsamples-0.1/world/world.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/druid/world.yaml
+      iso3166:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/iso-3166/iso-3166-1.0/iso-3166-1.0.tar.gz
+        sqlFiles: iso-3166/iso-3166.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/druid/iso3166.yaml
+      frenchtowns:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz
+        sqlFiles: french-towns-communes-francaises.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/druid/frenchtowns.yaml
+      usda:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
+        sqlFiles: usda-r18-1.0/usda.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/druid/usda.yaml
+      pgexercises:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_data.sql
+        sqlFiles: clubdata_ddl.sql clubdata_data.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/druid/pgexercises.yaml
+      # dellstore ships one table, `reorder`, with zero rows. Druid has no empty
+      # datasource -- an ingestion task that produces no segments succeeds and
+      # leaves nothing behind to query -- so the transform skips it (loudly, at
+      # build time) and this tag carries seven datasources where the other
+      # engines have eight. Every other count matches them exactly.
+      dellstore:
+        extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/dellstore2/dellstore2-normal-1.0/dellstore2-normal-1.0.tar.gz
+        sqlFiles: dellstore2-normal-1.0/dellstore2-normal-1.0.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/druid/dellstore.yaml
+      # Datasets published only as delimited text, whose schema is therefore
+      # authored in-repo (druid/scripts/<dataset>/schema.sql, the same schemas
+      # the CockroachDB tags use). Their transform hooks do not reimplement the
+      # Druid half: they assemble the PostgreSQL dump the upstream never shipped
+      # -- the authored DDL plus a `COPY ... FROM stdin` block per file -- and
+      # hand it to the shared scripts/pgsql hook, which already turns DDL + COPY
+      # into typed ingestion specs and is unit-tested for it. All three fetch
+      # from a live upstream at build time, so the smoke test records floors.
+      #
+      # geonames is the cheapest of the three by a distance: its published
+      # export *is* COPY TEXT (tab-separated, unquoted, unescaped), so its hook
+      # is ten lines of shell and nothing is re-encoded. It is also the one
+      # dataset here whose `__time` is real data -- every row carries a
+      # modification date.
+      geonames:
+        extractUrl: https://download.geonames.org/export/dump/cities15000.zip
+        sqlFiles: geonames.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/druid/geonames.yaml
+      openflights:
+        extractUrl: >-
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat
+        sqlFiles: openflights.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/druid/openflights.yaml
+      # MoMA's exports are the messiest data in this repo -- ragged rows,
+      # embedded newlines and quotes. Rows are padded/truncated to the schema's
+      # width on the way into the dump, and the shared hook flattens embedded
+      # newlines when it writes the Druid CSV, because Druid's CSV reader splits
+      # input into lines before parsing them.
+      moma:
+        extractUrl: >-
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artworks.csv
+          https://media.githubusercontent.com/media/MuseumofModernArt/collection/main/Artists.csv
+        sqlFiles: moma.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/druid/moma.yaml
+      # `latest` tracks a single representative dataset, mirroring the other
+      # engines. world rather than chinook: chinook is not ported here (its
+      # upstreams are a prebuilt SQLite database and a PostgreSQL-dialect dump
+      # of quoted CamelCase DDL + INSERTs), and world is this context's flagship.
+      latest:
+        retagFrom: world
+        structureTest: false
