@@ -779,6 +779,22 @@ contexts:
         structureTest:
           configs:
             - test/config/cockroach/openflights.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows). CockroachDB runs upstream's PostgreSQL port
+      # unchanged apart from its DROP/CREATE DATABASE preamble, but 4.2M rows of
+      # init-time INSERTs are hopeless here (every batch is a Raft commit), so
+      # the scripts/employees hooks (python3) rewrite the eight data dumps into
+      # per-table CSVs, ship them to the node's external-IO dir and load them
+      # with IMPORT INTO -- the same bulk path geonames and openflights use.
+      # The dataset is fixed, so the smoke test records exact counts, identical
+      # to the mysql, postgres, sqlite and duckdb employees tags.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/employees.yaml
       # StackExchange sites all share one schema, so they all build through the
       # shared scripts/stackexchange hooks (each site's scripts/<site> dir is a
       # symlink to it). Adding a site is just a tag here + a structure-test

@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""Build the employees init script for CockroachDB: upstream's PostgreSQL-port
+schema plus per-table CSVs bulk-loaded with IMPORT INTO.
+
+datacharmer/test_db publishes no CockroachDB port, but CockroachDB is
+PostgreSQL-compatible enough to run the upstream PostgreSQL one
+(postgresql/employees.sql) as written: INT / CHAR(4) / VARCHAR(14) / DATE
+columns, composite `PRIMARY KEY`, the UNIQUE constraint, the
+`CHECK (gender IN ('M','F'))` that stands in for MySQL's ENUM, the
+`FOREIGN KEY ... ON DELETE CASCADE` references and both `CREATE OR REPLACE
+VIEW`s all load unchanged on v25.4. The only thing dropped is upstream's
+database-management preamble -- its DROP DATABASE / CREATE DATABASE /
+`\\connect` lines -- because the entrypoint creates the COCKROACH_DATABASE
+database and runs this script inside it (see ../../Dockerfile) -- and, with it,
+the multi-table `DROP TABLE IF EXISTS a, b, ... CASCADE;` reset, which has
+nothing to reset on the fresh database the entrypoint just created.
+
+The data cannot be loaded as the upstream INSERTs. At 4.2M rows across the six
+tables, init-time INSERTs are hopeless on CockroachDB -- every batch is a Raft
+commit, and the smoke test gives first boot 300 seconds in total -- so this hook
+takes the bulk path the geonames and openflights hooks use: each dump's tuples
+are parsed here and rewritten as one CSV per table (the three salaries dumps
+append into a single salaries.csv), and the init script loads them with
+`IMPORT INTO`, which writes SSTs directly instead of routing every row through
+the SQL write layer. The IMPORTs run in upstream's own load order, which is
+foreign-key dependency order.
+
+IMPORT INTO does not refuse a table that has foreign keys: it imports the rows
+and leaves each constraint in place but unvalidated, so the six FKs stay in the
+schema exactly as upstream wrote them. Verified on the pinned v25.4.11 image --
+every import succeeds and `pg_constraint` afterwards lists all six with
+`convalidated = false`. Unvalidated means only that the imported rows were not
+re-checked (they are consistent by construction: the IMPORTs run in dependency
+order and the dump is upstream's own); later writes are still enforced against
+them. Validating explicitly would cost about five more seconds
+(`ALTER TABLE ... VALIDATE CONSTRAINT`), but it would mean hardcoding the
+constraint names CockroachDB generates, which is not ours to depend on.
+
+`WITH nullif = ''` maps an unquoted empty field to NULL, which the one nullable
+column (titles.to_date) needs if upstream ever ships a NULL there; today's dumps
+contain none.
+
+The CSVs are written to the build dir and moved to the node's external-IO dir by
+the load hook, so `nodelocal://1/<table>.csv` resolves at container start.
+
+Upstream's optional postgresql/objects.sql (PL/pgSQL helper functions) is not
+included, mirroring the mysql tag, which likewise omits its objects.sql.
+"""
+import csv
+import os
+import re
+import sys
+
+# ---------------------------------------------------------------------------
+# Shared, byte for byte, between duckdb/scripts/employees/transform and
+# cockroach/scripts/employees/transform. Both engines load this dataset from
+# per-table CSVs and so need the same dump -> CSV conversion, but each engine is
+# its own Docker build context and cannot reference a file in another's, so the
+# block is duplicated verbatim rather than shared. Keep any edit in step with
+# the other copy: test/unit/test_cockroach_employees.py compares the two
+# byte for byte and fails if they drift.
+# ---------------------------------------------------------------------------
+
+# Upstream's clone, as the generic EXTRACT step leaves it in the build dir.
+REPO = "test_db"
+SCHEMA = os.path.join(REPO, "postgresql", "employees.sql")
+
+# Table -> its dump files, in upstream's own load order (postgresql/
+# load_employees_db.sh), which is also foreign-key dependency order. salaries
+# is split across three dumps upstream and concatenates into one CSV here.
+DUMPS = [
+    ("departments", ["load_departments.dump"]),
+    ("employees", ["load_employees.dump"]),
+    ("dept_emp", ["load_dept_emp.dump"]),
+    ("dept_manager", ["load_dept_manager.dump"]),
+    ("titles", ["load_titles.dump"]),
+    ("salaries", ["load_salaries1.dump", "load_salaries2.dump",
+                  "load_salaries3.dump"]),
+]
+
+# Upstream's database-management preamble: our ETL owns the database, so these
+# lines go. (The PostgreSQL port DROPs and CREATEs an `employees` database and
+# \connects to it before loading.)
+DB_MANAGEMENT_RE = re.compile(
+    r"^\s*(DROP\s+DATABASE|CREATE\s+DATABASE|\\connect)\b.*\n",
+    re.IGNORECASE | re.MULTILINE)
+
+# The multi-table reset, spread over six lines and ending in `CASCADE;`.
+DROP_TABLES_RE = re.compile(
+    r"^DROP\s+TABLE\s+IF\s+EXISTS\b.*?;[^\S\n]*\n",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL)
+
+# A line of a CREATE TABLE body that declares a constraint rather than a
+# column, so table_columns() skips it.
+CONSTRAINT_RE = re.compile(
+    r"^(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK|CONSTRAINT)\b", re.IGNORECASE)
+
+# MySQL's backslash escapes inside a string literal. This dataset uses none
+# (the dumps are plain ASCII names and dates), but a silently mis-parsed escape
+# would shift every following column, so they are decoded rather than assumed
+# away.
+BACKSLASH = {"0": "\0", "b": "\b", "n": "\n", "r": "\r", "t": "\t",
+             "Z": "\x1a"}
+
+
+def read_string(text, i):
+    """Read the single-quoted string literal at text[i], returning it and the
+    index just past its closing quote."""
+    out = []
+    i += 1
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            out.append(BACKSLASH.get(text[i + 1], text[i + 1]))
+            i += 2
+        elif c == "'":
+            if text[i + 1:i + 2] == "'":   # SQL's doubled-quote escape
+                out.append("'")
+                i += 2
+            else:
+                return "".join(out), i + 1
+        else:
+            out.append(c)
+            i += 1
+    sys.exit("employees transform: unterminated string literal")
+
+
+def read_tuple(text, i):
+    """Read the `(v1,v2,...)` VALUES tuple at text[i], returning its values and
+    the index just past its closing paren. An unquoted NULL becomes None."""
+    values = []
+    i += 1
+    n = len(text)
+    while True:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            sys.exit("employees transform: unterminated VALUES tuple")
+        if text[i] == "'":
+            value, i = read_string(text, i)
+        else:
+            j = i
+            while j < n and text[j] not in ",)":
+                j += 1
+            raw = text[i:j].strip()
+            value = None if raw.upper() == "NULL" else raw
+            i = j
+        values.append(value)
+        while i < n and text[i].isspace():
+            i += 1
+        if i < n and text[i] == ",":
+            i += 1
+        elif i < n and text[i] == ")":
+            return values, i + 1
+        else:
+            sys.exit("employees transform: malformed VALUES tuple")
+
+
+def dump_to_csv(path, writer, width):
+    """Write every VALUES tuple of one dump file through `writer`.
+
+    The dumps are `INSERT INTO \\`tbl\\` VALUES (...),(...);` statements -- tens
+    of thousands of tuples each, some spread over blank lines -- so they are
+    scanned as a stream of tuples rather than parsed line by line. A tuple whose
+    arity does not match the schema is fatal: padding it would load the data
+    into shifted columns instead of failing the build.
+    """
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    rows = 0
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "(":
+            values, i = read_tuple(text, i)
+            if len(values) != width:
+                sys.exit("employees transform: {}: expected {} values, got {}"
+                         .format(path, width, len(values)))
+            writer.writerow(["" if v is None else v for v in values])
+            rows += 1
+        elif c == "'":
+            # A quoted literal outside a tuple (none in these dumps); skipping
+            # it as a unit keeps a `(` inside a string from opening a tuple.
+            _, i = read_string(text, i)
+        else:
+            i += 1
+    return rows
+
+
+def table_columns(ddl, table):
+    """Ordered column names of `table`, parsed from its CREATE TABLE block."""
+    m = re.search(r"CREATE TABLE\s+" + re.escape(table) + r"\s*\((.*?)\n\);",
+                  ddl, re.IGNORECASE | re.DOTALL)
+    if not m:
+        sys.exit("employees transform: no CREATE TABLE for " + table)
+    columns = []
+    for line in m.group(1).splitlines():
+        line = line.strip().rstrip(",")
+        if line and not CONSTRAINT_RE.match(line):
+            columns.append(line.split()[0])
+    if not columns:
+        sys.exit("employees transform: no columns found for " + table)
+    return columns
+
+
+def write_csvs(ddl, csv_dir):
+    """Convert every dump to one CSV per table under `csv_dir`.
+
+    Returns [(table, columns)] in load order. csv.writer's default dialect is
+    RFC4180 -- a field holding a comma, a quote or a newline is quoted and its
+    quotes doubled -- which is exactly what both engines' CSV readers expect,
+    and an empty (NULL) field is written unquoted so the readers see NULL.
+    """
+    loaded = []
+    for table, dumps in DUMPS:
+        columns = table_columns(ddl, table)
+        with open(os.path.join(csv_dir, table + ".csv"), "w", newline="",
+                  encoding="utf-8") as out:
+            writer = csv.writer(out, lineterminator="\n")
+            rows = 0
+            for dump in dumps:
+                path = os.path.join(REPO, dump)
+                if not os.path.exists(path):
+                    sys.exit("employees transform: " + path + " not found")
+                rows += dump_to_csv(path, writer, len(columns))
+        print("employees transform: {} rows -> {}.csv".format(rows, table))
+        loaded.append((table, columns))
+    return loaded
+
+
+# ---------------------------------------------------------------------------
+# End of the shared block.
+# ---------------------------------------------------------------------------
+
+
+def stage_schema():
+    """Upstream's PostgreSQL schema, rewritten for CockroachDB."""
+    with open(SCHEMA, encoding="utf-8") as fh:
+        ddl = fh.read()
+    ddl = DB_MANAGEMENT_RE.sub("", ddl)
+    return DROP_TABLES_RE.sub("", ddl)
+
+
+def main():
+    ddl = stage_schema()
+    loaded = write_csvs(ddl, ".")
+    with open("employees.sql", "w", encoding="utf-8") as out:
+        out.write(ddl)
+        if not ddl.endswith("\n"):
+            out.write("\n")
+        for table, columns in loaded:
+            # The CSVs are header-less and written in schema column order, but
+            # IMPORT INTO wants the column list spelled out anyway -- which also
+            # means a schema change that reorders columns shows up here rather
+            # than loading silently into the wrong ones.
+            out.write("\nIMPORT INTO {} ({}) CSV DATA ('nodelocal://1/{}.csv')"
+                      " WITH nullif = '';\n"
+                      .format(table, ", ".join(columns), table))
+
+
+if __name__ == "__main__":
+    main()
