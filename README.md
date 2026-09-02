@@ -14,7 +14,7 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | `airlines` | — |
 | Chinook | [`yugabyte-chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/lerocha/chinook-database) |
 | [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | `dellstore` | `dellstore` | `dellstore` |
-| [Employees](https://github.com/datacharmer/test_db) | — | `employees` | — | — | — |
+| [Employees](https://github.com/datacharmer/test_db) | `employees` | `employees` | `employees` | `employees` | `employees` |
 | [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` |
 | [GeoNames](https://download.geonames.org/export/dump/) | `geonames` | `geonames` | `geonames` | `geonames` | `geonames` |
 | [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | `iso3166` | `iso3166` | `iso3166` |
