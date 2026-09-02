@@ -13,6 +13,10 @@ before it -- dropping the line alone would leave a dangling comma. ``ALTER
 TABLE`` is read whole and then *filtered*, because DuckDB implements exactly
 one of its forms (``ADD CONSTRAINT ... PRIMARY KEY``) and the verb that decides
 lives on the continuation line.
+
+The third is PGSQL_EMPTY_BYTEA, the one environment knob: a rewrite that is
+correct for a bytea column and wrong for a text one, so it is off by default and
+every test for it comes with a default-off guard.
 """
 import io
 from pathlib import Path
@@ -155,6 +159,33 @@ def test_drop_foreign_keys_keeps_other_constraints(duckdb_pgsql):
     assert 'CONSTRAINT t_pkey PRIMARY KEY (a)\n);' in out
 
 
+def test_drop_foreign_keys_without_a_referenced_column_list(duckdb_pgsql):
+    # `REFERENCES t` (PostgreSQL's "t's primary key" shorthand) is how every FK
+    # in northwind is written. Matching the referenced table as one token is
+    # what keeps a column-list-less clause from swallowing the whole of the
+    # *next* FOREIGN KEY line hunting for a '(' -- which used to leave
+    # `PRIMARY KEY (...) REFERENCES customers` and a parse error.
+    sql = ('CREATE TABLE customer_customer_demo (\n'
+           '    customer_id bpchar NOT NULL,\n'
+           '    customer_type_id bpchar NOT NULL,\n'
+           '    PRIMARY KEY (customer_id, customer_type_id),\n'
+           '    FOREIGN KEY (customer_type_id) REFERENCES customer_demographics,\n'
+           '    FOREIGN KEY (customer_id) REFERENCES customers\n'
+           ');')
+    out = duckdb_pgsql.drop_foreign_keys(sql)
+    assert "FOREIGN KEY" not in out and "REFERENCES" not in out
+    assert "    PRIMARY KEY (customer_id, customer_type_id)\n);" in out
+
+
+def test_drop_foreign_keys_column_list_less_with_actions(duckdb_pgsql):
+    sql = ('CREATE TABLE t (\n'
+           '    a integer,\n'
+           '    FOREIGN KEY (a) REFERENCES u ON DELETE CASCADE\n'
+           ');')
+    out = duckdb_pgsql.drop_foreign_keys(sql)
+    assert out == 'CREATE TABLE t (\n    a integer\n);'
+
+
 # --- keep_alter: DuckDB implements ADD PRIMARY KEY and nothing else -------
 
 def test_keep_alter_primary_key(duckdb_pgsql):
@@ -293,6 +324,25 @@ def test_convert_file_drops_noise_lines(duckdb_pgsql):
         assert _convert(duckdb_pgsql, line) == "", line
 
 
+def test_convert_file_drops_create_domain(duckdb_pgsql):
+    # "Parser Error: syntax error at or near ..." -- sportsdb's
+    # `CREATE DOMAIN primary_id AS integer;`, which nothing downstream uses.
+    out = _convert(duckdb_pgsql,
+                   "CREATE DOMAIN primary_id AS integer;\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"
+
+
+def test_convert_file_drops_multi_line_create_domain(duckdb_pgsql):
+    # Buffered to the ';': half a domain left behind is a parse error of its
+    # own, and the statement after it must survive.
+    out = _convert(duckdb_pgsql,
+                   "CREATE DOMAIN posint AS integer\n"
+                   "    CONSTRAINT posint_check CHECK ((VALUE > 0));\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"
+
+
 def test_convert_file_keeps_statements_sqlite_drops(duckdb_pgsql):
     # DuckDB has real sequences, COMMENT ON, and PostgreSQL's transaction and
     # maintenance statements; none of them may be swallowed.
@@ -316,6 +366,78 @@ def test_convert_file_passes_multi_row_insert_through_untouched(duckdb_pgsql):
         "(1, 'serial cd. A::B'),\n"
         "(2, 'x');\n"
         "SELECT 1;\n")
+
+
+# --- PGSQL_EMPTY_BYTEA: the one environment knob ---------------------------
+#
+# northwind writes its empty bytea values as `'\x'`, which DuckDB's BLOB parser
+# rejects ("Invalid hex escape code"). The rewrite to `''` is opt-in because the
+# hook sees no column types and the identical token in a *text* column is the
+# literal two-character string `\x` -- so every test here comes in an enabled
+# flavour and a default-off guard.
+
+@pytest.fixture
+def knob_env(duckdb_pgsql, monkeypatch):
+    """Set the transform knob in the environment and re-run configure().
+
+    Restores the default (knob-free) module configuration afterwards, so the
+    session-scoped module fixture never leaks knob state into other tests.
+    """
+    def activate(**env):
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        duckdb_pgsql.configure()
+    yield activate
+    monkeypatch.delenv("PGSQL_EMPTY_BYTEA", raising=False)
+    duckdb_pgsql.configure()
+
+
+def test_empty_bytea_default_off(duckdb_pgsql):
+    # Guard: without the knob the dump reaches DuckDB byte-for-byte, so the six
+    # datasets that symlink straight to scripts/pgsql are untouched.
+    assert duckdb_pgsql.rewrite_empty_bytea("(1, 'Beverages', '\\x'),") == \
+        "(1, 'Beverages', '\\x'),"
+
+
+def test_empty_bytea_knob_rewrites_the_literal(duckdb_pgsql, knob_env):
+    knob_env(PGSQL_EMPTY_BYTEA="1")
+    assert duckdb_pgsql.rewrite_empty_bytea("(1, 'Beverages', '\\x'),") == \
+        "(1, 'Beverages', ''),"
+    # Every occurrence, across lines.
+    assert duckdb_pgsql.rewrite_empty_bytea("a '\\x'\nb '\\x'\n") == "a ''\nb ''\n"
+
+
+def test_empty_bytea_knob_leaves_non_empty_bytea(duckdb_pgsql, knob_env):
+    # A bytea with actual hex in it converts fine; only the empty one is a
+    # problem, so only the empty one may be touched.
+    knob_env(PGSQL_EMPTY_BYTEA="1")
+    for line in ("(1, '\\x89ABCDEF'),", "(1, '\\xff'),"):
+        assert duckdb_pgsql.rewrite_empty_bytea(line) == line, line
+
+
+def test_empty_bytea_knob_matches_only_the_whole_literal(duckdb_pgsql, knob_env):
+    # The token is quote-backslash-x-quote: a value that merely *ends* in \x,
+    # one that merely starts with it, and two adjacent literals that happen to
+    # abut are all left alone.
+    knob_env(PGSQL_EMPTY_BYTEA="1")
+    for line in ("(1, 'C:\\x'),", "(1, '\\x is a prefix'),", "(1, 'a\\', 'x'),"):
+        assert duckdb_pgsql.rewrite_empty_bytea(line) == line, line
+
+
+def test_main_applies_the_knob_in_place(duckdb_pgsql, tmp_path, monkeypatch):
+    # End to end: main() reads the knob via configure(), so the northwind hook
+    # only has to export it before exec'ing this one.
+    work = tmp_path / "data.sql"
+    work.write_text("INSERT INTO categories VALUES\n(1, 'Beverages', '\\x');\n",
+                    encoding="utf-8")
+    monkeypatch.setenv("SQL_FILES", str(work))
+    monkeypatch.setenv("PGSQL_EMPTY_BYTEA", "1")
+    monkeypatch.chdir(tmp_path)
+    duckdb_pgsql.main()
+    monkeypatch.delenv("PGSQL_EMPTY_BYTEA")
+    duckdb_pgsql.configure()
+    assert work.read_text(encoding="utf-8") == \
+        "INSERT INTO categories VALUES\n(1, 'Beverages', '');\n\n"
 
 
 # --- transcode: encoding fallback -----------------------------------------
