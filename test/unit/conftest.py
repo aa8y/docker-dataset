@@ -73,6 +73,8 @@ def duckdb_sakila():
     # os.execv of it and never returns, so the tests drive convert() directly.
     return _load("duckdb_sakila_transform", "duckdb/scripts/sakila/transform")
 
+
+@pytest.fixture(scope="session")
 def duckdb_employees():
     return _load("duckdb_employees_transform", "duckdb/scripts/employees/transform")
 
