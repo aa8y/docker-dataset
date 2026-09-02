@@ -1316,6 +1316,30 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/openflights.yaml
+      # Airlines: the postgrespro flight-bookings demo (the same pinned
+      # snapshot the postgres and sqlite tags use), a single gzipped pg_dump
+      # that manages its own `demo` database and qualifies everything to a
+      # `bookings` schema. At 10.7M rows it is by far the biggest dataset here,
+      # so the scripts/airlines transform turns on the shared hook's
+      # PGSQL_COPY_CSV knob: each COPY block is written out as a sibling CSV
+      # and loaded by DuckDB's vectorized reader rather than parsed as INSERT
+      # text, which is what keeps the LOAD step at seconds rather than hours.
+      # The hook also enables the schema-flattening, view-dropping and
+      # type-mapping knobs (`jsonb` -> `json`, and `point` / `tstzrange` /
+      # `integer[]` -> `text`, since DuckDB has none of those types) and
+      # removes what no knob covers -- three extensions, the ALTER DATABASE
+      # settings, the ANY(ARRAY[...]) spelling of three CHECK constraints, and
+      # the index over a range bound. All nine tables keep their comments and
+      # their primary keys; row counts match the postgres and sqlite tags
+      # exactly. See the hook's docstring for the DuckDB error each rewrite
+      # avoids.
+      airlines:
+        extractUrl: https://edu.postgrespro.ru/demo-20250901-3m.sql.gz
+        sqlFiles: airlines.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/airlines.yaml
       # NYC TLC yellow-taxi trip records -- the DuckDB flagship, and the one
       # dataset here that ships as Parquet rather than SQL or CSV. Parquet is
       # compiled into the duckdb CLI, so the scripts/nyc-taxi transform hook

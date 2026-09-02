@@ -14,9 +14,12 @@ TABLE`` is read whole and then *filtered*, because DuckDB implements exactly
 one of its forms (``ADD CONSTRAINT ... PRIMARY KEY``) and the verb that decides
 lives on the continuation line.
 
-The third is PGSQL_EMPTY_BYTEA, the one environment knob: a rewrite that is
-correct for a bytea column and wrong for a text one, so it is off by default and
-every test for it comes with a default-off guard.
+The third is the environment knobs -- PGSQL_EMPTY_BYTEA, PGSQL_EXTRA_SCHEMAS,
+PGSQL_DROP_VIEWS, PGSQL_TYPE_MAP and PGSQL_COPY_CSV. Each is a rewrite that is
+right for the one dataset that asks for it and wrong for the rest, so all five
+are off by default and every test for one comes with a default-off guard: the
+eight tags that symlink straight to scripts/pgsql must keep byte-identical
+output.
 """
 import io
 from pathlib import Path
@@ -315,6 +318,7 @@ def test_convert_file_drops_noise_lines(duckdb_pgsql):
     for line in ("SET search_path = public;",
                  "SET client_encoding = 'LATIN1';",
                  "SELECT pg_catalog.setval('s', 1, true);",
+                 "SELECT pg_catalog.set_config('search_path', '', false);",
                  "GRANT ALL ON TABLE foo TO postgres;",
                  "REVOKE ALL ON TABLE foo FROM public;",
                  "WITHOUT OIDS;",
@@ -376,9 +380,13 @@ def test_convert_file_passes_multi_row_insert_through_untouched(duckdb_pgsql):
 # literal two-character string `\x` -- so every test here comes in an enabled
 # flavour and a default-off guard.
 
+KNOBS = ("PGSQL_EMPTY_BYTEA", "PGSQL_EXTRA_SCHEMAS", "PGSQL_DROP_VIEWS",
+         "PGSQL_TYPE_MAP", "PGSQL_COPY_CSV")
+
+
 @pytest.fixture
 def knob_env(duckdb_pgsql, monkeypatch):
-    """Set the transform knob in the environment and re-run configure().
+    """Set transform knobs in the environment and re-run configure().
 
     Restores the default (knob-free) module configuration afterwards, so the
     session-scoped module fixture never leaks knob state into other tests.
@@ -388,7 +396,8 @@ def knob_env(duckdb_pgsql, monkeypatch):
             monkeypatch.setenv(key, value)
         duckdb_pgsql.configure()
     yield activate
-    monkeypatch.delenv("PGSQL_EMPTY_BYTEA", raising=False)
+    for knob in KNOBS:
+        monkeypatch.delenv(knob, raising=False)
     duckdb_pgsql.configure()
 
 
@@ -440,20 +449,41 @@ def test_main_applies_the_knob_in_place(duckdb_pgsql, tmp_path, monkeypatch):
         "INSERT INTO categories VALUES\n(1, 'Beverages', '');\n\n"
 
 
-# --- transcode: encoding fallback -----------------------------------------
+# --- detect_encoding / stream_lines: the streaming reader ------------------
+#
+# The dump is read a line at a time (the airlines one is 499 MB), so the
+# encoding has to be decided without holding the file, and the line stream has
+# to hand convert_lines() exactly what ``text.split("\n")`` used to.
 
-def test_transcode_utf8(duckdb_pgsql, tmp_path):
+def test_detect_encoding_utf8(duckdb_pgsql, tmp_path):
     p = tmp_path / "u.sql"
     p.write_bytes("café\n".encode("utf-8"))
-    assert duckdb_pgsql.transcode(str(p)) == "café\n"
+    assert duckdb_pgsql.detect_encoding(str(p)) == "utf-8"
 
 
-def test_transcode_latin1_fallback(duckdb_pgsql, tmp_path):
+def test_detect_encoding_latin1_fallback(duckdb_pgsql, tmp_path):
     # world / usda / dellstore ship Latin-1; DuckDB validates UTF-8 and would
     # abort on the first accented value.
     p = tmp_path / "l.sql"
     p.write_bytes("café\n".encode("latin-1"))
-    assert duckdb_pgsql.transcode(str(p)) == "café\n"
+    assert duckdb_pgsql.detect_encoding(str(p)) == "latin-1"
+
+
+def test_detect_encoding_spans_chunk_boundaries(duckdb_pgsql, tmp_path,
+                                                monkeypatch):
+    # A multi-byte character split across two reads must not read as Latin-1;
+    # that is the whole reason the sniff uses an incremental decoder.
+    monkeypatch.setattr(duckdb_pgsql, "CHUNK", 4)
+    p = tmp_path / "c.sql"
+    p.write_bytes("abcé-tail\n".encode("utf-8"))
+    assert duckdb_pgsql.detect_encoding(str(p)) == "utf-8"
+
+
+@pytest.mark.parametrize("text", ["a\nb\n", "a\nb", "", "\n", "a\r\nb\r\n"])
+def test_stream_lines_matches_split(duckdb_pgsql, tmp_path, text):
+    p = tmp_path / "s.sql"
+    p.write_text(text, encoding="utf-8", newline="")
+    assert list(duckdb_pgsql.stream_lines(str(p), "utf-8")) == text.split("\n")
 
 
 # --- main(): file selection -----------------------------------------------
@@ -488,3 +518,301 @@ def test_golden_dump(duckdb_pgsql, tmp_path, monkeypatch):
     duckdb_pgsql.main()
     assert work.read_text(encoding="utf-8") == \
         (FIXTURES / "dump.expected_duckdb.sql").read_text(encoding="utf-8")
+
+
+# --- PGSQL_EXTRA_SCHEMAS: extra qualifiers to flatten ----------------------
+#
+# The airlines demo qualifies every object to a `bookings` schema it also
+# creates; CREATE SCHEMA is dropped unconditionally, so the qualifier has to go
+# with it or nothing resolves.
+
+def test_extra_schemas_default_off(duckdb_pgsql):
+    assert duckdb_pgsql.strip_schema("CREATE TABLE bookings.flights (") == \
+        "CREATE TABLE bookings.flights ("
+
+
+def test_extra_schemas_knob_strips_the_named_schema(duckdb_pgsql, knob_env):
+    knob_env(PGSQL_EXTRA_SCHEMAS="bookings")
+    assert duckdb_pgsql.strip_schema("CREATE TABLE bookings.flights (") == \
+        "CREATE TABLE flights ("
+    # ...without losing the two the hook has always stripped.
+    assert duckdb_pgsql.strip_schema("ON public.t, cd.u") == "ON t, u"
+
+
+def test_extra_schemas_knob_accepts_several(duckdb_pgsql, knob_env):
+    knob_env(PGSQL_EXTRA_SCHEMAS="bookings, demo")
+    assert duckdb_pgsql.strip_schema("bookings.a demo.b") == "a b"
+
+
+def test_extra_schemas_knob_needs_a_word_boundary(duckdb_pgsql, knob_env):
+    # `mybookings.t` is a different schema; only the whole name matches.
+    knob_env(PGSQL_EXTRA_SCHEMAS="bookings")
+    assert duckdb_pgsql.strip_schema("mybookings.t") == "mybookings.t"
+
+
+def test_strip_schema_takes_only_the_leading_qualifier(duckdb_pgsql, knob_env):
+    # The airlines demo's `bookings` schema holds a `bookings` table, so
+    # pg_dump writes `COMMENT ON COLUMN bookings.bookings.book_ref`. Stripping
+    # every occurrence would leave `COMMENT ON COLUMN book_ref`, a Binder Error
+    # with no table left in it.
+    knob_env(PGSQL_EXTRA_SCHEMAS="bookings")
+    assert duckdb_pgsql.strip_schema(
+        "COMMENT ON COLUMN bookings.bookings.book_ref IS 'Booking number';") == \
+        "COMMENT ON COLUMN bookings.book_ref IS 'Booking number';"
+    assert duckdb_pgsql.strip_schema("CREATE TABLE bookings.bookings (") == \
+        "CREATE TABLE bookings ("
+
+
+def test_strip_schema_default_pair_is_unchanged_by_the_lookbehind(duckdb_pgsql):
+    assert duckdb_pgsql.strip_schema("CREATE INDEX i ON cd.bookings (x);") == \
+        "CREATE INDEX i ON bookings (x);"
+    assert duckdb_pgsql.strip_schema("REFERENCES public.city(id)") == \
+        "REFERENCES city(id)"
+
+
+# --- PGSQL_DROP_VIEWS: views, and the comments that hang off them ---------
+#
+# DuckDB has views, so this is never about the syntax: it is for dumps whose
+# view bodies need PostgreSQL semantics the rest of the conversion has taken
+# away (airlines' three views want `AT TIME ZONE`, the range operator `@>` and
+# a dropped PL/pgSQL function). Comments have to go with them, unlike on
+# SQLite, because here COMMENT ON survives and a comment on a missing view is a
+# Catalog Error.
+
+def test_drop_views_default_off(duckdb_pgsql):
+    text = "CREATE VIEW v AS SELECT 1;\nSELECT 1;"
+    assert _convert(duckdb_pgsql, text) == text + "\n"
+
+
+def test_drop_views_knob_drops_single_line(duckdb_pgsql, knob_env):
+    knob_env(PGSQL_DROP_VIEWS="1")
+    assert _convert(duckdb_pgsql, "CREATE VIEW v AS SELECT 1;\nSELECT 1;") == \
+        "SELECT 1;\n"
+
+
+def test_drop_views_knob_drops_multi_line_and_materialized(duckdb_pgsql, knob_env):
+    knob_env(PGSQL_DROP_VIEWS="1")
+    out = _convert(duckdb_pgsql,
+                   "CREATE MATERIALIZED VIEW v AS\n"
+                   " SELECT a,\n"
+                   "    b\n"
+                   "   FROM t;\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"
+
+
+def test_drop_views_knob_drops_the_views_comments(duckdb_pgsql, knob_env):
+    # "Catalog Error: View with name airplanes does not exist!"
+    knob_env(PGSQL_DROP_VIEWS="1")
+    out = _convert(duckdb_pgsql,
+                   "CREATE VIEW airplanes AS SELECT model FROM airplanes_data;\n"
+                   "COMMENT ON VIEW airplanes IS 'Airplanes';\n"
+                   "COMMENT ON COLUMN airplanes.model IS 'Airplane model';\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"
+
+
+def test_drop_views_knob_keeps_table_comments(duckdb_pgsql, knob_env):
+    # The point of dropping only the view's comments: DuckDB supports
+    # COMMENT ON TABLE/COLUMN, so the surviving tables keep their docs. Note
+    # `airplanes_data` starts with the dropped view's whole name.
+    knob_env(PGSQL_DROP_VIEWS="1")
+    out = _convert(duckdb_pgsql,
+                   "CREATE VIEW airplanes AS SELECT model FROM airplanes_data;\n"
+                   "COMMENT ON TABLE airplanes_data IS 'Airplanes (raw)';\n"
+                   "COMMENT ON COLUMN airplanes_data.model IS 'Airplane model';\n")
+    assert out == ("COMMENT ON TABLE airplanes_data IS 'Airplanes (raw)';\n"
+                   "COMMENT ON COLUMN airplanes_data.model IS 'Airplane model';\n"
+                   "\n")
+
+
+def test_drop_views_knob_resolves_the_schema_qualifier(duckdb_pgsql, knob_env):
+    # The view is declared `bookings.airplanes` and its comments say
+    # `bookings.airplanes.model`; both have to be matched after flattening.
+    knob_env(PGSQL_DROP_VIEWS="1", PGSQL_EXTRA_SCHEMAS="bookings")
+    out = _convert(duckdb_pgsql,
+                   "CREATE VIEW bookings.airplanes AS SELECT 1;\n"
+                   "COMMENT ON COLUMN bookings.airplanes.model IS 'x';\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"
+
+
+def test_view_name_and_comment_target(duckdb_pgsql):
+    assert duckdb_pgsql.view_name('CREATE OR REPLACE VIEW "Airplanes" AS') == \
+        "airplanes"
+    assert duckdb_pgsql.comment_target("COMMENT ON VIEW airplanes IS 'x';") == \
+        "airplanes"
+    assert duckdb_pgsql.comment_target(
+        "COMMENT ON COLUMN airplanes.model IS 'x';") == "airplanes"
+    # A table comment names no view, so it can never be matched by accident.
+    assert duckdb_pgsql.comment_target("COMMENT ON TABLE airplanes IS 'x';") is None
+
+
+# --- PGSQL_TYPE_MAP: column types DuckDB has no equivalent for ------------
+
+def test_type_map_default_off(duckdb_pgsql):
+    text = "CREATE TABLE t (\n    model jsonb NOT NULL\n);"
+    assert _convert(duckdb_pgsql, text) == text + "\n"
+
+
+def test_type_map_knob_rewrites_column_types(duckdb_pgsql, knob_env):
+    knob_env(PGSQL_TYPE_MAP="jsonb=json point=text tstzrange=text")
+    out = _convert(duckdb_pgsql,
+                   "CREATE TABLE t (\n"
+                   "    model jsonb NOT NULL,\n"
+                   "    coordinates point NOT NULL,\n"
+                   "    validity tstzrange NOT NULL\n"
+                   ");")
+    assert out == ("CREATE TABLE t (\n"
+                   "    model json NOT NULL,\n"
+                   "    coordinates text NOT NULL,\n"
+                   "    validity text NOT NULL\n"
+                   ");\n")
+
+
+def test_type_map_knob_matches_array_spelling(duckdb_pgsql, knob_env):
+    # "Conversion Error: Type VARCHAR with value '{1,2,3}' can't be cast to the
+    # destination type INTEGER[]" -- the type exists, the literal will not go
+    # into it, so the column keeps the literal as text.
+    knob_env(PGSQL_TYPE_MAP="integer[]=text")
+    out = _convert(duckdb_pgsql,
+                   "CREATE TABLE t (\n"
+                   "    days_of_week integer[] NOT NULL,\n"
+                   "    spaced integer [ ] NOT NULL\n"
+                   ");")
+    assert "integer" not in out
+    assert out.count("text NOT NULL") == 2
+
+
+def test_type_map_knob_is_scoped_to_create_table(duckdb_pgsql, knob_env):
+    # A value, an index or a comment that happens to say `point` is not a
+    # column declaration.
+    knob_env(PGSQL_TYPE_MAP="point=text")
+    for line in ("COMMENT ON COLUMN t.c IS 'a point on the map';",
+                 "CREATE INDEX i ON t (point_id);"):
+        assert _convert(duckdb_pgsql, line) == line + "\n", line
+
+
+# --- PGSQL_COPY_CSV: COPY blocks out to sidecar CSV files ------------------
+#
+# The airlines demo is 10.7M rows; as INSERT text that is ~700 MB for DuckDB's
+# SQL parser to walk one statement at a time, where its CSV reader is
+# vectorized. The knob only changes how the rows travel, never which rows.
+
+def test_copy_csv_default_off(duckdb_pgsql, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    out = _convert(duckdb_pgsql, "COPY foo (id, name) FROM stdin;\n1\ta\n\\.\n")
+    assert out.startswith("INSERT INTO foo")
+    assert not list(tmp_path.glob("*.csv"))
+
+
+def test_copy_csv_knob_writes_a_sidecar_and_a_copy(duckdb_pgsql, knob_env,
+                                                   tmp_path, monkeypatch):
+    knob_env(PGSQL_COPY_CSV="1")
+    monkeypatch.chdir(tmp_path)
+    out = _convert(duckdb_pgsql,
+                   "COPY public.foo (id, name) FROM stdin;\n"
+                   "1\talice\n"
+                   "2\tbob\n"
+                   "\\.\n"
+                   "SELECT 1;")
+    assert out == (
+        "COPY foo (id, name) FROM 'foo.csv' ({});\n"
+        "SELECT 1;\n".format(duckdb_pgsql.CSV_OPTIONS))
+    assert (tmp_path / "foo.csv").read_text(encoding="utf-8") == \
+        "1,alice\n2,bob\n"
+
+
+def test_copy_csv_knob_writes_beside_the_sql_file(duckdb_pgsql, knob_env,
+                                                  tmp_path, monkeypatch):
+    # main() passes the SQL file's own directory, so the relative path the
+    # emitted COPY carries resolves from the build dir the loader runs in.
+    knob_env(PGSQL_COPY_CSV="1")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "sub").mkdir()
+    out = io.StringIO()
+    duckdb_pgsql.convert_file("COPY foo (id) FROM stdin;\n1\n\\.\n", out, "sub")
+    assert "FROM 'sub/foo.csv'" in out.getvalue()
+    assert (tmp_path / "sub" / "foo.csv").read_text(encoding="utf-8") == "1\n"
+
+
+def test_copy_csv_knob_honours_delimiter(duckdb_pgsql, knob_env, tmp_path,
+                                         monkeypatch):
+    knob_env(PGSQL_COPY_CSV="1")
+    monkeypatch.chdir(tmp_path)
+    _convert(duckdb_pgsql, "COPY foo (a, b) FROM stdin DELIMITER '|';\n1|x\n\\.\n")
+    assert (tmp_path / "foo.csv").read_text(encoding="utf-8") == "1,x\n"
+
+
+# --- csv_field: NULL and the empty string must stay distinguishable --------
+
+def test_csv_field_null_sentinel_is_a_bare_empty_field(duckdb_pgsql):
+    # Read back as NULL by `NULLSTR ''`.
+    assert duckdb_pgsql.csv_field("\\N") == ""
+
+
+def test_csv_field_empty_string_is_quoted(duckdb_pgsql):
+    # Read back as '' by `ALLOW_QUOTED_NULLS false` -- with the DuckDB default
+    # (true) this would arrive as NULL, which is the whole reason the option is
+    # spelled out in CSV_OPTIONS.
+    assert duckdb_pgsql.csv_field("") == '""'
+
+
+def test_csv_field_quotes_only_when_it_has_to(duckdb_pgsql):
+    assert duckdb_pgsql.csv_field("alice") == "alice"
+    assert duckdb_pgsql.csv_field("a,b") == '"a,b"'
+    assert duckdb_pgsql.csv_field('he said "hi"') == '"he said ""hi"""'
+
+
+def test_csv_field_unescapes_and_then_quotes_control_characters(duckdb_pgsql):
+    # COPY writes a tab/newline/CR inside a field as \t / \n / \r; the CSV has
+    # to carry the real character, and a newline or CR forces quoting.
+    assert duckdb_pgsql.csv_field("a\\tb") == "a\tb"
+    assert duckdb_pgsql.csv_field("a\\nb") == '"a\nb"'
+    assert duckdb_pgsql.csv_field("a\\rb") == '"a\rb"'
+    assert duckdb_pgsql.csv_field("a\\\\b") == "a\\b"
+
+
+def test_csv_field_leaves_a_single_quote_alone(duckdb_pgsql):
+    # Unlike copy_value(), which is building a SQL literal.
+    assert duckdb_pgsql.csv_field("it's") == "it's"
+
+
+# --- CREATE FUNCTION: both terminator shapes ------------------------------
+
+def test_convert_file_drops_sql_standard_body_function(duckdb_pgsql):
+    # PostgreSQL 14+'s body form has no `LANGUAGE <x>;` terminator at all, so
+    # a hook looking only for one swallows the rest of the dump -- which is
+    # exactly what happened to the airlines demo's three functions.
+    out = _convert(duckdb_pgsql,
+                   "CREATE FUNCTION bookings.now() RETURNS timestamp with time zone\n"
+                   "    LANGUAGE sql IMMUTABLE\n"
+                   "    RETURN '2025-12-01 00:00:00+00'::timestamp with time zone;\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"
+
+
+def test_convert_file_keeps_a_return_inside_a_quoted_body(duckdb_pgsql):
+    # The RETURN terminator is gated on the function having no AS body, so
+    # dellstore's PL/pgSQL body cannot end its own block early and take the
+    # `LANGUAGE plpgsql;` line -- and the schema after it -- with it.
+    out = _convert(duckdb_pgsql,
+                   "CREATE FUNCTION f() RETURNS int AS $$\n"
+                   "BEGIN\n"
+                   "RETURN 1;\n"
+                   "END;\n"
+                   "$$ LANGUAGE plpgsql;\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"
+
+
+def test_convert_file_keeps_a_return_inside_a_body_opened_later(duckdb_pgsql):
+    # `AS $$` on a continuation line still counts as a body.
+    out = _convert(duckdb_pgsql,
+                   "CREATE FUNCTION f()\n"
+                   "RETURNS integer\n"
+                   "AS $$\n"
+                   "RETURN 1;\n"
+                   "$$ LANGUAGE plpgsql;\n"
+                   "SELECT 1;")
+    assert out == "SELECT 1;\n"

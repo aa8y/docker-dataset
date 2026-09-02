@@ -1,0 +1,25 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. airlines is built at image
+# build time from the postgrespro demo pg_dump (rewritten for DuckDB by the
+# scripts/airlines pre-processor and the shared scripts/pgsql transform hook)
+# into /data/airlines.duckdb, and it is also where the shipped-source check
+# bites: the transform writes one CSV per table next to the SQL, and those --
+# like the dump itself -- must stay behind in the loader stage, so the largest
+# one's absence is asserted here. Only file existence is asserted otherwise:
+# the base image is distroless (no shell), so there are no commandTests, and
+# row counts are asserted by the integration smoke test, which the structure
+# test cannot introspect a binary database file for.
+
+fileExistenceTests:
+  - name: "airlines database file exists"
+    path: "/data/airlines.duckdb"
+    shouldExist: true
+
+  - name: "source dump is not shipped"
+    path: "/data/airlines.sql"
+    shouldExist: false
+
+  - name: "intermediate CSVs are not shipped"
+    path: "/data/tickets.csv"
+    shouldExist: false
