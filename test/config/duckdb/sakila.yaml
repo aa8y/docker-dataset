@@ -1,0 +1,14 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. sakila is built at image build
+# time from the jOOQ PostgreSQL Sakila port (rewritten for DuckDB by the
+# scripts/sakila pre-processor and the shared scripts/pgsql transform hook) into
+# /data/sakila.duckdb. Only file existence is asserted -- the base image is
+# distroless (no shell), so there are no commandTests, and row counts are
+# asserted by the integration smoke test, which the structure test cannot
+# introspect a binary database file for.
+
+fileExistenceTests:
+  - name: "sakila database file exists"
+    path: "/data/sakila.duckdb"
+    shouldExist: true

@@ -1268,6 +1268,29 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/nyc-taxi.yaml
+      # Sakila, the MySQL DVD-rental sample (the original of pagila), from
+      # jOOQ's multi-dialect port collection -- here the PostgreSQL flavour,
+      # schema plus the COPY-format data dump. The repo is cloned (like the
+      # mysql `northwind` tag) but the data is fixed, so counts are recorded
+      # exactly, and they match the cockroach `sakila` tag table for table.
+      #
+      # This is the richest PostgreSQL dump in the set, so unlike the six tags
+      # above it does not symlink straight to scripts/pgsql: the
+      # scripts/sakila hook (python3) first removes or maps what that shared
+      # hook does not cover -- a CREATE DOMAIN, a user-defined aggregate, eight
+      # functions (three with a terminator the shared hook's regex misses),
+      # fourteen triggers, six INHERITS partition children with their rules and
+      # indexes, `tsvector` and `text[]` columns, a `USING gist` index and the
+      # `CACHE` clause on every sequence -- and then execs it. All seven views
+      # survive; the tag ships the same 15 base tables as the cockroach one.
+      # See the hook's docstring for the DuckDB error each rewrite avoids.
+      sakila:
+        extractUrl: https://github.com/jOOQ/sakila.git
+        sqlFiles: sakila/postgres-sakila-db/postgres-sakila-schema.sql sakila/postgres-sakila-db/postgres-sakila-insert-data-using-copy.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/sakila.yaml
       # StackExchange sites. Each ships as per-table XML in a 7z archive (no
       # SQL), so -- exactly like the other engines -- every site builds through
       # the shared scripts/stackexchange hooks (each site's scripts/<site> dir

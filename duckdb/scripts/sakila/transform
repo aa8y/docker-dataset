@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Prepare the jOOQ PostgreSQL Sakila port for DuckDB, then hand off to
+``scripts/pgsql``.
+
+The shared pgsql hook (see its docstring) already handles everything the six
+pgFoundry/Yugabyte dumps need: COPY blocks -> batched INSERTs, ``SET`` /
+``setval`` / ``GRANT`` / ``FOREIGN KEY`` removal, ``USING btree`` stripping,
+``serial`` demotion, schema-qualifier flattening, and keeping the one
+``ALTER TABLE ... ADD CONSTRAINT ... PRIMARY KEY`` form DuckDB implements.
+The Sakila port is a much richer pg_dump than those: it also carries a domain,
+a user-defined aggregate, eight PL/pgSQL and SQL functions, fourteen triggers,
+six ``INHERITS`` partition children with their rewrite rules, and two column
+types DuckDB has no equivalent for. This hook is the thin pre-processor that
+removes or maps exactly those, in place, before ``exec``ing the shared one --
+the established pattern (see sqlite/scripts/airlines/transform). The shared
+hook is used by six other tags, so nothing here changes its behaviour.
+
+Everything below was verified against DuckDB 1.5.5, the pinned engine, with
+the actual upstream files; each bullet names the error it avoids.
+
+Dropped outright:
+
+  * ``CREATE OR REPLACE PROCEDURAL LANGUAGE plpgsql`` and ``ALTER PROCEDURAL
+    LANGUAGE`` (Parser Error). DuckDB has no procedural languages at all.
+  * ``CREATE DOMAIN year AS integer CONSTRAINT ... CHECK ...`` and
+    ``ALTER DOMAIN ... OWNER TO`` -- ``CREATE DOMAIN`` is a parse error in
+    DuckDB. The domain is not merely dropped, though: see below.
+  * ``CREATE FUNCTION`` blocks (all eight, SQL and PL/pgSQL alike) and their
+    ``ALTER FUNCTION ... OWNER TO`` lines. The shared hook drops functions too,
+    but its end-of-block regex expects ``LANGUAGE <x>;`` as the statement's
+    last tokens, and three of these end ``LANGUAGE sql IMMUTABLE;``,
+    ``LANGUAGE sql IMMUTABLE STRICT;`` and ``LANGUAGE plpgsql SECURITY
+    DEFINER;`` -- the shared hook would keep swallowing lines past the end of
+    the first such function and silently eat half the schema. Reading the
+    blocks here with a dollar-quote-aware scanner (the bodies are ``$_$``
+    quoted and contain both ``;`` and the word LANGUAGE) removes them all
+    before the shared hook ever sees one.
+  * ``CREATE AGGREGATE group_concat(text)`` (Parser Error) with its
+    ``ALTER AGGREGATE ... OWNER TO``. DuckDB has a built-in ``group_concat``,
+    so the three views that call it still work -- with DuckDB's ``,``
+    separator rather than the dump's ``, ``.
+  * all fourteen ``CREATE TRIGGER``s (Parser Error). They are audit triggers
+    (``last_updated``) plus the tsvector maintenance trigger; neither has a
+    DuckDB equivalent and neither affects the loaded rows.
+  * the six ``CREATE RULE payment_insert_p2007_NN`` INSERT-routing rules
+    (Parser Error), which exist only to feed the partition children below.
+  * ``COMMENT ON SCHEMA public`` (Catalog Error: DuckDB supports COMMENT ON
+    TABLE/COLUMN but not on a schema).
+  * the six ``payment_p2007_NN`` child tables declared ``INHERITS (payment)``
+    (Parser Error: DuckDB has no table inheritance), together with the twelve
+    ``CREATE INDEX``es on them. This costs no rows: the COPY data loads into
+    ``payment`` itself (in PostgreSQL the children are populated by the rules
+    above, which a plain restore never fires), so ``payment`` carries all
+    16,049 rows either way and the tag ships 15 base tables like the
+    CockroachDB one. Their ``ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY``
+    statements are dropped by the shared hook already.
+
+Mapped rather than dropped, to keep the data queryable:
+
+  * ``release_year year`` -> ``release_year integer`` plus the dropped domain's
+    own ``CHECK`` re-expressed as a column constraint (``VALUE`` rewritten to
+    the column name), so the 1901..2155 range the domain enforced still is.
+    Driven by the parsed ``CREATE DOMAIN``, not hardcoded.
+  * ``fulltext tsvector NOT NULL`` -> ``fulltext text NOT NULL``. DuckDB has no
+    tsvector type; as text the column keeps the dump's lexeme string
+    (``'agent':10 'brilliant':4 ...``) verbatim and stays greppable.
+  * ``special_features text[]`` -> ``special_features text``. DuckDB cannot
+    cast the PostgreSQL array literal the COPY data carries
+    (``{Trailers,"Behind the Scenes"}``) to a list -- "Conversion Error: Could
+    not convert string to list" -- so the column keeps the literal as text.
+  * ``CREATE INDEX film_fulltext_idx ON film USING gist (fulltext)`` -> the
+    same index without the access method (Parser Error on ``gist``; the shared
+    hook only strips btree/hash/lsm).
+  * ``CACHE 1`` is removed from every ``CREATE SEQUENCE`` (Parser Error:
+    Unrecognized option "cache"). The rest of the sequence -- and so the
+    ``DEFAULT nextval(...)`` on thirteen id columns -- survives, since DuckDB
+    does have real sequences.
+
+Not a problem, checked rather than assumed: the dump's ``SET
+standard_conforming_strings = off`` (dropped by the shared hook) would change
+how backslashes in string literals are read, but the schema file contains no
+backslash at all, and the data file's backslashes are all COPY TEXT escapes,
+which the shared hook resolves itself when it renders each field as a literal.
+"""
+import os
+import re
+import sys
+
+SHARED_HOOK = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), os.pardir, "pgsql", "transform")
+
+# A dollar-quote delimiter ($$, $_$, $body$). Needed because the function
+# bodies are dollar-quoted and contain both ';' and the word LANGUAGE, so a
+# naive "statement ends at the next ';'" scan would cut them in half.
+DOLLAR_RE = re.compile(r"\$[A-Za-z_0-9]*\$")
+
+# A COPY ... FROM stdin header. Its body is raw data terminated by a lone
+# "\." -- never SQL -- so it is passed through untouched for the shared hook
+# to convert; running the statement scanner over data rows (which carry no
+# ';') would swallow the whole block.
+COPY_RE = re.compile(r"^\s*COPY\s+\S+\s*\([^)]*\)\s+FROM\s+stdin", re.IGNORECASE)
+
+# Statements with no DuckDB translation, dropped whole. See the module
+# docstring for the error each one raises.
+DROP_STMT_RE = re.compile(
+    r"^\s*("
+    r"CREATE\s+(OR\s+REPLACE\s+)?(PROCEDURAL\s+)?LANGUAGE"
+    r"|ALTER\s+(PROCEDURAL\s+)?LANGUAGE"
+    r"|ALTER\s+(TYPE|DOMAIN|FUNCTION|AGGREGATE|SCHEMA)\b"
+    r"|CREATE\s+(OR\s+REPLACE\s+)?FUNCTION"
+    r"|CREATE\s+AGGREGATE"
+    r"|CREATE\s+(CONSTRAINT\s+)?TRIGGER"
+    r"|CREATE\s+RULE"
+    r"|COMMENT\s+ON\s+(SCHEMA|DATABASE)"
+    r")\b",
+    re.IGNORECASE)
+
+DOMAIN_RE = re.compile(r"^\s*CREATE\s+DOMAIN\s+(\S+)\s+AS\s+(.*?);\s*$",
+                       re.IGNORECASE | re.DOTALL)
+DOMAIN_CHECK_RE = re.compile(r"\bCHECK\s*(\(.*\))\s*$", re.IGNORECASE | re.DOTALL)
+DOMAIN_CONSTRAINT_RE = re.compile(r"\bCONSTRAINT\s+\S+\s*$", re.IGNORECASE | re.DOTALL)
+
+CREATE_TABLE_RE = re.compile(
+    r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w.\"]+)", re.IGNORECASE)
+INHERITS_RE = re.compile(r"\bINHERITS\s*\(", re.IGNORECASE)
+CREATE_INDEX_RE = re.compile(
+    r"^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+\S+\s+ON\s+([\w.\"]+)", re.IGNORECASE)
+ALTER_TABLE_RE = re.compile(
+    r"^\s*ALTER\s+TABLE\s+(?:ONLY\s+)?([\w.\"]+)", re.IGNORECASE)
+CREATE_SEQUENCE_RE = re.compile(r"^\s*CREATE\s+SEQUENCE\b", re.IGNORECASE)
+
+# Column types with no DuckDB equivalent. tsvector and the PostgreSQL array
+# literal both survive as text (see the docstring); applied only inside a
+# CREATE TABLE, so a value or identifier elsewhere is never touched.
+TYPE_MAP = (
+    (re.compile(r"\btsvector\b", re.IGNORECASE), "text"),
+    (re.compile(r"\btext\s*\[\s*\]", re.IGNORECASE), "text"),
+)
+
+
+def bare(name):
+    """`public."film"` -> `film`: unqualified, unquoted, lower-cased."""
+    return name.split(".")[-1].strip('"').lower()
+
+
+def scan_line(line, state):
+    """Advance quote state across one line; report whether a ';' closes here.
+
+    ``state`` is None outside any literal, ``"'"`` inside a single-quoted
+    string, or the dollar-quote tag (``$_$``) inside a dollar-quoted body.
+    Returns ``(state, ends)``.
+    """
+    i, n, ends = 0, len(line), False
+    while i < n:
+        if state is None:
+            if line.startswith("--", i):
+                break                              # comment to end of line
+            m = DOLLAR_RE.match(line, i)
+            if m:
+                state = m.group(0)
+                i = m.end()
+                continue
+            c = line[i]
+            if c == "'":
+                state = "'"
+            elif c == ";":
+                ends = True
+            i += 1
+        elif state == "'":
+            if line.startswith("''", i):
+                i += 2
+                continue
+            if line[i] == "'":
+                state = None
+            i += 1
+        else:                                      # dollar-quoted body
+            j = line.find(state, i)
+            if j < 0:
+                i = n
+            else:
+                i = j + len(state)
+                state = None
+    return state, ends
+
+
+def read_statement(lines, i):
+    """Collect lines[i:] up to the ';' that closes the statement.
+
+    Returns ``(statement, next_index)``. Unterminated input (a truncated file)
+    yields the remainder rather than looping.
+    """
+    state, ends = scan_line(lines[i], None)
+    block = [lines[i]]
+    while not ends and i + 1 < len(lines):
+        i += 1
+        block.append(lines[i])
+        state, ends = scan_line(lines[i], state)
+    return "\n".join(block), i + 1
+
+
+def parse_domain(statement):
+    """`CREATE DOMAIN year AS integer CONSTRAINT c CHECK (...)` -> parts.
+
+    Returns ``(name, base_type, check_expr_or_None)``; the check keeps its
+    outer parentheses so it can be re-emitted as a column constraint.
+    """
+    m = DOMAIN_RE.match(statement)
+    if not m:
+        return None
+    name, rest = bare(m.group(1)), m.group(2)
+    check = None
+    cm = DOMAIN_CHECK_RE.search(rest)
+    if cm:
+        check = " ".join(cm.group(1).split())
+        rest = rest[:cm.start()]
+    rest = DOMAIN_CONSTRAINT_RE.sub("", rest)
+    return name, " ".join(rest.split()), check
+
+
+def apply_domains(statement, domains):
+    """Replace `<column> <domain>` in a CREATE TABLE with the domain's own type.
+
+    The domain's ``CHECK`` is re-expressed as a column constraint with
+    ``VALUE`` bound to the column name, so dropping ``CREATE DOMAIN`` does not
+    quietly drop the range it enforced.
+    """
+    for name, (base, check) in domains.items():
+        pattern = re.compile(r"(?im)^(\s+)([A-Za-z_]\w*)\s+%s\b" % re.escape(name))
+
+        def repl(m):
+            col, out = m.group(2), "%s%s %s" % (m.group(1), m.group(2), base)
+            if check:
+                out += " CHECK %s" % re.sub(r"(?i)\bVALUE\b", col, check)
+            return out
+
+        statement = pattern.sub(repl, statement)
+    return statement
+
+
+def map_types(statement):
+    """Map column types DuckDB has no equivalent for (tsvector, text[])."""
+    for pattern, replacement in TYPE_MAP:
+        statement = pattern.sub(replacement, statement)
+    return statement
+
+
+def strip_cache(statement):
+    """Drop the `CACHE <n>` clause DuckDB's CREATE SEQUENCE cannot parse."""
+    return re.sub(r"(?i)\s*\bCACHE\s+\d+", "", statement)
+
+
+def strip_gist(statement):
+    """Drop `USING gist` from CREATE INDEX (the shared hook strips btree only)."""
+    return re.sub(r"(?i)\s*\bUSING\s+gist\b", "", statement)
+
+
+def convert(text):
+    """Rewrite one PostgreSQL Sakila source file for the shared pgsql hook."""
+    lines = text.split("\n")
+    out, domains, dropped = [], {}, set()
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+
+        # Blank lines and comments carry no statement; a COPY body is data.
+        if not stripped or stripped.startswith("--"):
+            out.append(line)
+            i += 1
+            continue
+        if COPY_RE.match(line):
+            out.append(line)
+            i += 1
+            while i < n and lines[i].rstrip() != "\\.":
+                out.append(lines[i])
+                i += 1
+            if i < n:
+                out.append(lines[i])
+                i += 1
+            continue
+
+        statement, i = read_statement(lines, i)
+
+        m = DOMAIN_RE.match(statement)
+        if m:
+            parsed = parse_domain(statement)
+            if parsed:
+                domains[parsed[0]] = (parsed[1], parsed[2])
+            continue
+        if DROP_STMT_RE.match(statement):
+            continue
+
+        m = CREATE_TABLE_RE.match(statement)
+        if m:
+            if INHERITS_RE.search(statement):
+                dropped.add(bare(m.group(1)))
+                continue
+            statement = map_types(apply_domains(statement, domains))
+            out.append(statement)
+            continue
+
+        m = CREATE_INDEX_RE.match(statement)
+        if m:
+            if bare(m.group(1)) in dropped:
+                continue
+            out.append(strip_gist(statement))
+            continue
+
+        m = ALTER_TABLE_RE.match(statement)
+        if m and bare(m.group(1)) in dropped:
+            continue
+
+        if CREATE_SEQUENCE_RE.match(statement):
+            out.append(strip_cache(statement))
+            continue
+
+        out.append(statement)
+    return "\n".join(out)
+
+
+def main():
+    files = [f for f in os.environ.get("SQL_FILES", "").split() if os.path.isfile(f)]
+    if not files:
+        sys.exit("sakila transform: no SQL files to convert")
+    for path in files:
+        with open(path, "rb") as fh:
+            text = fh.read().decode("utf-8")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(convert(text))
+    # Hand the rewritten files to the shared PostgreSQL -> DuckDB hook, which
+    # does the bulk of the work (COPY -> INSERT, SET/GRANT/FK removal, ...).
+    os.execv(SHARED_HOOK, [SHARED_HOOK])
+
+
+if __name__ == "__main__":
+    main()
