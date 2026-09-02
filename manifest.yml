@@ -1227,6 +1227,35 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/moma.yaml
+      # GeoNames cities15000. Published only as a zipped tab-separated export,
+      # so the schema is authored in-repo (duckdb/scripts/geonames), the extract
+      # hook unzips it and the transform hook appends the one `COPY cities FROM
+      # '<file>.txt'` that bulk-loads it at build time -- with quote processing
+      # switched off, since a double quote in a place name is a literal
+      # character. Upstream refreshes the dump daily, so the smoke test records
+      # floors.
+      geonames:
+        extractUrl: https://download.geonames.org/export/dump/cities15000.zip
+        sqlFiles: geonames.sql
+        structureTest:
+          configs:
+            - test/config/duckdb/geonames.yaml
+      # OpenFlights airports/airlines/routes. Published only as three
+      # comma-separated data files, so the schema is authored in-repo
+      # (duckdb/scripts/openflights) and the files are bulk-loaded at build time
+      # by the three `COPY <table> FROM '<file>.dat'` statements the transform
+      # hook appends -- already RFC4180 CSV, so they need no normalizing, only
+      # the upstream's `\N` mapped to NULL. Upstream refreshes them in place, so
+      # the smoke test records floors.
+      openflights:
+        extractUrl: >-
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat
+        sqlFiles: openflights.sql
+        structureTest:
+          configs:
+            - test/config/duckdb/openflights.yaml
       # NYC TLC yellow-taxi trip records -- the DuckDB flagship, and the one
       # dataset here that ships as Parquet rather than SQL or CSV. Parquet is
       # compiled into the duckdb CLI, so the scripts/nyc-taxi transform hook
