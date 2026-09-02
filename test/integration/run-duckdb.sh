@@ -40,9 +40,10 @@ REPOSITORY="${REPOSITORY:-aa8y/duckdb-dataset}"
 IMAGE="${REPOSITORY}:${TAG}"
 
 # Datasets whose row data is fetched from a live upstream at build time, so
-# exact counts drift between builds: the MoMA CSVs and the StackExchange dumps
-# are both refreshed in place. Same knobs as the other run scripts.
-VOLATILE_DATASETS="moma"
+# exact counts drift between builds: the MoMA CSVs, the GeoNames daily export,
+# the OpenFlights data files and the StackExchange dumps are all refreshed in
+# place. Same knobs as the other run scripts.
+VOLATILE_DATASETS="moma geonames openflights"
 VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

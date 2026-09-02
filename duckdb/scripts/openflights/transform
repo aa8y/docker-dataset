@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# OpenFlights publishes no SQL, so stage the authored DuckDB schema (shipped
+# alongside these build scripts) into the build dir as openflights.sql and
+# append the COPY statements that bulk-load the three files fetched by
+# EXTRACT_URL.
+#
+# The DuckDB counterpart of ../../../sqlite/scripts/openflights/transform. Where
+# the sqlite hook appends `.import` dot-commands and then has to rewrite the
+# upstream's \N sentinel column by column afterwards, DuckDB reads the files in
+# plain SQL and maps the sentinel while loading, so the loader needs nothing but
+# the script itself. The files travel from the builder stage to the loader with
+# the rest of the build dir and are read relative to it (the loader's WORKDIR),
+# so nothing but the finished database reaches the image.
+#
+# The files are already RFC4180 CSV with no header row -- string fields are
+# quoted, and an embedded comma or quote is handled by DuckDB's defaults -- so
+# only three options are needed: `HEADER false` (the first line is data, an
+# airport), `NULLSTR '\N'` for the unquoted sentinel the data dictionary uses
+# for a missing value (matching postgres' `NULL '\N'` and cockroach's
+# `nullif = '\N'`), and `AUTO_DETECT false` to keep DuckDB's CSV sniffer from
+# re-deriving the dialect and the column types per build: the schema declares
+# them, so a refreshed file cannot silently change a column's shape.
+set -e
+cp /usr/local/lib/scripts/openflights/schema.sql openflights.sql
+cat >>openflights.sql <<'EOF'
+
+COPY airports FROM 'airports.dat' (FORMAT CSV, HEADER false, NULLSTR '\N', AUTO_DETECT false);
+COPY airlines FROM 'airlines.dat' (FORMAT CSV, HEADER false, NULLSTR '\N', AUTO_DETECT false);
+COPY routes   FROM 'routes.dat'   (FORMAT CSV, HEADER false, NULLSTR '\N', AUTO_DETECT false);
+EOF

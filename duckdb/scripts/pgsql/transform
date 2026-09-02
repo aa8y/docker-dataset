@@ -6,8 +6,9 @@ same problem -- several of our datasets ship only as PostgreSQL dumps -- but
 DuckDB's parser *is* PostgreSQL-derived, so almost every rewrite the SQLite
 hook performs is unnecessary here and would only lose fidelity. What is left is
 the short list of things DuckDB genuinely cannot do, each verified against
-DuckDB 1.5.5 (the pinned engine) with the actual dumps behind the six tags that
-use this hook (world, iso3166, frenchtowns, usda, pgexercises, dellstore).
+DuckDB 1.5.5 (the pinned engine) with the actual dumps behind the eight tags
+that use this hook (world, iso3166, frenchtowns, usda, pgexercises, dellstore,
+northwind, sportsdb).
 
 Kept, with the error DuckDB raises without it:
 
@@ -64,6 +65,9 @@ Kept, with the error DuckDB raises without it:
     are dropped.
   * drop PL/pgSQL stored functions -- dellstore's ``new_customer`` -- which
     DuckDB has no equivalent for.
+  * drop ``CREATE DOMAIN`` blocks, to the terminating ``;`` (parse error).
+    sportsdb declares ``primary_id AS integer`` and never uses it, so nothing
+    downstream refers to the name.
 
 Deleted from the SQLite hook, because DuckDB does not need them:
 
@@ -80,10 +84,22 @@ Deleted from the SQLite hook, because DuckDB does not need them:
   * the ``PRAGMA synchronous=OFF`` / ``journal_mode`` preamble, which is
     SQLite-only and would itself be a Catalog Error here.
 
-Every dataset that needs this symlinks its scripts/<dataset> directory to
-scripts/pgsql, exactly like the SQLite side; the conversion is dataset-agnostic
-and keyed only on $SQL_FILES (the files the loader stage cats into the duckdb
-CLI), which it rewrites in place.
+A dataset whose dump needs more than the shared rules opts in via an
+environment knob, set by a thin dataset-specific transform hook that then
+delegates here (see duckdb/scripts/northwind, and sqlite/scripts/airlines for
+the pattern). It defaults off, so the symlinked datasets' output is
+byte-identical with or without it:
+
+  PGSQL_EMPTY_BYTEA=1   rewrite the empty bytea literal ``'\\x'`` to ``''``
+                        (DuckDB: "Invalid hex escape code"). Opt-in because
+                        the hook has no column types, and in a *text* column
+                        the same token is the literal two-character string
+                        ``\\x`` -- see EMPTY_BYTEA_RE below.
+
+Every other dataset symlinks its scripts/<dataset> directory to scripts/pgsql,
+exactly like the SQLite side; the conversion is dataset-agnostic and keyed only
+on $SQL_FILES (the files the loader stage cats into the duckdb CLI), which it
+rewrites in place.
 """
 import glob
 import os
@@ -91,6 +107,24 @@ import re
 import sys
 
 BATCH = 500
+
+# An empty PostgreSQL bytea is written `'\x'` -- the hex format's `\x` prefix
+# with no digits after it. DuckDB's BLOB parser rejects it ("Conversion Error:
+# Invalid hex escape code encountered in string -> blob conversion"), while a
+# non-empty `'\x89AB'` converts fine; `''` is the same empty value spelled in a
+# way both engines accept. northwind carries 17 of them (categories.picture,
+# employees.photo).
+#
+# Opt-in via PGSQL_EMPTY_BYTEA=1, and applied to the file as text, because the
+# hook has no column types and so cannot tell a bytea column from a text one:
+# in a *text* column the identical source token is the literal two-character
+# string `\x`, which an always-on rewrite would silently empty. The pattern is
+# the entire literal -- quote, backslash, x, quote -- so `'\x89AB'`, a value
+# that merely ends in `\x` (`'C:\x'`), and two adjacent literals that happen to
+# abut (`'a\', 'x'`) are all untouched. The one false positive left is a text
+# value that embeds `'\x'` between doubled quotes, which is exactly why this is
+# per-dataset rather than unconditional.
+EMPTY_BYTEA_RE = re.compile(r"'\\x'")
 
 # A COPY header: COPY <table> (<cols>) FROM stdin [DELIMITER 'x'];
 COPY_RE = re.compile(
@@ -105,6 +139,13 @@ DROP_LINE_RE = re.compile(
     r"WITHOUT\s+OIDS|USING\s+(btree|hash|lsm)\b|\\connect|\\c\s|\\\."
     r"|CREATE\s+SCHEMA|DROP\s+SCHEMA|CREATE\s+DATABASE|DROP\s+DATABASE)\b",
     re.IGNORECASE)
+
+# CREATE DOMAIN has no DuckDB equivalent (parse error) and is dropped whole,
+# to its terminating ';' -- the same buffered-block drop DROP_BLOCK_RE performs
+# in the SQLite hook. sportsdb declares `CREATE DOMAIN primary_id AS integer;`
+# and then never uses it (every column that would carry it is spelled
+# `integer`/`serial` outright), so nothing downstream refers to the name.
+DROP_BLOCK_RE = re.compile(r"^\s*CREATE\s+DOMAIN\b", re.IGNORECASE)
 
 # ALTER TABLE is buffered to its terminating ';' and then filtered, because
 # DuckDB implements exactly one of the forms these dumps use.
@@ -128,11 +169,31 @@ _SERIAL_TYPE = {"big": "bigint", "small": "smallint", "": "integer"}
 # constraints can be removed with their preceding comma (dropping the line
 # alone would leave a dangling comma before the closing paren).
 CREATE_TABLE_RE = re.compile(r"^\s*CREATE\s+TABLE\b", re.IGNORECASE)
+# The referenced column list is optional: PostgreSQL lets `REFERENCES t` stand
+# for "t's primary key", which is the spelling northwind's join tables use. The
+# referenced table is matched as a single token rather than "anything up to the
+# next '('" so that a column-list-less clause cannot swallow the whole of the
+# *following* FOREIGN KEY line looking for one -- which left northwind's
+# customer_customer_demo as `PRIMARY KEY (...) REFERENCES customers` and a
+# parse error.
 FK_RE = re.compile(
-    r',\s*FOREIGN\s+KEY\s*\([^)]*\)\s*REFERENCES\s*[^(]*\([^)]*\)'
+    r',\s*FOREIGN\s+KEY\s*\([^)]*\)\s*REFERENCES\s+[^\s(,]+(?:\s*\([^)]*\))?'
     r'(?:\s*ON\s+(?:DELETE|UPDATE)\s+'
     r'(?:NO\s+ACTION|CASCADE|RESTRICT|SET\s+NULL|SET\s+DEFAULT))*',
     re.IGNORECASE)
+
+
+def configure():
+    """(Re)read the environment knobs into module state.
+
+    Called at import and again from main(), so both the exec'd hook and a test
+    driving main() see the current environment (the SQLite hook's pattern).
+    """
+    global EMPTY_BYTEA
+    EMPTY_BYTEA = os.environ.get("PGSQL_EMPTY_BYTEA", "") == "1"
+
+
+configure()
 
 
 def transcode(path):
@@ -142,6 +203,11 @@ def transcode(path):
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         return raw.decode("latin-1")
+
+
+def rewrite_empty_bytea(text):
+    """`'\\x'` -> `''`, but only when PGSQL_EMPTY_BYTEA=1 (see the constant)."""
+    return EMPTY_BYTEA_RE.sub("''", text) if EMPTY_BYTEA else text
 
 
 def strip_schema(line):
@@ -298,6 +364,13 @@ def convert_file(text, out):
                 out.write(clean_ddl(statement) + "\n")
             continue
 
+        if DROP_BLOCK_RE.match(line):
+            # Buffered and dropped whole: a CREATE DOMAIN may wrap onto a
+            # second line (a CHECK or a DEFAULT), and half of one left behind
+            # is a parse error of its own.
+            _, i = read_statement(lines, i)
+            continue
+
         if DROP_LINE_RE.match(line):
             i += 1; continue
 
@@ -320,13 +393,14 @@ def convert_file(text, out):
 
 
 def main():
+    configure()
     files = os.environ.get("SQL_FILES", "").split() or sorted(glob.glob("*.sql"))
     files = [f for f in files if os.path.isfile(f)]
     if not files:
         sys.exit("pgsql transform: no SQL files to convert")
 
     for path in files:
-        text = transcode(path)
+        text = rewrite_empty_bytea(transcode(path))
         with open(path, "w", encoding="utf-8") as out:
             convert_file(text, out)
 
