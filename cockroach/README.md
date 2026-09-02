@@ -22,6 +22,7 @@ where `<tag>` is one of the tags in the CockroachDB column of the [matrix](../RE
 Sources are in the [matrix](../README.md#dataset-support-matrix); the notes below are CockroachDB-specific:
 
 * `chinook`, `northwind`: same Yugabyte PostgreSQL-dialect dumps as the postgres `yugabyte-chinook` / `yugabyte-northwind` tags (quoted CamelCase identifiers for chinook; snake_case for northwind).
+* `sakila`: the MySQL DVD-rental sample (the original of pagila), from [jOOQ's multi-dialect port collection](https://github.com/jOOQ/sakila), which publishes a CockroachDB-specific flavour of the PostgreSQL dump. It loads as published — the `mpaa_rating` enum, `text[]`, `bytea`, the four views and every `ALTER ... OWNER TO root` run unchanged on v25.4 — so `cockroach/scripts/sakila` is just a symlink to the shared `pgfoundry` hook, whose job here is the data: 46,273 rows arrive in 15 `COPY ... FROM stdin` blocks, and CRDB's init-time stdin `COPY` is far slower than batched `INSERT`s. 15 base tables, not MySQL's 16: this port has no `film_text`. Counts match the SQLite `sakila` tag exactly (including `payment` at 16,049, where MySQL's own upstream has 16,044).
 * `world`, `iso3166`, `frenchtowns`, `usda`, `dellstore`: pgFoundry PostgreSQL DDL + data dumps, transcoded from Latin-1 to UTF-8, stripped of Postgres session settings and `setval` calls CockroachDB does not need, with `COPY` blocks rewritten to batched `INSERT`s at build time (`cockroach/scripts/pgfoundry`; CRDB's init-time stdin `COPY` is far slower than Postgres for large blocks). The dellstore PL/pgSQL helper function is dropped (schema and data still load faithfully).
 * `pgexercises`: the Yugabyte `clubdata` sample (3 tables in a dedicated `cd` schema).
 * `sportsdb`: the Yugabyte sportsdb mirror (107 tables created; only generic infrastructure plus American football, baseball, basketball, and ice hockey carry data). Yugabyte `USING lsm` indexes are rewritten to `btree` at build time; an unused `CREATE DOMAIN` is dropped.
@@ -34,7 +35,7 @@ Sources are in the [matrix](../README.md#dataset-support-matrix); the notes belo
 
 The remaining datasets are either sourced from PostgreSQL-only upstreams or rely on PostgreSQL-specific features CockroachDB does not support faithfully:
 
-* `pagila`: not omitted but *replaced* — `pagila` is a port of Sakila to PostgreSQL with range-partitioned tables; MySQL and SQLite use native Sakila ports directly (tag `sakila`).
+* `pagila`: not omitted but *replaced* — `pagila` is a port of Sakila to PostgreSQL with range-partitioned tables and a pgvector column; CockroachDB carries native Sakila instead (tag `sakila`, above), as MySQL and SQLite do.
 * `adventureworks`: the only maintained open port targets PostgreSQL; its build relies on a Python reformat plus multiple schemas and materialized views — too much PostgreSQL-specific machinery to load on CockroachDB without divergence.
 * `airlines`: the [postgrespro demo](https://postgrespro.com/education/demodb) is distributed as a binary-ish PostgreSQL `pg_dump` and leans on PostgreSQL features (`jsonb`, several million inlined rows).
 * `omdb`: [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql) relies on the `tsm_system_rows` extension (no CockroachDB equivalent), so a port would have to drop the upstream views.
