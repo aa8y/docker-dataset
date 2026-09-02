@@ -1,0 +1,17 @@
+{
+  "public.actor": 200,
+  "public.address": 603,
+  "public.category": 16,
+  "public.city": 600,
+  "public.country": 109,
+  "public.customer": 599,
+  "public.film": 1000,
+  "public.film_actor": 5462,
+  "public.film_category": 1000,
+  "public.inventory": 4581,
+  "public.language": 6,
+  "public.payment": 16049,
+  "public.rental": 16044,
+  "public.staff": 2,
+  "public.store": 2
+}

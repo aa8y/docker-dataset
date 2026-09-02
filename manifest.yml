@@ -670,6 +670,30 @@ contexts:
         structureTest:
           configs:
             - test/config/cockroach/northwind.yaml
+      # Sakila, the MySQL DVD-rental sample (the original of pagila), from
+      # jOOQ's multi-dialect port collection, which ships a CockroachDB-specific
+      # flavour of the PostgreSQL dump: no `film_text` table (15 base tables,
+      # where MySQL has 16), `release_year` as a plain integer rather than the
+      # PostgreSQL `year` domain, and a `payment` table without the inherited
+      # per-month partitions. The repo is cloned (like the mysql `northwind`
+      # tag) but the data is fixed, so counts are recorded exactly.
+      #
+      # Data loads through the shared scripts/pgfoundry hook (scripts/sakila is
+      # a symlink to it): the schema is CockroachDB-clean as published -- ENUM
+      # type, `text[]`, `bytea`, four views, `SET search_path`/`default_tablespace`
+      # and `ALTER ... OWNER TO root` all run unchanged on v25.4 -- but the
+      # 46,273 data rows arrive in 15 `COPY ... FROM stdin` blocks, and CRDB's
+      # init-time stdin COPY is far slower than batched INSERTs. The hook also
+      # drops the dump's trailing per-table `analyze`. The staff<->store foreign
+      # key cycle the data file breaks at the top and restores at the end is
+      # kept as published.
+      sakila:
+        extractUrl: https://github.com/jOOQ/sakila.git
+        sqlFiles: sakila/cockroachdb-sakila-db/cockroachdb-sakila-schema.sql sakila/cockroachdb-sakila-db/cockroachdb-sakila-insert-data.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/sakila.yaml
       # Plain PostgreSQL-dialect dumps from pgFoundry or Yugabyte that load on
       # CockroachDB unchanged (mirroring the postgres tags for these datasets).
       world:

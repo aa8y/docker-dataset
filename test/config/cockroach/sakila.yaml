@@ -1,0 +1,36 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. sakila is the jOOQ
+# CockroachDB port of the MySQL DVD-rental sample (snake_case identifiers;
+# CREATE TABLE is unqualified, data is INSERTed into public.<table> because the
+# dump's COPY headers are schema-qualified and the shared pgfoundry hook keeps
+# the name it finds). CockroachDB creates the database (COCKROACH_DATABASE) and
+# runs this script against it, so there is no CREATE DATABASE header.
+
+fileExistenceTests:
+  - name: "sakila init script exists"
+    path: "/docker-entrypoint-initdb.d/sakila.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "sakila declares expected tables"
+    path: "/docker-entrypoint-initdb.d/sakila.sql"
+    expectedContents:
+      - "CREATE TABLE actor[ (]"
+      - "CREATE TABLE film[ (]"
+      - "CREATE TABLE customer[ (]"
+      - "CREATE TABLE payment[ (]"
+      - "CREATE TABLE rental[ (]"
+
+  - name: "sakila loads data into its tables"
+    path: "/docker-entrypoint-initdb.d/sakila.sql"
+    expectedContents:
+      - "INSERT INTO public.actor[ (]"
+      - "INSERT INTO public.film[ (]"
+      - "INSERT INTO public.payment[ (]"
+      - "INSERT INTO public.rental[ (]"
+
+  - name: "COPY blocks were rewritten to batched INSERTs"
+    path: "/docker-entrypoint-initdb.d/sakila.sql"
+    excludedContents:
+      - "FROM stdin"
