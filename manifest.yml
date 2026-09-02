@@ -133,6 +133,19 @@ contexts:
         structureTest:
           configs:
             - test/config/dellstore.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows), from the repo's own upstream-maintained
+      # PostgreSQL port. Upstream splits it into a schema file plus eight data
+      # dumps loaded by a shell script, so the scripts/employees transform hook
+      # assembles them into one init script (backticks stripped, the port's
+      # DROP/CREATE DATABASE header removed). The dataset is fixed, so the smoke
+      # test records exact counts, identical to the mysql employees tag.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        structureTest:
+          configs:
+            - test/config/employees.yaml
       frenchtowns:
         extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz
         sqlFiles: french-towns-communes-francaises.sql
@@ -790,6 +803,22 @@ contexts:
         structureTest:
           configs:
             - test/config/cockroach/openflights.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows). CockroachDB runs upstream's PostgreSQL port
+      # unchanged apart from its DROP/CREATE DATABASE preamble, but 4.2M rows of
+      # init-time INSERTs are hopeless here (every batch is a Raft commit), so
+      # the scripts/employees hooks (python3) rewrite the eight data dumps into
+      # per-table CSVs, ship them to the node's external-IO dir and load them
+      # with IMPORT INTO -- the same bulk path geonames and openflights use.
+      # The dataset is fixed, so the smoke test records exact counts, identical
+      # to the mysql, postgres, sqlite and duckdb employees tags.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/employees.yaml
       # StackExchange sites all share one schema, so they all build through the
       # shared scripts/stackexchange hooks (each site's scripts/<site> dir is a
       # symlink to it). Adding a site is just a tag here + a structure-test
@@ -1006,6 +1035,21 @@ contexts:
         structureTest:
           configs:
             - test/config/sqlite/airlines.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows -- by far the heaviest sqlite image). Upstream
+      # ships no SQLite port, but its PostgreSQL one is near dialect-free, so
+      # the scripts/employees transform hook uses that schema with three
+      # rewrites SQLite forces (no DB management, no multi-table DROP TABLE, no
+      # `CREATE OR REPLACE VIEW`) and appends the eight data dumps unchanged,
+      # backticks stripped, inside one transaction. The dataset is fixed, so
+      # the smoke test records exact counts, identical to the mysql and
+      # postgres employees tags.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        structureTest:
+          configs:
+            - test/config/sqlite/employees.yaml
       # Sakila: MySQL's own sample database (the original of pagila). The
       # bradleygrant/sakila-sqlite3 port publishes a prebuilt database file,
       # shipped as-is (mirrors the northwind dbFile pattern).
@@ -1184,6 +1228,22 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/chinook.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows). Upstream ships no DuckDB port, so the
+      # scripts/employees transform hook (python3) takes its PostgreSQL one --
+      # DuckDB runs that schema nearly as written -- drops the constructs DuckDB
+      # rejects (multi-table DROP TABLE, `FOREIGN KEY ... ON DELETE CASCADE`)
+      # and rewrites the eight data dumps into per-table CSVs the loader reads
+      # with COPY, which is far faster and lighter than parsing 25k-tuple
+      # INSERTs. The dataset is fixed, so the smoke test records exact counts,
+      # identical to the mysql, postgres and sqlite employees tags.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/employees.yaml
       # PostgreSQL-dump datasets, the same sources the sqlite tags use. DuckDB's
       # parser is PostgreSQL-derived, so the shared scripts/pgsql transform hook
       # is a thin one next to SQLite's: it converts COPY blocks to INSERTs,

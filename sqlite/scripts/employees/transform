@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Assemble the datacharmer/test_db employees sample for SQLite: upstream's
+# PostgreSQL-port schema, minimally adapted, plus the eight data dumps.
+#
+# There is no SQLite port upstream, but the PostgreSQL one (postgresql/
+# employees.sql) is almost dialect-free -- INT / CHAR(4) / VARCHAR(n) / DATE
+# columns, inline `FOREIGN KEY ... ON DELETE CASCADE`, composite `PRIMARY KEY`,
+# a `CHECK (gender IN ('M','F'))` standing in for MySQL's ENUM -- and SQLite
+# 3.53 accepts all of it, so it is used as the schema rather than authoring a
+# fork of the dataset in-repo. Only three things are rewritten, each one a
+# statement SQLite genuinely rejects or has no use for:
+#
+#   * the DROP DATABASE / CREATE DATABASE / `\connect` header. SQLite has no
+#     server and no databases to manage; the Dockerfile's LOAD step creates the
+#     database file itself.
+#   * the multi-table `DROP TABLE IF EXISTS a, b, ... CASCADE;` reset.
+#     SQLite drops one table per statement ("near ",": syntax error"), and the
+#     build always starts from a fresh, empty database file, so the whole
+#     statement is dropped rather than split into six.
+#   * `CREATE OR REPLACE VIEW` -> `CREATE VIEW`. SQLite has no OR REPLACE for
+#     views ("near "OR": syntax error"); nothing exists to replace on a fresh
+#     database. Both views (dept_emp_latest_date, current_dept_emp) are plain
+#     aggregate/join SELECTs and are kept.
+#
+# The data is upstream's, unmodified: the dumps are multi-row INSERTs of ~25k
+# tuples per statement (~1 MB of SQL each), which the sqlite3 CLI parses
+# without complaint -- far below SQLITE_MAX_SQL_LENGTH -- so they are fed as
+# upstream wrote them rather than re-batched. Backticks are stripped for
+# uniformity with the other engines even though SQLite accepts them as
+# identifier quotes.
+#
+# The PRAGMA preamble and the BEGIN/COMMIT wrapper around the data are the same
+# bulk-load treatment the shared ../pgsql hook applies: without them, each of
+# the ~170 INSERT statements is its own transaction with its own journal
+# fsync, which dominates the load of 4.2M rows.
+#
+# Upstream's optional postgresql/objects.sql (PL/pgSQL helper functions) is not
+# included -- it has no SQLite equivalent -- mirroring the mysql and postgres
+# tags, which likewise omit their objects.sql.
+set -e
+cd test_db
+
+DUMPS="load_departments.dump
+load_employees.dump
+load_dept_emp.dump
+load_dept_manager.dump
+load_titles.dump
+load_salaries1.dump
+load_salaries2.dump
+load_salaries3.dump"
+
+{
+  printf 'PRAGMA synchronous=OFF;\nPRAGMA journal_mode=MEMORY;\n\n'
+  sed -e '/^DROP DATABASE IF EXISTS employees;$/d' \
+      -e '/^CREATE DATABASE employees;$/d' \
+      -e '/^\\connect employees$/d' \
+      -e '/^DROP TABLE IF EXISTS /,/CASCADE;$/d' \
+      -e 's/^CREATE OR REPLACE VIEW /CREATE VIEW /' \
+      postgresql/employees.sql
+  echo
+  echo 'BEGIN;'
+  for dump in $DUMPS; do
+    echo
+    sed 's/`//g' "$dump"
+    echo
+  done
+  echo 'COMMIT;'
+} >../employees.sql

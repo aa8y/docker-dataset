@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Move the per-table CSVs the transform hook wrote into the node's external-IO
+# dir so the init script's IMPORT INTO sources (`nodelocal://1/<table>.csv`)
+# resolve at container start (see --external-io-dir in ../../Dockerfile).
+#
+# Named one by one rather than globbed: the build dir also holds the upstream
+# clone, and an accidental match would silently ship whatever it found.
+set -e
+mv departments.csv \
+   employees.csv \
+   dept_emp.csv \
+   dept_manager.csv \
+   titles.csv \
+   salaries.csv \
+   /csv/

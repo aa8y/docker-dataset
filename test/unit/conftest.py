@@ -73,6 +73,17 @@ def duckdb_sakila():
     # os.execv of it and never returns, so the tests drive convert() directly.
     return _load("duckdb_sakila_transform", "duckdb/scripts/sakila/transform")
 
+def duckdb_employees():
+    return _load("duckdb_employees_transform", "duckdb/scripts/employees/transform")
+
+
+@pytest.fixture(scope="session")
+def cockroach_employees():
+    # The DuckDB twin of this hook shares its dump -> CSV block byte for byte,
+    # so the two are loaded under distinct module names to keep them apart in
+    # sys.modules.
+    return _load("cockroach_employees_transform", "cockroach/scripts/employees/transform")
+
 
 @pytest.fixture(scope="session")
 def se_duckdb():
