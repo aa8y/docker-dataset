@@ -38,7 +38,7 @@ The remaining datasets are either sourced from PostgreSQL-only upstreams or rely
 
 * `pagila`: not omitted but *replaced* — `pagila` is a port of Sakila to PostgreSQL with range-partitioned tables and a pgvector column; CockroachDB carries native Sakila instead (tag `sakila`, above), as MySQL and SQLite do.
 * `adventureworks`: the only maintained open port targets PostgreSQL; its build relies on a Python reformat plus multiple schemas and materialized views — too much PostgreSQL-specific machinery to load on CockroachDB without divergence.
-* `airlines`: the [postgrespro demo](https://postgrespro.com/education/demodb) is distributed as a binary-ish PostgreSQL `pg_dump` and leans on PostgreSQL features (`jsonb`, several million inlined rows).
+* `airlines`: not a dialect problem but a volume one — CockroachDB has `jsonb`, `timestamptz` and the range/array types the [postgrespro demo](https://postgrespro.com/education/demodb) uses (only `point` would need mapping), but its 10.7M rows are ten times the `employees` sample and would need the same CSV `IMPORT INTO` path with a ~500 MB `/csv` payload in the image; not shipped yet.
 * `omdb`: [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql) relies on the `tsm_system_rows` extension (no CockroachDB equivalent), so a port would have to drop the upstream views.
 
 ## Custom images

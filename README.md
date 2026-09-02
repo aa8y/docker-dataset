@@ -11,7 +11,7 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | Dataset | [PostgreSQL](postgres/README.md) | [MySQL](mysql/README.md) | [CockroachDB](cockroach/README.md) | [SQLite](sqlite/README.md) | [DuckDB](duckdb/README.md) |
 | --- | --- | --- | --- | --- | --- |
 | [AdventureWorks](https://github.com/lorint/AdventureWorks-for-Postgres) | `adventureworks` | — | — | — | — |
-| [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | `airlines` | — |
+| [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | `airlines` | `airlines` |
 | Chinook | [`yugabyte-chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/lerocha/chinook-database) |
 | [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | `dellstore` | `dellstore` | `dellstore` |
 | [Employees](https://github.com/datacharmer/test_db) | `employees` | `employees` | `employees` | `employees` | `employees` |
@@ -64,9 +64,9 @@ This repository's own software and packaging are [MIT licensed](LICENSE). Each b
 
 ## Future Work
 
-* More MySQL datasets: port additional PostgreSQL datasets where a MySQL-native source exists or the upstream is format-neutral enough to hand-translate faithfully (see [Datasets not ported to MySQL](mysql/README.md#datasets-not-ported-to-mysql)).
+* The last matrix gaps. `adventureworks` and `omdb` stay PostgreSQL-only by design (their upstreams lean on PostgreSQL-specific machinery — see [Datasets not ported to MySQL](mysql/README.md#datasets-not-ported-to-mysql)). `nyc-taxi` is Parquet, which only DuckDB reads natively; the other engines would need a Parquet-to-CSV stage in every Dockerfile and a ~500 MB CSV shipped in each image. `airlines` on MySQL and CockroachDB is a volume problem, not a dialect one: 10.7M rows replayed as init-time `INSERT`s would blow the smoke test's readiness budget, so it needs a bulk-load path first (MariaDB's `LOAD DATA INFILE`, CockroachDB's `IMPORT INTO` as the `employees` tag already does) and a ~500 MB data payload in the image.
 * [ClickHouse](https://clickhouse.com/) images: an OLAP columnar engine whose SQL dialect and bulk-load model (`MergeTree`, `INSERT`/`CSV`) differ from PostgreSQL enough that most datasets would need engine-specific transforms rather than reusing the postgres dumps verbatim.
-* More DuckDB datasets: the engine now carries `chinook`, the pgFoundry family, `moma`, `nyc-taxi`, and the Stack Exchange sites; the remaining gaps (`northwind`, `sakila`, `sportsdb`) need either a DuckDB-readable upstream or a per-dataset transform (see [duckdb/README.md](duckdb/README.md#duckdb-datasets)).
+* More DuckDB datasets: the engine now carries every dataset except `adventureworks` and `omdb` (see [duckdb/README.md](duckdb/README.md#duckdb-datasets)), so new additions here are about new sources rather than porting.
 * [Apache Druid](https://druid.apache.org/) images: a real-time OLAP datastore built around immutable segments and batch/stream ingestion rather than conventional DDL + `INSERT`/`COPY`, so each dataset would need a dedicated ingest pipeline and schema mapping.
 * [Apache Pinot](https://pinot.apache.org/) images: a distributed OLAP engine oriented toward star-schema analytics tables and offline/online ingestion jobs, so the relational sample dumps would need similar per-dataset transforms and load paths.
 * More Parquet-native datasets: `nyc-taxi` showed the shape (fetch a Parquet file, `CREATE TABLE ... AS FROM read_parquet(...)`), and the open-data world publishes plenty more.

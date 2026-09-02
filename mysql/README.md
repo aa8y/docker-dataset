@@ -46,7 +46,7 @@ The remaining PostgreSQL datasets are either sourced from PostgreSQL-only upstre
 
 * `pagila`: not omitted but *replaced* — `pagila` is a port of Sakila to PostgreSQL, and MySQL uses the original Sakila directly (tag `sakila`, above).
 * `adventureworks`: the only maintained open port ([lorint/AdventureWorks-for-Postgres](https://github.com/lorint/AdventureWorks-for-Postgres)) targets PostgreSQL. AdventureWorks is a Microsoft SQL Server sample with no comparable, maintained MySQL port, and its build relies on a Python reformat plus multiple schemas and materialized views — too much PostgreSQL-specific machinery to hand-translate faithfully.
-* `airlines`: the [postgrespro demo](https://postgrespro.com/education/demodb) is distributed as a binary-ish PostgreSQL `pg_dump` and leans on PostgreSQL features (`jsonb`, several million inlined rows); it is PostgreSQL-only.
+* `airlines`: the [postgrespro demo](https://postgrespro.com/education/demodb)'s 10.7M rows would mean a ~500 MB init script replayed as `INSERT`s on first boot, far past the smoke test's readiness budget, so it needs a `LOAD DATA INFILE` bulk path before it is worth shipping here; the PostgreSQL, SQLite and DuckDB tags carry it.
 * `omdb`: [df7cb/omdb-postgresql](https://github.com/df7cb/omdb-postgresql) is PostgreSQL-specific — its views rely on the `tsm_system_rows` extension (no MySQL equivalent), so a port would have to drop them and would no longer be the upstream dataset.
 * `yugabyte-chinook`, `yugabyte-northwind`, `yugabyte-sportsdb`: superseded on MySQL by the native/ported `chinook`, `northwind`, and `sportsdb` tags above (the Yugabyte SQL is PostgreSQL dialect; `sportsdb` is hand-translated from the same dump, so the prefixed tag is not duplicated here).
 
