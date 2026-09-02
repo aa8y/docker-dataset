@@ -68,6 +68,11 @@ def duckdb_pgsql():
 
 
 @pytest.fixture(scope="session")
+def duckdb_employees():
+    return _load("duckdb_employees_transform", "duckdb/scripts/employees/transform")
+
+
+@pytest.fixture(scope="session")
 def se_duckdb():
     return _load("se_duckdb_transform", "duckdb/scripts/stackexchange/transform")
 

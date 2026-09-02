@@ -1,0 +1,3 @@
+INSERT INTO `employees` VALUES (10001,'1953-09-02','Georgi','Facello','M','1986-06-26'),
+(10002,'1964-06-02','Bezalel','O''Neil','F','1985-11-21');
+INSERT INTO `employees` VALUES (10003,'1959-12-03','Parto','Bam\'ford','M','1986-08-28');

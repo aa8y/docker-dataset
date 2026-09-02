@@ -1188,6 +1188,22 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/chinook.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows). Upstream ships no DuckDB port, so the
+      # scripts/employees transform hook (python3) takes its PostgreSQL one --
+      # DuckDB runs that schema nearly as written -- drops the constructs DuckDB
+      # rejects (multi-table DROP TABLE, `FOREIGN KEY ... ON DELETE CASCADE`)
+      # and rewrites the eight data dumps into per-table CSVs the loader reads
+      # with COPY, which is far faster and lighter than parsing 25k-tuple
+      # INSERTs. The dataset is fixed, so the smoke test records exact counts,
+      # identical to the mysql, postgres and sqlite employees tags.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/employees.yaml
       # PostgreSQL-dump datasets, the same sources the sqlite tags use. DuckDB's
       # parser is PostgreSQL-derived, so the shared scripts/pgsql transform hook
       # is a thin one next to SQLite's: it converts COPY blocks to INSERTs,
