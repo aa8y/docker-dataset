@@ -1,0 +1,68 @@
+schemaVersion: "2.0.0"
+
+# The employees sample is upstream's own PostgreSQL port, which CockroachDB runs
+# as written; the transform hook strips only its database-management preamble
+# and appends the IMPORT INTO statements that bulk-load the per-table CSVs it
+# converts the eight data dumps into. CockroachDB creates the database
+# (COCKROACH_DATABASE) and runs this script against it, so there is no
+# CREATE DATABASE header. Verify the init script, the six tables and two views,
+# the IMPORTs, and that every CSV they name is in the external-IO dir.
+
+fileExistenceTests:
+  - name: "employees init script exists"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    shouldExist: true
+
+  - name: "employees departments CSV exists in the external-IO dir"
+    path: "/csv/departments.csv"
+    shouldExist: true
+
+  - name: "employees employees CSV exists in the external-IO dir"
+    path: "/csv/employees.csv"
+    shouldExist: true
+
+  - name: "employees dept_emp CSV exists in the external-IO dir"
+    path: "/csv/dept_emp.csv"
+    shouldExist: true
+
+  - name: "employees dept_manager CSV exists in the external-IO dir"
+    path: "/csv/dept_manager.csv"
+    shouldExist: true
+
+  - name: "employees titles CSV exists in the external-IO dir"
+    path: "/csv/titles.csv"
+    shouldExist: true
+
+  - name: "employees salaries CSV exists in the external-IO dir"
+    path: "/csv/salaries.csv"
+    shouldExist: true
+
+fileContentTests:
+  - name: "employees declares all expected tables"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    expectedContents:
+      - "CREATE TABLE employees[ (]"
+      - "CREATE TABLE departments[ (]"
+      - "CREATE TABLE dept_manager[ (]"
+      - "CREATE TABLE dept_emp[ (]"
+      - "CREATE TABLE titles[ (]"
+      - "CREATE TABLE salaries[ (]"
+    excludedContents:
+      - "CREATE DATABASE employees"
+      - '\\connect employees'
+
+  - name: "employees declares its views"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    expectedContents:
+      - "CREATE OR REPLACE VIEW dept_emp_latest_date"
+      - "CREATE OR REPLACE VIEW current_dept_emp"
+
+  - name: "employees loads data into every table"
+    path: "/docker-entrypoint-initdb.d/employees.sql"
+    expectedContents:
+      - "IMPORT INTO departments[ (]"
+      - "IMPORT INTO employees[ (]"
+      - "IMPORT INTO dept_emp[ (]"
+      - "IMPORT INTO dept_manager[ (]"
+      - "IMPORT INTO titles[ (]"
+      - "IMPORT INTO salaries[ (]"

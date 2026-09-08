@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Northwind's data file carries seventeen empty bytea literals -- eight
+# categories.picture, nine employees.photo -- written the way PostgreSQL writes
+# an empty bytea, `'\x'`. DuckDB's BLOB parser rejects that token outright
+# ("Invalid hex escape code"), though it converts a non-empty `'\x89AB'` fine.
+# Rewriting them to `''` stores the same empty value.
+#
+# That rewrite is an opt-in knob on the shared transform -- default off, so the
+# datasets that symlink straight to scripts/pgsql are untouched -- which this
+# hook enables before delegating. It is opt-in rather than unconditional
+# because the hook sees no column types: in a text column the identical source
+# token is the literal two-character string `\x`, and only the dataset knows
+# which it is. Everything else in this dump (multi-row INSERTs, `bpchar`,
+# `real`, `smallint`, table-level FOREIGN KEYs) the shared hook already
+# handles.
+set -e
+export PGSQL_EMPTY_BYTEA=1
+exec "$(dirname "$0")/../pgsql/transform"

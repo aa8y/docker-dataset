@@ -133,6 +133,19 @@ contexts:
         structureTest:
           configs:
             - test/config/dellstore.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows), from the repo's own upstream-maintained
+      # PostgreSQL port. Upstream splits it into a schema file plus eight data
+      # dumps loaded by a shell script, so the scripts/employees transform hook
+      # assembles them into one init script (backticks stripped, the port's
+      # DROP/CREATE DATABASE header removed). The dataset is fixed, so the smoke
+      # test records exact counts, identical to the mysql employees tag.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        structureTest:
+          configs:
+            - test/config/employees.yaml
       frenchtowns:
         extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/french-towns-communes-francais/french-towns-communes-francaises-1.0/french-towns-communes-francaises-1.0.tar.gz
         sqlFiles: french-towns-communes-francaises.sql
@@ -670,6 +683,30 @@ contexts:
         structureTest:
           configs:
             - test/config/cockroach/northwind.yaml
+      # Sakila, the MySQL DVD-rental sample (the original of pagila), from
+      # jOOQ's multi-dialect port collection, which ships a CockroachDB-specific
+      # flavour of the PostgreSQL dump: no `film_text` table (15 base tables,
+      # where MySQL has 16), `release_year` as a plain integer rather than the
+      # PostgreSQL `year` domain, and a `payment` table without the inherited
+      # per-month partitions. The repo is cloned (like the mysql `northwind`
+      # tag) but the data is fixed, so counts are recorded exactly.
+      #
+      # Data loads through the shared scripts/pgfoundry hook (scripts/sakila is
+      # a symlink to it): the schema is CockroachDB-clean as published -- ENUM
+      # type, `text[]`, `bytea`, four views, `SET search_path`/`default_tablespace`
+      # and `ALTER ... OWNER TO root` all run unchanged on v25.4 -- but the
+      # 46,273 data rows arrive in 15 `COPY ... FROM stdin` blocks, and CRDB's
+      # init-time stdin COPY is far slower than batched INSERTs. The hook also
+      # drops the dump's trailing per-table `analyze`. The staff<->store foreign
+      # key cycle the data file breaks at the top and restores at the end is
+      # kept as published.
+      sakila:
+        extractUrl: https://github.com/jOOQ/sakila.git
+        sqlFiles: sakila/cockroachdb-sakila-db/cockroachdb-sakila-schema.sql sakila/cockroachdb-sakila-db/cockroachdb-sakila-insert-data.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/sakila.yaml
       # Plain PostgreSQL-dialect dumps from pgFoundry or Yugabyte that load on
       # CockroachDB unchanged (mirroring the postgres tags for these datasets).
       world:
@@ -766,6 +803,22 @@ contexts:
         structureTest:
           configs:
             - test/config/cockroach/openflights.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows). CockroachDB runs upstream's PostgreSQL port
+      # unchanged apart from its DROP/CREATE DATABASE preamble, but 4.2M rows of
+      # init-time INSERTs are hopeless here (every batch is a Raft commit), so
+      # the scripts/employees hooks (python3) rewrite the eight data dumps into
+      # per-table CSVs, ship them to the node's external-IO dir and load them
+      # with IMPORT INTO -- the same bulk path geonames and openflights use.
+      # The dataset is fixed, so the smoke test records exact counts, identical
+      # to the mysql, postgres, sqlite and duckdb employees tags.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/cockroach/employees.yaml
       # StackExchange sites all share one schema, so they all build through the
       # shared scripts/stackexchange hooks (each site's scripts/<site> dir is a
       # symlink to it). Adding a site is just a tag here + a structure-test
@@ -982,6 +1035,21 @@ contexts:
         structureTest:
           configs:
             - test/config/sqlite/airlines.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows -- by far the heaviest sqlite image). Upstream
+      # ships no SQLite port, but its PostgreSQL one is near dialect-free, so
+      # the scripts/employees transform hook uses that schema with three
+      # rewrites SQLite forces (no DB management, no multi-table DROP TABLE, no
+      # `CREATE OR REPLACE VIEW`) and appends the eight data dumps unchanged,
+      # backticks stripped, inside one transaction. The dataset is fixed, so
+      # the smoke test records exact counts, identical to the mysql and
+      # postgres employees tags.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        structureTest:
+          configs:
+            - test/config/sqlite/employees.yaml
       # Sakila: MySQL's own sample database (the original of pagila). The
       # bradleygrant/sakila-sqlite3 port publishes a prebuilt database file,
       # shipped as-is (mirrors the northwind dbFile pattern).
@@ -1160,6 +1228,22 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/chinook.yaml
+      # Employees: the datacharmer/test_db large sample (300,024 employees,
+      # 2,844,047 salary rows). Upstream ships no DuckDB port, so the
+      # scripts/employees transform hook (python3) takes its PostgreSQL one --
+      # DuckDB runs that schema nearly as written -- drops the constructs DuckDB
+      # rejects (multi-table DROP TABLE, `FOREIGN KEY ... ON DELETE CASCADE`)
+      # and rewrites the eight data dumps into per-table CSVs the loader reads
+      # with COPY, which is far faster and lighter than parsing 25k-tuple
+      # INSERTs. The dataset is fixed, so the smoke test records exact counts,
+      # identical to the mysql, postgres and sqlite employees tags.
+      employees:
+        extractUrl: https://github.com/datacharmer/test_db.git
+        sqlFiles: employees.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/employees.yaml
       # PostgreSQL-dump datasets, the same sources the sqlite tags use. DuckDB's
       # parser is PostgreSQL-derived, so the shared scripts/pgsql transform hook
       # is a thin one next to SQLite's: it converts COPY blocks to INSERTs,
@@ -1213,6 +1297,42 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/dellstore.yaml
+      # Northwind specialty-foods sample, same Yugabyte PostgreSQL-dialect dump
+      # behind the postgres `yugabyte-northwind` and cockroach `northwind` tags
+      # (DDL + multi-row INSERT data). Everything but one token goes through the
+      # shared scripts/pgsql hook unchanged; the exception is the empty bytea
+      # literal `'\x'` the dump writes for categories.picture and
+      # employees.photo, which DuckDB's BLOB parser rejects. scripts/northwind
+      # is therefore a thin transform hook that turns on the shared hook's
+      # `'\x'` -> `''` knob and delegates. Row counts match the cockroach tag
+      # exactly.
+      northwind:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_ddl.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_data.sql
+        sqlFiles: northwind_ddl.sql northwind_data.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/northwind.yaml
+      # SportsDB, the same five-file Yugabyte dump the cockroach/mysql/sqlite
+      # sportsdb tags use: 107 tables of cross-sport statistics, loaded from
+      # single-row INSERTs. Handled by the shared scripts/pgsql hook (a plain
+      # symlink) -- its `CREATE DOMAIN` drop, `serial` demotion, `USING lsm`
+      # strip and constraint filtering are all this dump needs. Row counts match
+      # the sqlite tag exactly.
+      sportsdb:
+        extractUrl: >-
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_indexes.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_constraints.sql
+          https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_fks.sql
+        sqlFiles: sportsdb_tables.sql sportsdb_inserts.sql sportsdb_indexes.sql sportsdb_constraints.sql sportsdb_fks.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/sportsdb.yaml
       # MoMA research collection. Published only as CSV, so the schema is
       # authored in-repo (duckdb/scripts/moma) and the CSVs are bulk-loaded at
       # build time by the `COPY ... FROM '<file>.csv'` statements the transform
@@ -1227,6 +1347,59 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/moma.yaml
+      # GeoNames cities15000. Published only as a zipped tab-separated export,
+      # so the schema is authored in-repo (duckdb/scripts/geonames), the extract
+      # hook unzips it and the transform hook appends the one `COPY cities FROM
+      # '<file>.txt'` that bulk-loads it at build time -- with quote processing
+      # switched off, since a double quote in a place name is a literal
+      # character. Upstream refreshes the dump daily, so the smoke test records
+      # floors.
+      geonames:
+        extractUrl: https://download.geonames.org/export/dump/cities15000.zip
+        sqlFiles: geonames.sql
+        structureTest:
+          configs:
+            - test/config/duckdb/geonames.yaml
+      # OpenFlights airports/airlines/routes. Published only as three
+      # comma-separated data files, so the schema is authored in-repo
+      # (duckdb/scripts/openflights) and the files are bulk-loaded at build time
+      # by the three `COPY <table> FROM '<file>.dat'` statements the transform
+      # hook appends -- already RFC4180 CSV, so they need no normalizing, only
+      # the upstream's `\N` mapped to NULL. Upstream refreshes them in place, so
+      # the smoke test records floors.
+      openflights:
+        extractUrl: >-
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat
+          https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat
+        sqlFiles: openflights.sql
+        structureTest:
+          configs:
+            - test/config/duckdb/openflights.yaml
+      # Airlines: the postgrespro flight-bookings demo (the same pinned
+      # snapshot the postgres and sqlite tags use), a single gzipped pg_dump
+      # that manages its own `demo` database and qualifies everything to a
+      # `bookings` schema. At 10.7M rows it is by far the biggest dataset here,
+      # so the scripts/airlines transform turns on the shared hook's
+      # PGSQL_COPY_CSV knob: each COPY block is written out as a sibling CSV
+      # and loaded by DuckDB's vectorized reader rather than parsed as INSERT
+      # text, which is what keeps the LOAD step at seconds rather than hours.
+      # The hook also enables the schema-flattening, view-dropping and
+      # type-mapping knobs (`jsonb` -> `json`, and `point` / `tstzrange` /
+      # `integer[]` -> `text`, since DuckDB has none of those types) and
+      # removes what no knob covers -- three extensions, the ALTER DATABASE
+      # settings, the ANY(ARRAY[...]) spelling of three CHECK constraints, and
+      # the index over a range bound. All nine tables keep their comments and
+      # their primary keys; row counts match the postgres and sqlite tags
+      # exactly. See the hook's docstring for the DuckDB error each rewrite
+      # avoids.
+      airlines:
+        extractUrl: https://edu.postgrespro.ru/demo-20250901-3m.sql.gz
+        sqlFiles: airlines.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/airlines.yaml
       # NYC TLC yellow-taxi trip records -- the DuckDB flagship, and the one
       # dataset here that ships as Parquet rather than SQL or CSV. Parquet is
       # compiled into the duckdb CLI, so the scripts/nyc-taxi transform hook
@@ -1244,6 +1417,29 @@ contexts:
         structureTest:
           configs:
             - test/config/duckdb/nyc-taxi.yaml
+      # Sakila, the MySQL DVD-rental sample (the original of pagila), from
+      # jOOQ's multi-dialect port collection -- here the PostgreSQL flavour,
+      # schema plus the COPY-format data dump. The repo is cloned (like the
+      # mysql `northwind` tag) but the data is fixed, so counts are recorded
+      # exactly, and they match the cockroach `sakila` tag table for table.
+      #
+      # This is the richest PostgreSQL dump in the set, so unlike the six tags
+      # above it does not symlink straight to scripts/pgsql: the
+      # scripts/sakila hook (python3) first removes or maps what that shared
+      # hook does not cover -- a CREATE DOMAIN, a user-defined aggregate, eight
+      # functions (three with a terminator the shared hook's regex misses),
+      # fourteen triggers, six INHERITS partition children with their rules and
+      # indexes, `tsvector` and `text[]` columns, a `USING gist` index and the
+      # `CACHE` clause on every sequence -- and then execs it. All seven views
+      # survive; the tag ships the same 15 base tables as the cockroach one.
+      # See the hook's docstring for the DuckDB error each rewrite avoids.
+      sakila:
+        extractUrl: https://github.com/jOOQ/sakila.git
+        sqlFiles: sakila/postgres-sakila-db/postgres-sakila-schema.sql sakila/postgres-sakila-db/postgres-sakila-insert-data-using-copy.sql
+        extraPrereqs: python3
+        structureTest:
+          configs:
+            - test/config/duckdb/sakila.yaml
       # StackExchange sites. Each ships as per-table XML in a 7z archive (no
       # SQL), so -- exactly like the other engines -- every site builds through
       # the shared scripts/stackexchange hooks (each site's scripts/<site> dir

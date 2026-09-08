@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Prepare the postgrespro airlines demo for DuckDB, then hand off to
+``scripts/pgsql``.
+
+The upstream is a 499 MB / 10.7M-line ``pg_dump`` of postgrespro's ``demo``
+database: nine tables, three views, three functions, and every object qualified
+to a ``bookings`` schema. Most of the gap to DuckDB is covered by four opt-in
+knobs on the shared hook, which this pre-hook exports before ``exec``ing it
+(the established pattern -- see duckdb/scripts/northwind and
+sqlite/scripts/airlines):
+
+  PGSQL_EXTRA_SCHEMAS=bookings   flatten the schema every object lives in into
+                                 DuckDB's ``main`` (``CREATE SCHEMA`` itself is
+                                 dropped by the shared hook, so the qualifier
+                                 has to go with it).
+  PGSQL_DROP_VIEWS=1             drop ``airplanes``, ``airports`` and
+                                 ``timetable``, whose bodies need ``AT TIME
+                                 ZONE`` on a per-row timezone name, the range
+                                 containment operator ``@>`` and
+                                 ``bookings.lang()`` -- none of which survives
+                                 the type mapping below -- plus the 27
+                                 ``COMMENT ON`` statements that hang off them.
+  PGSQL_TYPE_MAP=...             the four column types DuckDB has no equivalent
+                                 for; see the table below.
+  PGSQL_COPY_CSV=1               load the 10.7M rows through DuckDB's CSV
+                                 reader rather than as ``INSERT`` text. This is
+                                 the whole reason the tag is buildable: the
+                                 same rows as batched ``INSERT``s are ~700 MB
+                                 of SQL for DuckDB's parser to chew through
+                                 one statement at a time.
+
+The type map, with the DuckDB error each entry avoids and what the column
+carries afterwards (all four verified against DuckDB 1.5.5, the pinned engine):
+
+  * ``jsonb`` -> ``json`` ("Catalog Error: Type with name jsonb does not
+    exist!"). The JSON extension is compiled into the CLI, so the four
+    multilingual columns (``airplanes_data.model``,
+    ``airports_data.airport_name`` / ``city`` / ``country``) keep their objects
+    and ``->>`` still works: ``SELECT model ->> 'en' FROM airplanes_data``.
+  * ``point`` -> ``text`` ("Catalog Error: Type with name point does not
+    exist!"). ``airports_data.coordinates`` keeps the dump's ``(30.26,59.80)``
+    literal verbatim, which is what the SQLite tag does with it too.
+  * ``tstzrange`` -> ``text`` ("Catalog Error: Type with name tstzrange does
+    not exist!"). ``routes.validity`` keeps its ``["2025-10-01 00:00:00+00",
+    "2025-11-01 00:00:00+00")`` literal, bounds and inclusivity included.
+  * ``integer[]`` -> ``text``. The type parses, but the COPY data's PostgreSQL
+    array literal does not convert to it ("Conversion Error: Type VARCHAR with
+    value '{1,2,3}' can't be cast to the destination type INTEGER[]"), so
+    ``routes.days_of_week`` keeps the literal as text rather than losing the
+    column.
+
+What is left is this dump's own business, and is what the scan below removes or
+rewrites in place before the shared hook ever sees it:
+
+  * ``CREATE EXTENSION`` (btree_gist, cube, earthdistance) and their
+    ``COMMENT ON EXTENSION`` lines -- Parser Error, "syntax error at or near
+    EXTENSION". Only the excluded ``EXCLUDE USING gist`` constraint and the
+    dropped views ever needed them.
+  * ``ALTER DATABASE demo SET "bookings.lang" ...`` / ``... SET search_path``
+    -- Parser Error. Both configure the dropped ``lang()`` function.
+  * ``COMMENT ON FUNCTION bookings.lang()`` / ``bookings.now()`` -- Parser
+    Error at the argument list's ``(``, and the functions themselves are
+    dropped by the shared hook (they are SQL-standard-body functions, whose
+    terminator it now recognises).
+  * ``CHECK ((x = ANY (ARRAY[...])))`` -> ``CHECK ((x IN (...)))``, for
+    ``flights.status`` and the two ``fare_conditions`` columns. DuckDB accepts
+    ``= ANY (ARRAY[...])`` in an ordinary expression but not in a CHECK
+    constraint, where its binder reads the array as a subquery ("Parser Error:
+    subqueries prohibited in CHECK constraints"); ``IN`` means the same thing
+    and binds. This is the SQLite hook's rewrite, and it is scoped to lines
+    that say CHECK precisely because the ``ANY`` form is otherwise legal --
+    an unconditional rewrite in the shared hook could quietly change another
+    dataset's view body.
+  * ``CREATE INDEX routes_departure_airport_lower_idx ON routes
+    (departure_airport, lower(validity))``. This one parses and would build,
+    which is the problem: ``lower()`` on a ``tstzrange`` is the range's lower
+    bound, but on the ``text`` column the type map leaves behind it is
+    lower-casing. Dropping the index is more honest than shipping one that
+    silently indexes something else. The other index
+    (``segments_flight_id_idx``) is untouched.
+
+Nothing else in the dump needs help. The nine ``CREATE TABLE``s' remaining
+types (``character(n)``, ``numeric(10,2)``, ``timestamp with time zone``,
+``time without time zone``, ``interval``, ``boolean`` from ``t``/``f``) all
+load natively; the shared hook keeps the eight ``ALTER TABLE ... ADD CONSTRAINT
+... PRIMARY KEY`` statements and drops the UNIQUE, FOREIGN KEY, ``EXCLUDE USING
+gist`` and ``ADD GENERATED ALWAYS AS IDENTITY`` ones DuckDB cannot run, and the
+``COMMENT ON TABLE`` / ``COMMENT ON COLUMN`` statements for the nine surviving
+tables are kept -- DuckDB supports both, so the column documentation ships with
+the data.
+
+The file is streamed a line at a time (it is half a gigabyte), and COPY bodies
+are passed through untouched: they are data, not SQL, and the rewrites above
+must never see them.
+"""
+import os
+import re
+import sys
+
+SHARED_HOOK = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), os.pardir, "pgsql", "transform")
+
+# The knobs the shared hook reads; see the module docstring for each.
+KNOBS = {
+    "PGSQL_EXTRA_SCHEMAS": "bookings",
+    "PGSQL_DROP_VIEWS": "1",
+    "PGSQL_TYPE_MAP": "jsonb=json point=text tstzrange=text integer[]=text",
+    "PGSQL_COPY_CSV": "1",
+}
+
+# A COPY ... FROM stdin header. Everything up to the lone "\." after it is raw
+# data, never SQL, so it is passed through for the shared hook to convert.
+COPY_RE = re.compile(r"^COPY\s+\S+\s*\([^)]*\)\s+FROM\s+stdin", re.IGNORECASE)
+
+# Single-line statements DuckDB cannot parse (see the docstring for each). All
+# five shapes are one line in this dump, and anchoring at the start of the line
+# keeps them from ever matching a data row.
+DROP_LINE_RE = re.compile(
+    r"^\s*(CREATE\s+EXTENSION|DROP\s+EXTENSION|ALTER\s+DATABASE"
+    r"|COMMENT\s+ON\s+(EXTENSION|FUNCTION|SCHEMA|DATABASE))\b",
+    re.IGNORECASE)
+
+# `x = ANY (ARRAY[a, b])` -> `x IN (a, b)`, on CHECK lines only.
+CHECK_RE = re.compile(r"\bCHECK\b", re.IGNORECASE)
+ANY_ARRAY_RE = re.compile(r"(?i)=\s*ANY\s*\(\s*ARRAY\[([^\]]*)\]\s*\)")
+
+# A column declared with a PostgreSQL range type, whose name is remembered so
+# an index over `lower(<that column>)` can be recognised further down the file.
+RANGE_COLUMN_RE = re.compile(
+    r"^\s+(\w+)\s+(?:tstzrange|tsrange|daterange|int4range|int8range"
+    r"|int4multirange|int8multirange|nummultirange|numrange)\b",
+    re.IGNORECASE)
+CREATE_INDEX_RE = re.compile(r"^\s*CREATE\s+(UNIQUE\s+)?INDEX\b", re.IGNORECASE)
+
+
+def range_bound_index(line, range_columns):
+    """True for a CREATE INDEX keyed on lower()/upper() of a range column.
+
+    Those are PostgreSQL's range-bound accessors. Once the range column is
+    text, the same call is string case folding, so the index would index
+    something other than what the dump meant.
+    """
+    if not (range_columns and CREATE_INDEX_RE.match(line)):
+        return False
+    return bool(re.search(
+        r"(?i)\b(lower|upper)\s*\(\s*(%s)\s*\)"
+        % "|".join(sorted(map(re.escape, range_columns))), line))
+
+
+def convert_line(line, range_columns):
+    """Rewrite one non-COPY line; return None for a line to drop."""
+    if DROP_LINE_RE.match(line):
+        return None
+    m = RANGE_COLUMN_RE.match(line)
+    if m:
+        range_columns.add(m.group(1).lower())
+    if range_bound_index(line, range_columns):
+        return None
+    if CHECK_RE.search(line):
+        return ANY_ARRAY_RE.sub(r"IN (\1)", line)
+    return line
+
+
+def convert(src, out):
+    """Stream a dump through convert_line(), passing COPY bodies through."""
+    range_columns = set()
+    for raw in src:
+        if COPY_RE.match(raw):
+            out.write(raw)
+            for body in src:
+                out.write(body)
+                if body.rstrip("\n") == "\\.":
+                    break
+            continue
+        line = convert_line(raw, range_columns)
+        if line is not None:
+            out.write(line)
+
+
+def main():
+    files = [f for f in os.environ.get("SQL_FILES", "").split()
+             if os.path.isfile(f)]
+    if not files:
+        sys.exit("airlines transform: no SQL files to convert")
+    for path in files:
+        # Streamed through a sibling temporary, then swapped in atomically:
+        # the dump is half a gigabyte and reading it whole to rewrite it in
+        # place would cost more memory than the whole rest of the build.
+        tmp = path + ".pre"
+        with open(path, encoding="utf-8", newline="\n") as src, \
+                open(tmp, "w", encoding="utf-8", newline="\n") as out:
+            convert(src, out)
+        os.replace(tmp, path)
+    for key, value in KNOBS.items():
+        os.environ[key] = value
+    # Hand the rewritten files to the shared PostgreSQL -> DuckDB hook, which
+    # does the bulk of the work (COPY -> CSV, schema flattening, view and
+    # function removal, type mapping, ALTER TABLE filtering).
+    os.execv(SHARED_HOOK, [SHARED_HOOK])
+
+
+if __name__ == "__main__":
+    main()

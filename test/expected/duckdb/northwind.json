@@ -1,0 +1,16 @@
+{
+  "northwind.categories": 8,
+  "northwind.customer_customer_demo": 0,
+  "northwind.customer_demographics": 0,
+  "northwind.customers": 91,
+  "northwind.employee_territories": 49,
+  "northwind.employees": 9,
+  "northwind.order_details": 2155,
+  "northwind.orders": 830,
+  "northwind.products": 77,
+  "northwind.region": 4,
+  "northwind.shippers": 6,
+  "northwind.suppliers": 29,
+  "northwind.territories": 53,
+  "northwind.us_states": 51
+}

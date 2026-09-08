@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# GeoNames publishes no SQL, so stage the authored DuckDB schema (shipped
+# alongside these build scripts) into the build dir as geonames.sql and append
+# the COPY that bulk-loads the export unpacked by the extract hook.
+#
+# The DuckDB counterpart of ../../../sqlite/scripts/geonames/transform. Where
+# the sqlite hook appends sqlite3 `.import` dot-commands, DuckDB reads the file
+# in plain SQL, so the loader needs nothing but the script itself. The export
+# travels from the builder stage to the loader with the rest of the build dir
+# and is read relative to it (the loader's WORKDIR), so nothing but the finished
+# database reaches the image.
+#
+# The export is tab-separated with no header row and no quoting at all, so the
+# CSV reader is told to do no quote processing: `QUOTE ''` and `ESCAPE ''` leave
+# a double quote in a place name (Saint John's "The Rock") as the literal
+# character it is instead of opening a quoted field. `NULLSTR ''` makes a blank
+# field NULL, which the nullable integer columns need -- `elevation` is blank
+# for roughly seven rows in eight -- and matches what postgres' CSV-mode \copy
+# and cockroach's `nullif = ''` produce. `AUTO_DETECT false` keeps DuckDB's CSV
+# sniffer from re-deriving the dialect (and the column types) per build: the
+# schema declares them, so a refreshed export cannot silently change a column's
+# shape.
+set -e
+cp /usr/local/lib/scripts/geonames/schema.sql geonames.sql
+cat >>geonames.sql <<'EOF'
+
+COPY cities FROM 'cities15000.txt' (
+  FORMAT CSV, DELIMITER '\t', HEADER false, QUOTE '', ESCAPE '',
+  NULLSTR '', AUTO_DETECT false
+);
+EOF

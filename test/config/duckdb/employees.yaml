@@ -1,0 +1,15 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. employees is built at image
+# build time into /data/employees.duckdb from upstream's PostgreSQL-port schema
+# plus the per-table CSVs the transform hook converts the data dumps into; the
+# CSVs are left behind in the loader stage, so nothing but the database reaches
+# this image. Only file existence is asserted -- the base image is distroless
+# (no shell), so there are no commandTests, and row counts are asserted by the
+# integration smoke test, which the structure test cannot introspect a binary
+# database file for.
+
+fileExistenceTests:
+  - name: "employees database file exists"
+    path: "/data/employees.duckdb"
+    shouldExist: true

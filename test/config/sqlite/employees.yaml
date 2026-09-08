@@ -1,0 +1,13 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped database file. employees is built at image
+# build time into /data/employees.db from upstream's PostgreSQL-port schema plus
+# its eight data dumps. (Row counts -- and the fact that the schema's six tables
+# and two views survived the SQLite rewrites -- are asserted by the integration
+# smoke test, since the database is a binary file the structure test cannot
+# introspect.)
+
+fileExistenceTests:
+  - name: "employees database file exists"
+    path: "/data/employees.db"
+    shouldExist: true

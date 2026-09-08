@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Assemble the datacharmer/test_db employees sample from its upstream-maintained
+# PostgreSQL port into one self-contained init script.
+#
+# Upstream ships the PostgreSQL port as a schema file (postgresql/employees.sql)
+# plus a loader shell script (postgresql/load_employees_db.sh) that feeds the
+# eight MySQL-flavoured data dumps to psql one at a time, each through
+# `sed 's/`//g'` to strip the backtick identifier quoting MySQL emits. There is
+# no psql inside our final image and nothing runs a shell script at container
+# start, so this hook does what that loader does, ahead of time: it concatenates
+# the schema and the dumps -- in the loader's own order, which is the FK
+# dependency order (departments, employees, dept_emp, dept_manager, titles,
+# salaries x3) -- into the single employees.sql the generic LOAD step turns into
+# the init script.
+#
+# Two edits to the upstream schema, both about database management. Our ETL
+# already emits `CREATE DATABASE employees;` + `\c employees;` ahead of the
+# dataset SQL (see ../../Dockerfile), so the port's own `DROP DATABASE IF
+# EXISTS` / `CREATE DATABASE` / `\connect` header is dropped -- left in, the
+# CREATE would fail on the database psql is already connected to. Everything
+# else is upstream verbatim, including the `SELECT '...' AS info` progress rows
+# (plain SELECTs; they load cleanly and show up in the container log) and the
+# two views (dept_emp_latest_date, current_dept_emp).
+#
+# The data is loaded as upstream wrote it: the dumps are multi-row INSERTs of
+# ~25k tuples per statement, which is exactly what upstream's loader pipes into
+# psql, so nothing is re-batched here.
+#
+# Upstream's optional postgresql/objects.sql (PL/pgSQL helper functions) is not
+# included, mirroring the mysql tag, which likewise omits the MySQL objects.sql.
+set -e
+cd test_db
+
+DUMPS="load_departments.dump
+load_employees.dump
+load_dept_emp.dump
+load_dept_manager.dump
+load_titles.dump
+load_salaries1.dump
+load_salaries2.dump
+load_salaries3.dump"
+
+{
+  sed -e '/^DROP DATABASE IF EXISTS employees;$/d' \
+      -e '/^CREATE DATABASE employees;$/d' \
+      -e '/^\\connect employees$/d' \
+      postgresql/employees.sql
+  for dump in $DUMPS; do
+    echo
+    sed 's/`//g' "$dump"
+    echo
+  done
+} >../employees.sql

@@ -6,8 +6,9 @@ same problem -- several of our datasets ship only as PostgreSQL dumps -- but
 DuckDB's parser *is* PostgreSQL-derived, so almost every rewrite the SQLite
 hook performs is unnecessary here and would only lose fidelity. What is left is
 the short list of things DuckDB genuinely cannot do, each verified against
-DuckDB 1.5.5 (the pinned engine) with the actual dumps behind the six tags that
-use this hook (world, iso3166, frenchtowns, usda, pgexercises, dellstore).
+DuckDB 1.5.5 (the pinned engine) with the actual dumps behind the eight tags
+that use this hook (world, iso3166, frenchtowns, usda, pgexercises, dellstore,
+northwind, sportsdb).
 
 Kept, with the error DuckDB raises without it:
 
@@ -17,14 +18,18 @@ Kept, with the error DuckDB raises without it:
   * ``COPY tbl (cols) FROM stdin`` + TEXT-format data + ``\\.`` -> batched
     multi-row ``INSERT``s. DuckDB has ``COPY``, but only from a *file*: there
     is no inline-data form, so the data rows parse as SQL and fail
-    ("syntax error at or near ...").
+    ("syntax error at or near ..."). PGSQL_COPY_CSV (below) swaps the
+    ``INSERT``s for a real file-based ``COPY``, for dumps big enough to care.
   * drop ``SET ...``. Every spelling in these dumps fails: unknown parameters
     (``client_encoding``, ``default_with_oids``) raise a Catalog Error, and
     ``standard_conforming_strings = on`` / ``SET SESSION CHARACTERISTICS`` /
     the multi-value ``search_path = cd, pg_catalog`` are outright parse errors.
   * drop ``SELECT pg_catalog.setval(...)``: DuckDB has ``nextval``/``currval``
     but no ``setval`` (Catalog Error), and a fresh load never needs it -- the
-    dumps' id columns are all written explicitly.
+    dumps' id columns are all written explicitly. Likewise
+    ``SELECT pg_catalog.set_config('search_path', '', false)``, the line
+    modern pg_dump writes in place of a ``SET search_path`` ("Catalog Error:
+    Scalar Function with name set_config does not exist!").
   * drop ``GRANT`` / ``REVOKE`` and psql's ``\\connect`` / ``\\.`` (parse errors),
     and ``CREATE``/``DROP SCHEMA`` together with ``public.`` / ``cd.``
     qualifiers, which flattens every dataset into DuckDB's default ``main``
@@ -60,10 +65,21 @@ Kept, with the error DuckDB raises without it:
     can only drop): DuckDB implements ``ADD CONSTRAINT ... PRIMARY KEY``, so
     those survive and world/usda/dellstore keep their primary keys, while
     ``ADD CONSTRAINT ... FOREIGN KEY`` / ``UNIQUE`` (Not implemented Error: No
-    support for that ALTER TABLE option yet!) and ``OWNER TO`` (parse error)
-    are dropped.
-  * drop PL/pgSQL stored functions -- dellstore's ``new_customer`` -- which
-    DuckDB has no equivalent for.
+    support for that ALTER TABLE option yet!), ``ADD CONSTRAINT ... EXCLUDE``
+    (parse error), ``ALTER COLUMN ... ADD GENERATED ALWAYS AS IDENTITY`` (Not
+    implemented Error) and ``OWNER TO`` (parse error) are dropped.
+  * drop stored functions, which DuckDB has no equivalent for -- both the
+    classic quoted/dollar-quoted ``AS``-body form (dellstore's
+    ``new_customer``, which ends at its ``LANGUAGE plpgsql;`` line) and the
+    PostgreSQL 14+ SQL-standard body form (``LANGUAGE sql STABLE`` then
+    ``RETURN <expr>;``, which the airlines demo uses three times). The second
+    shape has no ``LANGUAGE <x>;`` terminator at all, so a hook that only
+    looked for one swallowed the rest of the file; the ``AS``-body detection
+    that gates the ``RETURN`` terminator is what keeps a ``RETURN`` *inside* a
+    quoted PL/pgSQL body from ending the block early.
+  * drop ``CREATE DOMAIN`` blocks, to the terminating ``;`` (parse error).
+    sportsdb declares ``primary_id AS integer`` and never uses it, so nothing
+    downstream refers to the name.
 
 Deleted from the SQLite hook, because DuckDB does not need them:
 
@@ -75,22 +91,101 @@ Deleted from the SQLite hook, because DuckDB does not need them:
   * ``DEFAULT nextval(...)`` stripping and the ``CREATE``/``ALTER SEQUENCE``
     block drop: DuckDB has real sequences. (No dump here declares one
     standalone; ``serial`` is handled above.)
-  * ``COMMENT ON`` dropping: DuckDB supports ``COMMENT ON``.
+  * ``COMMENT ON`` dropping: DuckDB supports ``COMMENT ON TABLE`` and
+    ``COMMENT ON COLUMN``.
   * the ``ALTER TABLE ONLY`` -> ``ALTER TABLE`` rewrite: DuckDB accepts ``ONLY``.
   * the ``PRAGMA synchronous=OFF`` / ``journal_mode`` preamble, which is
     SQLite-only and would itself be a Catalog Error here.
 
-Every dataset that needs this symlinks its scripts/<dataset> directory to
-scripts/pgsql, exactly like the SQLite side; the conversion is dataset-agnostic
-and keyed only on $SQL_FILES (the files the loader stage cats into the duckdb
-CLI), which it rewrites in place.
+A dataset whose dump needs more than the shared rules opts in via environment
+knobs, set by a thin dataset-specific transform hook that then delegates here
+(see duckdb/scripts/northwind and duckdb/scripts/airlines). Every one defaults
+off, so the symlinked datasets' output is byte-identical with or without them:
+
+  PGSQL_EMPTY_BYTEA=1   rewrite the empty bytea literal ``'\\x'`` to ``''``
+                        (DuckDB: "Invalid hex escape code"). Opt-in because
+                        the hook has no column types, and in a *text* column
+                        the same token is the literal two-character string
+                        ``\\x`` -- see EMPTY_BYTEA_RE below.
+  PGSQL_EXTRA_SCHEMAS   extra schema qualifiers to strip besides public/cd
+                        (space- or comma-separated), e.g. ``bookings`` for the
+                        airlines demo, whose every object is qualified to it.
+                        COPY statements already de-qualify any schema; this
+                        extends the DDL/INSERT/COMMENT rewriting. Mirrors the
+                        SQLite hook's knob of the same name.
+  PGSQL_DROP_VIEWS=1    drop ``CREATE [OR REPLACE] [MATERIALIZED] VIEW``
+                        statements (buffered to their ``;``) *and* the
+                        ``COMMENT ON VIEW`` / ``COMMENT ON COLUMN <view>.<col>``
+                        statements that name one of them. The SQLite twin only
+                        has to drop the views, because it drops every
+                        ``COMMENT ON`` anyway; here a comment left pointing at
+                        a view that no longer exists is a Catalog Error
+                        ("View with name ... does not exist!"). The smoke test
+                        counts base tables only, so a dropped view costs no
+                        rows.
+  PGSQL_TYPE_MAP        column-type substitutions applied inside ``CREATE
+                        TABLE`` statements, as space-separated ``from=to``
+                        pairs, e.g.
+                        ``"jsonb=json point=text tstzrange=text integer[]=text"``.
+                        A trailing ``[]`` in the key matches a PostgreSQL array
+                        declaration with any spacing. Scoped to ``CREATE
+                        TABLE`` (which is buffered whole anyway) so a value or
+                        an identifier elsewhere is never touched, and opt-in
+                        because only the dataset knows that a type DuckDB
+                        lacks is better carried as text than dropped.
+  PGSQL_COPY_CSV=1      write each ``COPY ... FROM stdin`` block out as a
+                        sibling ``<table>.csv`` and emit DuckDB's file-based
+                        ``COPY <table> (<cols>) FROM '<table>.csv' (FORMAT CSV,
+                        ...)`` in place of the batched ``INSERT``s. Same rows,
+                        but through DuckDB's vectorized CSV reader instead of
+                        its SQL parser -- which is what makes the airlines
+                        demo's 10.7M rows loadable in minutes rather than
+                        hours. Opt-in because it leaves files behind next to
+                        the SQL (harmless: only /data is copied into the final
+                        image, and the six small dumps have no reason to pay
+                        for it). See csv_field() for how NULL is kept distinct
+                        from the empty string.
+
+Every other dataset symlinks its scripts/<dataset> directory to scripts/pgsql,
+exactly like the SQLite side; the conversion is dataset-agnostic and keyed only
+on $SQL_FILES (the files the loader stage cats into the duckdb CLI), which it
+rewrites in place.
+
+Memory: the file is streamed a line at a time and the result written to a
+sibling temporary that replaces it atomically, rather than read whole and
+split. The airlines dump is 499 MB / 10.7M lines, which as a Python string plus
+a list of lines peaks over 2 GB -- a third of the build VM -- for no gain,
+since every rule here is either per-line or per-statement and statements are
+short.
 """
+import codecs
 import glob
 import os
 import re
 import sys
 
 BATCH = 500
+
+# Bytes read per chunk when sniffing a file's encoding (see detect_encoding).
+CHUNK = 1 << 20
+
+# An empty PostgreSQL bytea is written `'\x'` -- the hex format's `\x` prefix
+# with no digits after it. DuckDB's BLOB parser rejects it ("Conversion Error:
+# Invalid hex escape code encountered in string -> blob conversion"), while a
+# non-empty `'\x89AB'` converts fine; `''` is the same empty value spelled in a
+# way both engines accept. northwind carries 17 of them (categories.picture,
+# employees.photo).
+#
+# Opt-in via PGSQL_EMPTY_BYTEA=1, and applied to the file as text, because the
+# hook has no column types and so cannot tell a bytea column from a text one:
+# in a *text* column the identical source token is the literal two-character
+# string `\x`, which an always-on rewrite would silently empty. The pattern is
+# the entire literal -- quote, backslash, x, quote -- so `'\x89AB'`, a value
+# that merely ends in `\x` (`'C:\x'`), and two adjacent literals that happen to
+# abut (`'a\', 'x'`) are all untouched. The one false positive left is a text
+# value that embeds `'\x'` between doubled quotes, which is exactly why this is
+# per-dataset rather than unconditional.
+EMPTY_BYTEA_RE = re.compile(r"'\\x'")
 
 # A COPY header: COPY <table> (<cols>) FROM stdin [DELIMITER 'x'];
 COPY_RE = re.compile(
@@ -101,10 +196,17 @@ COPY_RE = re.compile(
 # Whole lines that DuckDB cannot parse or execute and that a fresh load does
 # not need. See the module docstring for the error each one avoids.
 DROP_LINE_RE = re.compile(
-    r"^\s*(SET\s|SELECT\s+pg_catalog\.setval|GRANT\s|REVOKE\s|"
+    r"^\s*(SET\s|SELECT\s+pg_catalog\.(setval|set_config)|GRANT\s|REVOKE\s|"
     r"WITHOUT\s+OIDS|USING\s+(btree|hash|lsm)\b|\\connect|\\c\s|\\\."
     r"|CREATE\s+SCHEMA|DROP\s+SCHEMA|CREATE\s+DATABASE|DROP\s+DATABASE)\b",
     re.IGNORECASE)
+
+# CREATE DOMAIN has no DuckDB equivalent (parse error) and is dropped whole,
+# to its terminating ';' -- the same buffered-block drop DROP_BLOCK_RE performs
+# in the SQLite hook. sportsdb declares `CREATE DOMAIN primary_id AS integer;`
+# and then never uses it (every column that would carry it is spelled
+# `integer`/`serial` outright), so nothing downstream refers to the name.
+DROP_BLOCK_RE = re.compile(r"^\s*CREATE\s+DOMAIN\b", re.IGNORECASE)
 
 # ALTER TABLE is buffered to its terminating ';' and then filtered, because
 # DuckDB implements exactly one of the forms these dumps use.
@@ -114,10 +216,30 @@ ALTER_KEEP_RE = re.compile(r"\bADD\s+CONSTRAINT\b.*\bPRIMARY\s+KEY\b",
 ALTER_REJECT_RE = re.compile(r"\b(FOREIGN\s+KEY|UNIQUE)\b",
                              re.IGNORECASE | re.DOTALL)
 
-# PL/pgSQL stored functions have no DuckDB translation.
+# Stored functions have no DuckDB translation. Two shapes, as in the SQLite
+# hook: the classic quoted/dollar-quoted `AS` body, which ends at its
+# `LANGUAGE <lang>;` line (the body may itself contain `;`), and PostgreSQL
+# 14+'s SQL-standard body (`LANGUAGE sql STABLE` ... `RETURN <expr>;`), which
+# has no LANGUAGE terminator and ends at its RETURN line. FUNC_BODY_RE gates
+# the second rule on the first not applying, so a `RETURN` inside a quoted
+# PL/pgSQL body never ends the block early.
 FUNC_START_RE = re.compile(r"^\s*CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b",
                            re.IGNORECASE)
 FUNC_END_RE = re.compile(r"\bLANGUAGE\s+\w+\s*;\s*$", re.IGNORECASE)
+FUNC_BODY_RE = re.compile(r"\bAS\s*('|\$\w*\$)", re.IGNORECASE)
+FUNC_RETURN_END_RE = re.compile(r"^\s*RETURN\b.*;\s*$", re.IGNORECASE)
+
+# Views, and the comments that hang off them, dropped wholesale -- but only
+# when a dataset opts in via PGSQL_DROP_VIEWS (see the module docstring).
+VIEW_RE = re.compile(
+    r"^\s*CREATE\s+(OR\s+REPLACE\s+)?(MATERIALIZED\s+)?VIEW\b", re.IGNORECASE)
+VIEW_NAME_RE = re.compile(
+    r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?VIEW\s+([\w.\"]+)",
+    re.IGNORECASE)
+COMMENT_RE = re.compile(r"^\s*COMMENT\s+ON\b", re.IGNORECASE)
+COMMENT_TARGET_RE = re.compile(
+    r"^\s*COMMENT\s+ON\s+(?:MATERIALIZED\s+)?(VIEW|COLUMN)\s+([\w.\"]+)",
+    re.IGNORECASE)
 
 # `serial` and friends, as a standalone column type only -- never inside an
 # identifier (`serial_no`) or a string.
@@ -128,25 +250,132 @@ _SERIAL_TYPE = {"big": "bigint", "small": "smallint", "": "integer"}
 # constraints can be removed with their preceding comma (dropping the line
 # alone would leave a dangling comma before the closing paren).
 CREATE_TABLE_RE = re.compile(r"^\s*CREATE\s+TABLE\b", re.IGNORECASE)
+# The referenced column list is optional: PostgreSQL lets `REFERENCES t` stand
+# for "t's primary key", which is the spelling northwind's join tables use. The
+# referenced table is matched as a single token rather than "anything up to the
+# next '('" so that a column-list-less clause cannot swallow the whole of the
+# *following* FOREIGN KEY line looking for one -- which left northwind's
+# customer_customer_demo as `PRIMARY KEY (...) REFERENCES customers` and a
+# parse error.
 FK_RE = re.compile(
-    r',\s*FOREIGN\s+KEY\s*\([^)]*\)\s*REFERENCES\s*[^(]*\([^)]*\)'
+    r',\s*FOREIGN\s+KEY\s*\([^)]*\)\s*REFERENCES\s+[^\s(,]+(?:\s*\([^)]*\))?'
     r'(?:\s*ON\s+(?:DELETE|UPDATE)\s+'
     r'(?:NO\s+ACTION|CASCADE|RESTRICT|SET\s+NULL|SET\s+DEFAULT))*',
     re.IGNORECASE)
 
+# Schemas whose qualifier is stripped from every emitted line. The default pair
+# reproduces the historical behaviour exactly; PGSQL_EXTRA_SCHEMAS extends it
+# per-dataset (see the module docstring).
+#
+# The lookbehind is what keeps the *leading* qualifier of a name the only one
+# stripped. A schema may share its name with one of its own tables -- the
+# airlines demo's `bookings` schema holds a `bookings` table -- and pg_dump
+# writes a column comment on it as the three-part
+# `COMMENT ON COLUMN bookings.bookings.book_ref`. A plain `\bbookings\.` takes
+# both halves and leaves `COMMENT ON COLUMN book_ref`, a Binder Error with no
+# table in it at all; refusing to match after a dot leaves the table behind.
+DEFAULT_SCHEMAS = ("public", "cd")
+SCHEMA_PREFIX = r"(?i)(?<![\w.])({})\."
 
-def transcode(path):
+# The reader options for the COPY statements PGSQL_COPY_CSV emits. NULLSTR ''
+# plus ALLOW_QUOTED_NULLS false is the pair that keeps a NULL (written as a
+# bare empty field) distinct from an empty string (written as `""`); with the
+# default `allow_quoted_nulls=true` both would arrive as NULL. QUOTE/ESCAPE are
+# spelled out rather than left to the defaults so the file format csv_field()
+# writes is stated in one place.
+CSV_OPTIONS = ("FORMAT CSV, HEADER false, NULLSTR '', "
+               "ALLOW_QUOTED_NULLS false, QUOTE '\"', ESCAPE '\"'")
+
+# Characters that force a CSV field to be quoted. A newline or carriage return
+# can only reach here from a COPY `\n` / `\r` escape, but quoting them keeps
+# the file readable by any RFC4180 parser, DuckDB's included.
+CSV_SPECIAL = ',"\n\r'
+
+
+def type_pattern(name):
+    """Compile a column-type spelling from PGSQL_TYPE_MAP into a matcher.
+
+    A trailing ``[]`` becomes a whitespace-tolerant array suffix, so the key
+    ``integer[]`` matches ``integer[]`` and ``integer [ ]`` alike; anything
+    else is matched as a whole word.
+    """
+    if name.endswith("[]"):
+        return re.compile(r"\b" + re.escape(name[:-2]) + r"\s*\[\s*\]",
+                          re.IGNORECASE)
+    return re.compile(r"\b" + re.escape(name) + r"\b", re.IGNORECASE)
+
+
+def configure():
+    """(Re)read the environment knobs into module state.
+
+    Called at import and again from main(), so both the exec'd hook and a test
+    driving main() see the current environment (the SQLite hook's pattern).
+    """
+    global EMPTY_BYTEA, SCHEMA_RE, DROP_VIEWS, TYPE_MAP, COPY_CSV
+    EMPTY_BYTEA = os.environ.get("PGSQL_EMPTY_BYTEA", "") == "1"
+    extra = tuple(s for s in
+                  re.split(r"[\s,]+", os.environ.get("PGSQL_EXTRA_SCHEMAS", ""))
+                  if s)
+    SCHEMA_RE = re.compile(SCHEMA_PREFIX.format(
+        "|".join(map(re.escape, DEFAULT_SCHEMAS + extra))))
+    DROP_VIEWS = os.environ.get("PGSQL_DROP_VIEWS", "") == "1"
+    TYPE_MAP = [(type_pattern(pair.split("=", 1)[0]), pair.split("=", 1)[1])
+                for pair in os.environ.get("PGSQL_TYPE_MAP", "").split()
+                if "=" in pair]
+    COPY_CSV = os.environ.get("PGSQL_COPY_CSV", "") == "1"
+
+
+configure()
+
+
+def detect_encoding(path):
+    """Pick a file's encoding -- UTF-8, else Latin-1 -- without loading it.
+
+    world / usda / dellstore ship Latin-1 bytes and DuckDB validates UTF-8, so
+    the fallback has to exist; a chunked incremental decode reaches the same
+    verdict as decoding the whole file would, in constant memory.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")()
     with open(path, "rb") as fh:
-        raw = fh.read()
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return raw.decode("latin-1")
+        while True:
+            chunk = fh.read(CHUNK)
+            try:
+                decoder.decode(chunk, not chunk)
+            except UnicodeDecodeError:
+                return "latin-1"
+            if not chunk:
+                return "utf-8"
+
+
+def stream_lines(path, encoding):
+    """Yield a file's lines exactly as ``text.split("\\n")`` would.
+
+    That means no trailing newline on each line, and a final empty string when
+    the file ends in one -- the convention convert_lines() is written against.
+    ``newline="\\n"`` disables universal-newline translation so a lone ``\\r``
+    stays inside its line, as splitting on ``\\n`` would leave it.
+    """
+    with open(path, encoding=encoding, newline="\n") as fh:
+        trailing = True
+        for raw in fh:
+            if raw.endswith("\n"):
+                yield raw[:-1]
+                trailing = True
+            else:
+                yield raw
+                trailing = False
+        if trailing:
+            yield ""
+
+
+def rewrite_empty_bytea(text):
+    """`'\\x'` -> `''`, but only when PGSQL_EMPTY_BYTEA=1 (see the constant)."""
+    return EMPTY_BYTEA_RE.sub("''", text) if EMPTY_BYTEA else text
 
 
 def strip_schema(line):
-    """Flatten `public.`/`cd.` qualifiers into DuckDB's default `main` schema."""
-    return re.sub(r"(?i)\b(public|cd)\.", "", line)
+    """Flatten schema qualifiers into DuckDB's default `main` schema."""
+    return SCHEMA_RE.sub("", line)
 
 
 def demote_serial(line):
@@ -165,9 +394,39 @@ def clean_ddl(line):
     return line
 
 
+def map_types(statement):
+    """Apply the PGSQL_TYPE_MAP substitutions to a CREATE TABLE statement."""
+    for pattern, replacement in TYPE_MAP:
+        statement = pattern.sub(replacement, statement)
+    return statement
+
+
 def drop_foreign_keys(statement):
     """Remove table-level FOREIGN KEY constraints from a CREATE TABLE block."""
     return FK_RE.sub("", statement)
+
+
+def view_name(statement):
+    """Bare, lower-cased name of the view a CREATE VIEW statement declares."""
+    m = VIEW_NAME_RE.match(statement)
+    return m.group(1).split(".")[-1].strip('"').lower() if m else None
+
+
+def comment_target(statement):
+    """Bare name of the object a COMMENT ON VIEW / COMMENT ON COLUMN names.
+
+    ``COMMENT ON COLUMN airplanes.model`` targets ``airplanes``, so a comment
+    on a dropped view's column can be recognised and dropped with it. Any other
+    COMMENT ON shape (TABLE, and the ones a pre-hook has already removed)
+    yields None and is therefore never mistaken for a view.
+    """
+    m = COMMENT_TARGET_RE.match(statement)
+    if not m:
+        return None
+    parts = [p.strip('"').lower() for p in m.group(2).split(".")]
+    if m.group(1).upper() == "COLUMN":
+        parts = parts[:-1]
+    return parts[-1] if parts else None
 
 
 def split_copy_row(line, delim):
@@ -187,17 +446,40 @@ def split_copy_row(line, delim):
 _UNESCAPE = {"t": "\t", "n": "\n", "r": "\r", "\\": "\\"}
 
 
-def copy_value(field):
-    """Render one COPY field as a SQL string literal."""
-    if field == "\\N":
-        return "NULL"
+def unescape(field):
+    """Resolve a COPY TEXT field's backslash escapes into real characters."""
     out, i = [], 0
     while i < len(field):
         if field[i] == "\\" and i + 1 < len(field):
             out.append(_UNESCAPE.get(field[i + 1], field[i + 1])); i += 2
         else:
             out.append(field[i]); i += 1
-    return "'" + "".join(out).replace("'", "''") + "'"
+    return "".join(out)
+
+
+def copy_value(field):
+    """Render one COPY field as a SQL string literal."""
+    if field == "\\N":
+        return "NULL"
+    return "'" + unescape(field).replace("'", "''") + "'"
+
+
+def csv_field(field):
+    """Render one COPY field as an RFC4180 CSV field (PGSQL_COPY_CSV).
+
+    The whole point is that NULL and the empty string stay distinguishable
+    after the round trip, which the COPY TEXT format manages with `\\N` and
+    CSV cannot do without help: a NULL becomes a bare empty field (which
+    ``NULLSTR ''`` reads back as NULL) and an empty string becomes `""` (which
+    ``ALLOW_QUOTED_NULLS false`` reads back as ''). Everything else is quoted
+    only when it has to be.
+    """
+    if field == "\\N":
+        return ""
+    value = unescape(field)
+    if value == "" or any(c in value for c in CSV_SPECIAL):
+        return '"' + value.replace('"', '""') + '"'
+    return value
 
 
 def keep_alter(statement):
@@ -232,74 +514,140 @@ def ends_statement(line, in_string):
     return in_string, done
 
 
-def read_statement(lines, i):
-    """Collect lines[i:] up to the ';' that closes the statement.
+def read_statement(src, first):
+    """Collect lines from ``first`` up to the ';' that closes the statement.
 
-    Returns the joined statement and the index just past it.
+    Returns ``(statement, next_line)`` -- the joined statement and the first
+    line past it (None at end of input), so the caller never has to look ahead
+    itself. Unterminated input yields the remainder rather than looping.
     """
-    block = [lines[i]]
-    in_string, done = ends_statement(lines[i], False)
-    while not done and i + 1 < len(lines):
-        i += 1
-        block.append(lines[i])
-        in_string, done = ends_statement(lines[i], in_string)
-    return "\n".join(block), i + 1
+    block = [first]
+    in_string, done = ends_statement(first, False)
+    while not done:
+        line = next(src, None)
+        if line is None:
+            break
+        block.append(line)
+        in_string, done = ends_statement(line, in_string)
+    return "\n".join(block), next(src, None)
 
 
-def convert_file(text, out):
-    lines = text.split("\n")
-    i, n = 0, len(lines)
-    drop_func = False
-    while i < n:
-        line = lines[i]
+def convert_copy(match, src, out, csv_dir):
+    """Convert one ``COPY ... FROM stdin`` block; return the next line.
 
+    Either batched multi-row ``INSERT``s (the default) or, under
+    PGSQL_COPY_CSV, a sibling ``<table>.csv`` plus the one ``COPY ... FROM
+    '<file>'`` that loads it.
+    """
+    table, cols, delim = match.group(1), match.group(2), match.group(3) or "\t"
+    table = table.split(".")[-1]
+
+    if COPY_CSV:
+        path = os.path.join(csv_dir, table + ".csv")
+        with open(path, "w", encoding="utf-8", newline="\n") as csv_out:
+            line = next(src, None)
+            while line is not None and line.rstrip() != "\\.":
+                csv_out.write(",".join(csv_field(f) for f in
+                                       split_copy_row(line, delim)) + "\n")
+                line = next(src, None)
+        out.write("COPY {} ({}) FROM '{}' ({});\n".format(
+            table, cols, path.replace("'", "''"), CSV_OPTIONS))
+        return next(src, None)
+
+    head = "INSERT INTO {} ({}) VALUES\n".format(table, cols)
+    batch = []
+    line = next(src, None)
+    while line is not None and line.rstrip() != "\\.":
+        row = split_copy_row(line, delim)
+        batch.append("(" + ", ".join(copy_value(f) for f in row) + ")")
+        if len(batch) >= BATCH:
+            out.write(head + ",\n".join(batch) + ";\n")
+            batch = []
+        line = next(src, None)
+    if batch:
+        out.write(head + ",\n".join(batch) + ";\n")
+    return next(src, None)  # skip the \. terminator
+
+
+def convert_lines(lines, out, csv_dir=""):
+    """Rewrite a dump, line by line, into ``out``.
+
+    ``lines`` is any iterable of newline-free lines (main() streams them off
+    disk; the tests pass a split string). ``csv_dir`` is where PGSQL_COPY_CSV
+    writes its sidecar files -- the directory holding the SQL file, so the
+    relative path the emitted COPY carries resolves from the build dir the
+    loader stage runs in (empty, the usual case, means alongside it).
+    """
+    src = iter(lines)
+    dropped_views = set()
+    drop_func = func_has_body = False
+    line = next(src, None)
+    while line is not None:
         if drop_func:
-            if FUNC_END_RE.search(line):
+            if FUNC_BODY_RE.search(line):
+                func_has_body = True
+            if FUNC_END_RE.search(line) or \
+                    (not func_has_body and FUNC_RETURN_END_RE.match(line)):
                 drop_func = False
-            i += 1; continue
+            line = next(src, None)
+            continue
 
         m = COPY_RE.match(line)
         if m:
-            table, cols, delim = m.group(1), m.group(2), m.group(3) or "\t"
-            table = table.split(".")[-1]
-            head = "INSERT INTO {} ({}) VALUES\n".format(table, cols)
-            batch = []
-            i += 1
-            while i < n and lines[i].rstrip() != "\\.":
-                row = split_copy_row(lines[i], delim)
-                batch.append("(" + ", ".join(copy_value(f) for f in row) + ")")
-                if len(batch) >= BATCH:
-                    out.write(head + ",\n".join(batch) + ";\n")
-                    batch = []
-                i += 1
-            if batch:
-                out.write(head + ",\n".join(batch) + ";\n")
-            i += 1  # skip the \. terminator
+            line = convert_copy(m, src, out, csv_dir)
             continue
 
         if FUNC_START_RE.match(line):
+            func_has_body = bool(FUNC_BODY_RE.search(line))
             drop_func = not FUNC_END_RE.search(line)
-            i += 1; continue
+            line = next(src, None)
+            continue
 
         if CREATE_TABLE_RE.match(line):
             # Buffered whole so a table-level FOREIGN KEY can be removed along
             # with the comma that precedes it -- a per-line drop would leave a
-            # dangling comma before the closing paren.
-            statement, i = read_statement(lines, i)
-            out.write(drop_foreign_keys(clean_ddl(statement)) + "\n")
+            # dangling comma before the closing paren -- and so PGSQL_TYPE_MAP
+            # applies to column declarations and nothing else.
+            statement, line = read_statement(src, line)
+            out.write(map_types(drop_foreign_keys(clean_ddl(statement))) + "\n")
             continue
 
         if ALTER_TABLE_RE.match(line):
             # Buffered too (pg_dump wraps ALTER TABLE over two lines), because
             # the verb that decides whether DuckDB can run it -- PRIMARY KEY vs
-            # FOREIGN KEY / UNIQUE / OWNER TO -- is on the continuation line.
-            statement, i = read_statement(lines, i)
+            # FOREIGN KEY / UNIQUE / EXCLUDE / IDENTITY / OWNER TO -- is on the
+            # continuation line.
+            statement, line = read_statement(src, line)
             if keep_alter(statement):
                 out.write(clean_ddl(statement) + "\n")
             continue
 
+        if DROP_VIEWS and VIEW_RE.match(line):
+            statement, line = read_statement(src, line)
+            name = view_name(strip_schema(statement))
+            if name:
+                dropped_views.add(name)
+            continue
+
+        if dropped_views and COMMENT_RE.match(line):
+            # Only reachable under PGSQL_DROP_VIEWS, and only once a view has
+            # actually been dropped: a comment on one is a Catalog Error, while
+            # every COMMENT ON TABLE/COLUMN of a surviving table is kept.
+            statement, line = read_statement(src, line)
+            if comment_target(strip_schema(statement)) not in dropped_views:
+                out.write(clean_ddl(statement) + "\n")
+            continue
+
+        if DROP_BLOCK_RE.match(line):
+            # Buffered and dropped whole: a CREATE DOMAIN may wrap onto a
+            # second line (a CHECK or a DEFAULT), and half of one left behind
+            # is a parse error of its own.
+            _, line = read_statement(src, line)
+            continue
+
         if DROP_LINE_RE.match(line):
-            i += 1; continue
+            line = next(src, None)
+            continue
 
         stripped = line.lstrip()
         if stripped.startswith("--") or not stripped:
@@ -309,26 +657,42 @@ def convert_file(text, out):
             # qualifier); every following line is data, copied verbatim.
             out.write(strip_schema(line) + "\n")
             in_string, done = ends_statement(line, False)
-            while not done and i + 1 < n:
-                i += 1
-                out.write(lines[i] + "\n")
-                in_string, done = ends_statement(lines[i], in_string)
-            i += 1; continue
+            while not done:
+                line = next(src, None)
+                if line is None:
+                    break
+                out.write(line + "\n")
+                in_string, done = ends_statement(line, in_string)
+            line = next(src, None)
+            continue
         else:
             out.write(clean_ddl(line) + "\n")
-        i += 1
+        line = next(src, None)
+
+
+def convert_file(text, out, csv_dir=""):
+    """convert_lines() over a whole dump held in memory (the tests' entry)."""
+    convert_lines(iter(text.split("\n")), out, csv_dir)
 
 
 def main():
+    configure()
     files = os.environ.get("SQL_FILES", "").split() or sorted(glob.glob("*.sql"))
     files = [f for f in files if os.path.isfile(f)]
     if not files:
         sys.exit("pgsql transform: no SQL files to convert")
 
     for path in files:
-        text = transcode(path)
-        with open(path, "w", encoding="utf-8") as out:
-            convert_file(text, out)
+        # Rewritten through a sibling temporary rather than in place: the file
+        # is streamed, so its old bytes are still being read while the new ones
+        # are written. os.replace makes the swap atomic.
+        encoding = detect_encoding(path)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as out:
+            convert_lines((rewrite_empty_bytea(line)
+                           for line in stream_lines(path, encoding)),
+                          out, os.path.dirname(path))
+        os.replace(tmp, path)
 
 
 if __name__ == "__main__":
