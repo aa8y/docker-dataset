@@ -1,0 +1,63 @@
+name: Docker Hub descriptions
+
+# Push each per-database README to the overview page of its Docker Hub
+# repository. ci.yml deliberately ignores markdown changes, so this is a
+# separate workflow keyed on exactly the files it publishes; a README-only
+# commit to master costs five small Hub API calls and no image builds.
+on:
+  push:
+    branches: [master]
+    paths:
+      - '*/README.md'
+      - '.github/workflows/dockerhub-description.yml'
+  pull_request:
+    paths:
+      - '*/README.md'
+      - '.github/workflows/dockerhub-description.yml'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each context directory maps to the Hub repo aa8y/<context>-dataset,
+        # matching the `repository:` parameters in manifest.yml.
+        context: [postgres, mysql, cockroach, sqlite, duckdb]
+    steps:
+      - uses: actions/checkout@v7
+
+      # Docker Hub renders the overview relative to hub.docker.com, so the
+      # READMEs' repo-relative links (`../README.md#...`, `Dockerfile`,
+      # `scripts/...`) would 404 there. Rewrite them to absolute GitHub URLs
+      # in a temp copy; the checked-in files stay relative for GitHub.
+      # `../x` -> <repo root>/x; any other non-http, non-anchor target ->
+      # <repo root>/<context>/target.
+      - name: Rewrite relative links to GitHub
+        env:
+          BASE: https://github.com/${{ github.repository }}/blob/master
+          CONTEXT: ${{ matrix.context }}
+        run: |
+          sed -E \
+            -e "s#\]\(\.\./#](${BASE}/#g" \
+            -e "s#\]\(([^)#]|[^)h#][^)]*)\)#](${BASE}/${CONTEXT}/\1)#g" \
+            "${CONTEXT}/README.md" > "$RUNNER_TEMP/README.md"
+          # Fail loudly if any link is still neither absolute nor an anchor.
+          if grep -nE '\]\([^h#]' "$RUNNER_TEMP/README.md"; then
+            echo "::error::unrewritten relative link(s) in ${CONTEXT}/README.md"
+            exit 1
+          fi
+          grep -o "](${BASE}[^)]*" "$RUNNER_TEMP/README.md" | sort -u
+
+      # On pull requests only the rewrite above runs, as a lint; the upload
+      # needs the Docker Hub secrets, which are only available on master.
+      - name: Update Docker Hub overview
+        if: github.event_name == 'push'
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: aa8y/${{ matrix.context }}-dataset
+          readme-filepath: ${{ runner.temp }}/README.md
+          short-description: ${{ github.event.repository.description }}
