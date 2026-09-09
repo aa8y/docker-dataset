@@ -1,0 +1,5 @@
+{
+  "openflights.airlines": ">=5853",
+  "openflights.airports": ">=7313",
+  "openflights.routes": ">=64279"
+}

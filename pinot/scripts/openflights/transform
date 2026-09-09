@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Build OpenFlights' Pinot ingestion artifacts from the published .dat files.
+
+OpenFlights publishes no SQL, so the three table schemas are authored alongside
+this hook (schema.sql) and the data arrives as airports.dat / airlines.dat /
+routes.dat, fetched by the generic extract step. This turns them into the
+artifact set every Pinot tag ships -- dataset/<table>.{csv,schema.json,
+table.json} plus the tables.tsv row counts.
+
+Like the geonames hook, the DDL parsing and artifact emission come from
+../pgsql/transform, loaded as a library, so all three CSV-sourced datasets and
+all six PostgreSQL-dump ones share one type map and one artifact writer.
+
+The files' own quirks:
+  * They are already RFC4180 CSV -- properly quoted, with embedded commas inside
+    quoted fields -- so unlike geonames they are read with csv.reader.
+  * There is no header row; the column order is the upstream data dictionary's,
+    which schema.sql mirrors.
+  * A missing value is written as an unquoted ``\\N``, which is exactly the
+    sentinel the entrypoint tells Pinot to read as null, so those fields need no
+    conversion at all -- but they are decoded to None and re-rendered anyway, so
+    that "what NULL looks like on disk" stays a decision made in one place
+    (the shared hook's render()).
+  * Rows are occasionally short or long as upstream edits the files, so each is
+    padded or truncated to the declared width rather than failing the build.
+"""
+import csv
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+# Data file -> table. The schema's column order matches each file's column
+# order (the schema was authored against these files), so rows map positionally.
+SOURCES = [
+    ("airports.dat", "airports"),
+    ("airlines.dat", "airlines"),
+    ("routes.dat", "routes"),
+]
+
+# Authored schema, staged alongside these build scripts. Overridable for tests.
+SCHEMA = os.environ.get(
+    "PINOT_SCHEMA_SQL", "/usr/local/lib/scripts/openflights/schema.sql")
+
+# The shared hook, loaded as a library. Overridable for tests.
+SHARED_HOOK = os.environ.get(
+    "PINOT_PGSQL_HOOK", "/usr/local/lib/scripts/pgsql/transform")
+
+# What upstream writes for a missing value (see the data dictionary).
+MISSING = "\\N"
+
+
+def load_shared():
+    """Import scripts/pgsql/transform as a module (see the geonames hook)."""
+    loader = importlib.machinery.SourceFileLoader("pinot_pgsql", SHARED_HOOK)
+    spec = importlib.util.spec_from_loader("pinot_pgsql", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def main():
+    shared = load_shared()
+    out_dir = shared.OUT_DIR
+    os.makedirs(out_dir, exist_ok=True)
+
+    tables = shared.parse_tables(shared.transcode(SCHEMA))
+    writers = {}
+    for source, table in SOURCES:
+        if not os.path.isfile(source):
+            sys.exit("openflights transform: {} not found".format(source))
+        if table not in tables:
+            sys.exit("openflights transform: no CREATE TABLE for {}".format(table))
+        columns = tables[table]
+        names = [name for name, _ in columns]
+        writer = shared.TableWriter(out_dir, table, columns)
+        with open(source, encoding="utf-8", newline="") as fh:
+            for row in csv.reader(fh):
+                if not row:
+                    continue
+                values = [None if f == MISSING else f for f in row]
+                writer.write(names, (values + [None] * len(names))[:len(names)])
+        writer.close()
+        writers[table] = writer
+
+    shared.write_artifacts(out_dir, {t: tables[t] for t in writers}, writers)
+
+
+if __name__ == "__main__":
+    main()

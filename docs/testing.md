@@ -17,10 +17,13 @@ by explicit source loader and exposes it as a session fixture. Covered are the
 shared, dialect-translating hooks — the ones where a subtle rewriting bug would
 silently corrupt many datasets at once:
 
-* the three PostgreSQL-dump translators: `mysql/`, `sqlite/` and
-  `duckdb/scripts/pgsql/transform`,
-* all five StackExchange XML emitters (postgres, mysql, sqlite, cockroach,
-  duckdb),
+* the four PostgreSQL-dump translators: `mysql/`, `sqlite/`, `duckdb/` and
+  `clickhouse/scripts/pgsql/transform`, plus `pinot/scripts/pgsql/transform`,
+  which decompiles a dump into per-table CSV, a Pinot schema and a table config,
+  and `druid/scripts/pgsql/transform` (with its `druid/scripts/pgdump.py`
+  helper), which turns one into per-table CSV plus native batch ingestion specs,
+* all six StackExchange XML emitters (postgres, mysql, sqlite, cockroach,
+  duckdb, clickhouse),
 * `cockroach/scripts/{pgfoundry,yugabyte,moma}/transform`,
 * `duckdb/scripts/chinook/transform` and
   `postgres/scripts/adventureworks/transform`.
@@ -42,7 +45,7 @@ configs apply to a tag is declared in `manifest.yml` under `structureTest:`, and
 ## Integration (smoke) tests
 
 These boot each image and query the live database. There is one script per
-engine, and all five source `test/integration/lib.sh` for the shared plumbing
+engine, and all eight source `test/integration/lib.sh` for the shared plumbing
 (volatility, expected-file I/O, count comparison, the dedupe cache):
 
 | Script | Engine | Expected files |
@@ -52,19 +55,35 @@ engine, and all five source `test/integration/lib.sh` for the shared plumbing
 | `run-cockroach.sh` | CockroachDB | `test/expected/cockroach/` |
 | `run-sqlite.sh` | SQLite | `test/expected/sqlite/` |
 | `run-duckdb.sh` | DuckDB | `test/expected/duckdb/` |
+| `run-clickhouse.sh` | ClickHouse | `test/expected/clickhouse/` |
+| `run-druid.sh` | Apache Druid | `test/expected/druid/` |
+| `run-pinot.sh` | Apache Pinot | `test/expected/pinot/` |
 
 Each script takes `<tag> <datasets-csv>` and, for every dataset in the image,
 asserts that the set of base tables exactly matches the expected set (no missing
 tables, no unexpected extras) and that `SELECT count(*)` on each table matches
 the expected count. `REPOSITORY` overrides the image repository.
 
-The three server engines boot a container and wait for it to be genuinely ready
+The server engines boot a container and wait for it to be genuinely ready
 before querying, so no half-loaded database is measured: PostgreSQL waits for
 TCP readiness (a socket-only check returns ready mid-init), while MySQL and
 CockroachDB first wait for an init-complete marker in the container log — via
 lib.sh's `wait_for_log_marker`, which also fails fast if the container dies —
-and then for the client to answer. That wait is one wall-clock budget, not an
-iteration count: **`READY_TIMEOUT`** (default `300`, seconds) sets it, and on a
+and then for the client to answer. ClickHouse needs a different signal: its
+entrypoint runs the init scripts against a temporary server bound to
+`127.0.0.1`, so a `docker exec` query would succeed mid-load; `run-clickhouse.sh`
+instead pings `/ping` on the container's own `eth0` address, which only the
+post-init server binds, and then waits for a query to answer. Pinot's own
+entrypoint creates every table, ingests every CSV and polls the broker until
+each table reports the row count recorded at build time before it prints
+`pinot-dataset: <dataset> ready`, so `run-pinot.sh` waits for that marker and
+nothing else. Druid works the same way: booting one of its images means six
+JVMs plus one indexing task per table, and its entrypoint prints
+`druid-dataset: <dataset> ready (<n> datasources)` only once it has itself
+confirmed every datasource answers a query, so `run-druid.sh` needs no second
+phase either. That wait is one wall-clock budget, not an iteration count:
+**`READY_TIMEOUT`** (default `300` seconds; `600` for Pinot and `900` for
+Druid, whose JVM starts and start-time ingestion need it) sets it, and on a
 slow or emulated runner it is the knob to raise. On a timeout the script dumps
 the tail of the container log. SQLite and DuckDB are serverless — the
 database is a file baked into the image — so they boot nothing; `run-sqlite.sh`

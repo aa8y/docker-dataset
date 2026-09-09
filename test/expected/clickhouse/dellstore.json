@@ -1,0 +1,10 @@
+{
+  "dellstore.categories": 16,
+  "dellstore.cust_hist": 60350,
+  "dellstore.customers": 20000,
+  "dellstore.inventory": 10000,
+  "dellstore.orderlines": 60350,
+  "dellstore.orders": 12000,
+  "dellstore.products": 10000,
+  "dellstore.reorder": 0
+}

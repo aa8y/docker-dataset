@@ -1,0 +1,50 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. GeoNames publishes no
+# SQL, so the schema is authored in-repo (pinot/scripts/geonames/schema.sql) and
+# the transform hook parses that DDL with the same CREATE TABLE reader the
+# scripts/pgsql hook uses on real dumps -- which is what the type assertions
+# below really check: that an authored schema goes through the same
+# PostgreSQL-type-to-Pinot map as a pgFoundry dump does.
+#
+# The export is tab-separated with no quoting at all, so the transform splits on
+# tabs rather than parsing CSV; a double quote in a place name is a literal
+# character. Counts drift as GeoNames rebuilds the dump daily, so the smoke test
+# records floors.
+
+fileExistenceTests:
+  - name: "cities CSV exists"
+    path: "/opt/pinot/dataset/cities.csv"
+    shouldExist: true
+  - name: "cities schema exists"
+    path: "/opt/pinot/dataset/cities.schema.json"
+    shouldExist: true
+  - name: "cities table config exists"
+    path: "/opt/pinot/dataset/cities.table.json"
+    shouldExist: true
+  - name: "the raw export does not ship in the image"
+    path: "/opt/pinot/dataset/cities15000.txt"
+    shouldExist: false
+
+fileContentTests:
+  - name: "geonames declares its one table in the manifest"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^cities[[:space:]]'
+
+  - name: "cities carries all 19 documented columns, in export order"
+    path: "/opt/pinot/dataset/cities.csv"
+    expectedContents:
+      - '(?m)^geonameid,name,asciiname,alternatenames,latitude,longitude,feature_class,feature_code,country_code,cc2,admin1_code,admin2_code,admin3_code,admin4_code,population,elevation,dem,timezone,modification_date$'
+
+  - name: "cities maps the authored DDL through the shared type map"
+    path: "/opt/pinot/dataset/cities.schema.json"
+    expectedContents:
+      - '"name": "geonameid",\n      "dataType": "INT"'
+      - '"name": "latitude",\n      "dataType": "DOUBLE"'
+      - '"name": "name",\n      "dataType": "STRING"'
+
+  - name: "a blank export field becomes the NULL sentinel, not an empty cell"
+    path: "/opt/pinot/dataset/cities.csv"
+    expectedContents:
+      - ',\\N,'

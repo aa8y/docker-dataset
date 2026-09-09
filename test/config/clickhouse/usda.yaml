@@ -1,0 +1,55 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. usda is the pgFoundry Food
+# Database R18 (10 tables, ~366k rows), translated from its Latin-1 PostgreSQL
+# dump by the shared scripts/pgsql hook. Nine of the ten tables carry a primary
+# key that becomes their MergeTree sorting key; `footnote` declares none
+# upstream and so gets `ORDER BY tuple()`.
+#
+# The table assertions use `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "usda init script exists"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "usda selects its database"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    expectedContents:
+      - "USE `usda`;"
+
+  - name: "usda declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `data_src` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `datsrcln` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `deriv_cd` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `fd_group` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `food_des` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `footnote` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `nut_data` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `nutr_def` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `src_cd` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `weight` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "usda keys the one table with no upstream primary key on tuple()"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `footnote` \\(.*?\\) ENGINE = MergeTree ORDER BY tuple\\(\\);"
+
+  - name: "usda loads data into every table"
+    path: "/docker-entrypoint-initdb.d/usda.sql"
+    expectedContents:
+      - "INSERT INTO `data_src` \\("
+      - "INSERT INTO `datsrcln` \\("
+      - "INSERT INTO `deriv_cd` \\("
+      - "INSERT INTO `fd_group` \\("
+      - "INSERT INTO `food_des` \\("
+      - "INSERT INTO `footnote` \\("
+      - "INSERT INTO `nut_data` \\("
+      - "INSERT INTO `nutr_def` \\("
+      - "INSERT INTO `src_cd` \\("
+      - "INSERT INTO `weight` \\("

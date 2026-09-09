@@ -1,0 +1,721 @@
+#!/usr/bin/env python3
+"""Turn a PostgreSQL SQL dump into Apache Pinot ingestion artifacts at build time.
+
+The Pinot sibling of ../../../duckdb/scripts/pgsql/transform, and the place
+where this engine diverges hardest from every other one in the repo. The other
+engines all *run* the dump: they rewrite its dialect and hand the result to a
+SQL client. Pinot has no such door. It is an OLAP store whose only load paths
+are "build a segment from a data file" and "consume a stream", and its DDL is
+not SQL at all but a pair of JSON documents per table -- a **schema** (column
+names and Pinot data types) and a **table config** (segment/index/tenant
+settings). So this hook does not translate SQL; it *decompiles* the dump into
+
+    dataset/<table>.csv           the rows, RFC4180 CSV with a header line
+    dataset/<table>.schema.json   the Pinot schema
+    dataset/<table>.table.json    the OFFLINE table config
+    dataset/tables.tsv            <table>\\t<rowcount>, one line per table
+
+and the image's entrypoint replays those against a live cluster at container
+start (see ../../entrypoint). tables.tsv is what makes that start-up honest:
+the row count is known here, at build time, so the entrypoint can wait for
+``SELECT COUNT(*)`` to actually reach it before declaring the image ready,
+rather than waiting for a segment to merely exist.
+
+What is parsed
+--------------
+Only the two things Pinot needs: ``CREATE TABLE`` blocks (for the column names
+and types) and the data, in both spellings these dumps use --
+``COPY <t> (<cols>) FROM stdin`` + TEXT-format rows + ``\\.`` (world, iso3166,
+frenchtowns, usda, dellstore) and multi-row ``INSERT INTO <t> (<cols>) VALUES
+(...),(...);`` (pgexercises). Everything else in the dump is *dropped without
+comment*, because Pinot has nowhere to put it: indexes (Pinot indexes are
+declared in the table config, not in DDL), primary/foreign keys and CHECK
+constraints (Pinot enforces none), sequences, ``GRANT``, ``SET``, schemas, and
+dellstore's PL/pgSQL ``new_customer`` function. This is a much bigger loss of
+fidelity than the DuckDB hook's, and it is inherent to the engine rather than
+to this code -- the README says so out loud.
+
+Identifiers are folded to lower case when unquoted and kept verbatim when
+quoted, which is PostgreSQL's own rule and matters for exactly one dump:
+frenchtowns declares ``CREATE TABLE Regions`` but loads ``COPY regions``, and
+Pinot table names are case-sensitive, so without folding the two halves would
+land in different tables. Quoted identifiers (usda's ``"year"``, world's
+``"language"``, dellstore's ``"password"``) are already lower case in every
+dump here, so they survive folding unchanged.
+
+Type mapping (PostgreSQL -> Pinot), each verified against Pinot 1.5.0 by
+ingesting a probe CSV and reading the values back:
+
+  ============================  =========  ====================================
+  PostgreSQL                    Pinot      note
+  ============================  =========  ====================================
+  smallint int2 integer int4    INT        serial/smallserial too: the dumps
+  serial smallserial                       supply every id explicitly.
+  bigint int8 bigserial         LONG
+  real float4                   FLOAT
+  double precision float8       DOUBLE
+  numeric decimal money         DOUBLE     Not BIG_DECIMAL. BIG_DECIMAL does
+                                           ingest cleanly, but it cannot be
+                                           dictionary-encoded and several
+                                           aggregations return it as a string,
+                                           which makes a practice image worse
+                                           at the one thing it is for. The
+                                           affected columns are money-ish
+                                           (world.gnp, dellstore prices,
+                                           pgexercises costs) and all fit a
+                                           double exactly at their scale.
+  boolean bool                  BOOLEAN    COPY writes booleans as ``t``/``f``,
+                                           which Pinot parses as *false* --
+                                           both of them, silently. So they are
+                                           normalized to true/false on the way
+                                           into the CSV (see bool_literal).
+  date timestamp                TIMESTAMP  Pinot accepts both ``yyyy-MM-dd``
+  timestamp without time zone              and ``yyyy-MM-dd HH:mm:ss[.SSS]``
+                                           and stores millis since the epoch
+                                           in UTC. None of the six dumps has a
+                                           ``timestamp with time zone`` column;
+                                           an offset would not parse, so one is
+                                           stripped defensively rather than
+                                           failing the whole ingest.
+  everything else               STRING     character(n), varchar, text, bytea,
+                                           uuid, json, xml, ...
+  ============================  =========  ====================================
+
+Nulls. Pinot's CSV record reader turns a field equal to its ``nullStringValue``
+into a null, and a null is then stored as the column's *default value* unless
+the table sets ``nullHandlingEnabled`` -- which these table configs do, so a
+null stays a null and comes back as one under ``SET enableNullHandling=true``.
+The reason nullStringValue is set to a sentinel (NULL_SENTINEL below) rather
+than left at its default of "empty field" is fidelity: PostgreSQL distinguishes
+NULL from the empty string, and several columns here carry both. With the
+sentinel, ``\\N`` becomes a real null and ``''`` stays an empty string.
+
+Every dataset that needs this hook symlinks its scripts/<dataset> directory to
+scripts/pgsql, exactly like the SQLite/DuckDB side; the conversion is
+dataset-agnostic and keyed only on $SQL_FILES.
+"""
+import csv
+import glob
+import json
+import os
+import re
+import sys
+
+# Where the artifacts are written, relative to the build dir. The Dockerfile's
+# LOAD step moves this to /dataset and the final stage COPYs it to
+# /opt/pinot/dataset. Overridable so the unit tests can point it at a tmp dir.
+OUT_DIR = os.environ.get("PINOT_DATASET_DIR", "dataset")
+
+# The CSV field that means SQL NULL. Chosen to be a string no dump can produce
+# as *data*: PostgreSQL's TEXT-format COPY escapes a literal backslash to
+# ``\\``, so an unescaped ``\N`` only ever arrives as the NULL marker, and the
+# INSERT path writes it only for a bare ``NULL`` keyword. Handed to Pinot as
+# ``recordReader.prop.nullStringValue`` by the entrypoint.
+NULL_SENTINEL = "\\N"
+
+# A COPY header: COPY <table> (<cols>) FROM stdin [DELIMITER 'x'];
+COPY_RE = re.compile(
+    r"^COPY\s+([^\s(]+)\s*\(([^)]*)\)\s+FROM\s+stdin"
+    r"(?:\s+DELIMITER\s+'([^']*)')?\s*;",
+    re.IGNORECASE)
+
+# An INSERT header: INSERT INTO <table> (<cols>) VALUES  (the tuples may follow
+# on this line or on the next; pgexercises puts them on following lines).
+INSERT_RE = re.compile(
+    r"^\s*INSERT\s+INTO\s+([^\s(]+)\s*\(([^)]*)\)\s+VALUES\b",
+    re.IGNORECASE)
+
+CREATE_TABLE_RE = re.compile(
+    r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)\s*\(",
+    re.IGNORECASE)
+
+# Lines inside a CREATE TABLE that declare a table-level constraint rather than
+# a column. PostgreSQL allows all of these unnamed, and pgexercises writes a
+# bare `FOREIGN KEY (...)` while world writes a named `CONSTRAINT ... CHECK`.
+CONSTRAINT_RE = re.compile(
+    r"^\s*(CONSTRAINT|PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|EXCLUDE)\b",
+    re.IGNORECASE)
+
+# PostgreSQL type -> Pinot dataType. Matched against the *leading* words of a
+# column's type, longest first, so "double precision" wins over "double" and
+# "timestamp without time zone" over "timestamp".
+TYPE_MAP = [
+    ("timestamp with time zone", "TIMESTAMP"),
+    ("timestamp without time zone", "TIMESTAMP"),
+    ("double precision", "DOUBLE"),
+    ("character varying", "STRING"),
+    ("bigserial", "LONG"),
+    ("smallserial", "INT"),
+    ("timestamptz", "TIMESTAMP"),
+    ("timestamp", "TIMESTAMP"),
+    ("character", "STRING"),
+    ("smallint", "INT"),
+    ("integer", "INT"),
+    ("numeric", "DOUBLE"),
+    ("decimal", "DOUBLE"),
+    ("varchar", "STRING"),
+    ("bigint", "LONG"),
+    ("serial", "INT"),
+    ("float8", "DOUBLE"),
+    ("float4", "FLOAT"),
+    ("money", "DOUBLE"),
+    ("real", "FLOAT"),
+    ("int2", "INT"),
+    ("int4", "INT"),
+    ("int8", "LONG"),
+    ("date", "TIMESTAMP"),
+    ("char", "STRING"),
+    ("text", "STRING"),
+    ("int", "INT"),
+]
+# `boolean`/`bool` are spelled out here rather than in TYPE_MAP's prefix search
+# so `bool` cannot shadow `boolean` by matching first.
+BOOL_TYPES = ("boolean", "bool")
+
+
+def transcode(path):
+    """Read a dump as text, falling back to Latin-1 (world, usda, dellstore)."""
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+def fold(identifier):
+    """PostgreSQL identifier folding: unquoted -> lower case, quoted -> verbatim.
+
+    Also drops any schema qualifier (``public.city`` -> ``city``): one dataset
+    per image means a flat namespace, so the qualifier has nothing to
+    distinguish.
+    """
+    identifier = identifier.strip()
+    # Split on the last unquoted dot to drop a schema qualifier.
+    if identifier.startswith('"'):
+        end = identifier.find('"', 1)
+        if end != -1 and identifier[end + 1:end + 2] == ".":
+            identifier = identifier[end + 2:].strip()
+    elif "." in identifier:
+        identifier = identifier.rsplit(".", 1)[-1].strip()
+    if identifier.startswith('"') and identifier.endswith('"') and len(identifier) > 1:
+        return identifier[1:-1].replace('""', '"')
+    return identifier.lower()
+
+
+def pinot_type(pg_type):
+    """Map a PostgreSQL column type to a Pinot dataType (see the module docstring)."""
+    t = pg_type.strip().lower()
+    # Array types have no faithful single-valued Pinot equivalent and none of
+    # the six dumps declares one; keep them as STRING rather than guess.
+    if t.endswith("[]"):
+        return "STRING"
+    for name in BOOL_TYPES:
+        if t == name or t.startswith(name + " ") or t.startswith(name + "("):
+            return "BOOLEAN"
+    for name, mapped in TYPE_MAP:
+        if t == name or t.startswith(name + " ") or t.startswith(name + "("):
+            return mapped
+    return "STRING"
+
+
+def split_columns(body):
+    """Split a CREATE TABLE body into its top-level, comma-separated items.
+
+    Splitting on a bare comma would cut ``numeric(10,2)`` in half and shred
+    world's multi-clause CHECK constraint, so parenthesis depth and quote state
+    are tracked. Both quote flavours matter: the CHECK compares against
+    ``'Asia'::text`` (single) and usda declares ``"year"`` (double).
+    """
+    items, cur, depth = [], [], 0
+    in_single = in_double = False
+    i, n = 0, len(body)
+    while i < n:
+        c = body[i]
+        if in_single:
+            if c == "'":
+                in_single = False
+        elif in_double:
+            if c == '"':
+                in_double = False
+        elif c == "'":
+            in_single = True
+        elif c == '"':
+            in_double = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "," and depth == 0:
+            items.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    tail = "".join(cur).strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
+def split_column_def(item):
+    """Split one CREATE TABLE item into (identifier, rest-of-definition)."""
+    item = item.strip()
+    if item.startswith('"'):
+        end = item.find('"', 1)
+        while end != -1 and item[end + 1:end + 2] == '"':      # "" escape
+            end = item.find('"', end + 2)
+        if end == -1:
+            return None, ""
+        return item[:end + 1], item[end + 1:].strip()
+    parts = item.split(None, 1)
+    if not parts:
+        return None, ""
+    return parts[0], (parts[1] if len(parts) > 1 else "")
+
+
+def strip_line_comment(line, in_string):
+    """Drop a ``--`` comment from one DDL line, respecting quotes.
+
+    frenchtowns is why this exists: it annotates half its columns inline
+    (``code VARCHAR(10) NOT NULL, -- Only unique inside a department``) and one
+    of those comments is even a commented-out ``REFERENCES Towns (code),``.
+    Without stripping them the column splitter reads ``--`` as a column name and
+    ``article``/``department`` vanish from the table -- quietly, since the row
+    count is unaffected.
+
+    ``in_string`` carries single-quote state across lines (a CHECK constraint's
+    literal may wrap); double-quoted identifiers never span a line in these
+    dumps, so that state stays local.
+    """
+    out, i, n, in_double = [], 0, len(line), False
+    while i < n:
+        c = line[i]
+        if in_string:
+            out.append(c)
+            if c == "'":
+                in_string = False
+        elif in_double:
+            out.append(c)
+            if c == '"':
+                in_double = False
+        elif c == "'":
+            in_string = True; out.append(c)
+        elif c == '"':
+            in_double = True; out.append(c)
+        elif c == "-" and i + 1 < n and line[i + 1] == "-":
+            break
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def parse_create_table(statement):
+    """Parse a CREATE TABLE statement into (table, [(column, pinot_type), ...]).
+
+    Returns (None, []) for a statement with no parseable columns.
+    """
+    m = CREATE_TABLE_RE.match(statement)
+    if not m:
+        return None, []
+    table = fold(m.group(1))
+    body = statement[m.end():]
+    close = body.rfind(")")
+    if close != -1:
+        body = body[:close]
+    columns = []
+    for item in split_columns(body):
+        if not item.strip() or CONSTRAINT_RE.match(item):
+            continue
+        name, rest = split_column_def(item)
+        if name is None:
+            continue
+        columns.append((fold(name), pinot_type(rest)))
+    return table, columns
+
+
+# --- COPY TEXT-format decoding -------------------------------------------
+
+def split_copy_row(line, delim):
+    """Split a COPY TEXT row on unescaped delimiters, keeping escape pairs.
+
+    Lifted from the DuckDB hook (duckdb/scripts/pgsql/transform), which lifted
+    it from the SQLite one. Copied rather than imported: the hooks are
+    extensionless files under per-engine directories and only the engine's own
+    scripts/ tree is present in its builder.
+    """
+    fields, cur, i, n = [], [], 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n:
+            cur.append(line[i:i + 2]); i += 2; continue
+        if c == delim:
+            fields.append("".join(cur)); cur = []; i += 1; continue
+        cur.append(c); i += 1
+    fields.append("".join(cur))
+    return fields
+
+
+_UNESCAPE = {"t": "\t", "n": "\n", "r": "\r", "\\": "\\",
+             "b": "\b", "f": "\f", "v": "\v"}
+
+
+def copy_field(field):
+    """Decode one COPY TEXT field to a Python str, or None for the NULL marker."""
+    if field == "\\N":
+        return None
+    out, i = [], 0
+    while i < len(field):
+        if field[i] == "\\" and i + 1 < len(field):
+            out.append(_UNESCAPE.get(field[i + 1], field[i + 1])); i += 2
+        else:
+            out.append(field[i]); i += 1
+    return "".join(out)
+
+
+# --- INSERT ... VALUES decoding ------------------------------------------
+
+def split_tuples(text):
+    """Yield the top-level ``(...)`` groups of an INSERT's VALUES list.
+
+    Quote-aware, because a value may itself contain parentheses or a comma
+    (pgexercises has addresses like ``'8 Bloomsbury Close, Boston'``).
+    """
+    groups, depth, start, in_string = [], 0, None, False
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if in_string:
+            if c == "'":
+                if i + 1 < n and text[i + 1] == "'":
+                    i += 2; continue
+                in_string = False
+        elif c == "'":
+            in_string = True
+        elif c == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0 and start is not None:
+                groups.append(text[start + 1:i])
+                start = None
+        i += 1
+    return groups
+
+
+def split_values(group):
+    """Split one ``(...)`` group into its comma-separated raw value tokens."""
+    values, cur, in_string, depth = [], [], False, 0
+    i, n = 0, len(group)
+    while i < n:
+        c = group[i]
+        if in_string:
+            if c == "'":
+                if i + 1 < n and group[i + 1] == "'":
+                    cur.append("''"); i += 2; continue
+                in_string = False
+        elif c == "'":
+            in_string = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "," and depth == 0:
+            values.append("".join(cur).strip()); cur = []; i += 1; continue
+        cur.append(c); i += 1
+    values.append("".join(cur).strip())
+    return values
+
+
+def insert_value(token):
+    """Decode one INSERT value token to a Python str, or None for NULL."""
+    token = token.strip()
+    if token.upper() == "NULL" or token == "":
+        return None
+    if token.startswith("'"):
+        # Strip the quotes and any trailing PostgreSQL cast, then unescape ''.
+        end = len(token) - 1
+        while end > 0 and token[end] != "'":
+            end -= 1
+        return token[1:end].replace("''", "'")
+    return token
+
+
+# --- value rendering ------------------------------------------------------
+
+def bool_literal(value):
+    """Normalize a PostgreSQL boolean rendering to one Pinot actually parses.
+
+    COPY writes ``t``/``f`` and INSERT may write ``true``/``false``/``1``/``0``.
+    Pinot's BOOLEAN parser accepts only ``true``/``false`` (case-insensitively)
+    and quietly yields *false* for everything else -- which is how a `t` column
+    becomes an all-false column with no error anywhere. Anything unrecognized is
+    passed through untouched so it shows up as wrong rather than as silently
+    false.
+    """
+    v = value.strip().lower()
+    if v in ("t", "true", "y", "yes", "1"):
+        return "true"
+    if v in ("f", "false", "n", "no", "0"):
+        return "false"
+    return value
+
+
+def timestamp_literal(value):
+    """Normalize a PostgreSQL timestamp rendering for Pinot's TIMESTAMP parser.
+
+    Pinot takes ``yyyy-MM-dd`` and ``yyyy-MM-dd HH:mm:ss[.SSS]`` and reads both
+    as UTC. It does *not* take a UTC offset suffix, so one is stripped: no dump
+    behind the six pgsql tags declares ``timestamp with time zone``, but losing
+    an offset beats failing the whole ingest if one ever appears upstream.
+    """
+    v = value.strip()
+    m = re.match(r"^(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?)"
+                 r"\s*(?:Z|[+-]\d{2}(?::?\d{2})?)$", v)
+    if m:
+        return m.group(1).replace("T", " ")
+    return v
+
+
+def render(value, data_type):
+    """Render one decoded value as the CSV cell Pinot should read."""
+    if value is None:
+        return NULL_SENTINEL
+    if data_type == "BOOLEAN":
+        return bool_literal(value)
+    if data_type == "TIMESTAMP":
+        return timestamp_literal(value)
+    return value
+
+
+# --- artifact emission ----------------------------------------------------
+
+def pinot_schema(table, columns):
+    """The Pinot schema document for a table.
+
+    Every column is a *dimension*. Pinot's other two field categories buy
+    nothing here and cost fidelity: a metric field's default for a null is 0
+    (a dimension's is a null marker the table config preserves), and a
+    date-time field would demand that one column be nominated as the table's
+    time column, which none of these datasets has a natural candidate for.
+    """
+    return {
+        "schemaName": table,
+        "dimensionFieldSpecs": [
+            {"name": name, "dataType": data_type} for name, data_type in columns
+        ],
+    }
+
+
+def pinot_table_config(table):
+    """The OFFLINE table config for a table.
+
+    No ``segmentsConfig.timeColumnName``: an OFFLINE table does not need one,
+    and inventing a constant time column so the field could be filled would put
+    a column in the data that the source dump never had. ``replication: 1``
+    because the image is a single-node cluster. ``nullHandlingEnabled`` stores
+    a null vector per column so a NULL survives ingestion as a NULL rather than
+    being replaced by the data type's default value.
+    """
+    return {
+        "tableName": table,
+        "tableType": "OFFLINE",
+        "segmentsConfig": {"replication": "1"},
+        "tenants": {},
+        "tableIndexConfig": {"nullHandlingEnabled": True},
+        "metadata": {},
+    }
+
+
+class TableWriter:
+    """Streams one table's rows to CSV, so a 250k-row dump is never held in RAM."""
+
+    def __init__(self, out_dir, table, columns):
+        self.table = table
+        self.columns = columns
+        self.types = {name: data_type for name, data_type in columns}
+        self.rows = 0
+        self.path = os.path.join(out_dir, table + ".csv")
+        self.fh = open(self.path, "w", newline="", encoding="utf-8")
+        self.writer = csv.writer(self.fh, lineterminator="\n")
+        self.writer.writerow([name for name, _ in columns])
+
+    def write(self, column_names, values):
+        """Write one row, positioned by the column list the dump statement named.
+
+        The dump's COPY/INSERT column list is authoritative for ordering, and it
+        need not match the CREATE TABLE order or cover every column; a column
+        the statement omits is written as NULL.
+        """
+        by_name = dict(zip(column_names, values))
+        self.writer.writerow([
+            render(by_name.get(name), data_type) for name, data_type in self.columns
+        ])
+        self.rows += 1
+
+    def close(self):
+        self.fh.close()
+
+
+def parse_tables(text):
+    """Every CREATE TABLE in a SQL text, as {table: [(column, pinot_type), ...]}.
+
+    The DDL half of convert(), without the data half. Used by the CSV-sourced
+    datasets (geonames, openflights, moma), whose upstreams publish no SQL and
+    whose schema.sql is authored in-repo: routing those authored schemas through
+    the same reader means one PostgreSQL-type-to-Pinot mapping serves every tag
+    in this image, rather than the CSV datasets growing a second one.
+    """
+    tables = {}
+    lines = text.split("\n")
+    i, n = 0, len(lines)
+    while i < n:
+        if CREATE_TABLE_RE.match(lines[i]):
+            statement, i = read_ddl_statement(lines, i)
+            table, columns = parse_create_table(statement)
+            if table and columns:
+                tables[table] = columns
+            continue
+        i += 1
+    return tables
+
+
+def convert(text, tables, writers, out_dir):
+    """Parse one dump, creating writers for its tables and streaming its rows."""
+    lines = text.split("\n")
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+
+        if CREATE_TABLE_RE.match(line):
+            statement, i = read_ddl_statement(lines, i)
+            table, columns = parse_create_table(statement)
+            if table and columns:
+                tables[table] = columns
+                writers[table] = TableWriter(out_dir, table, columns)
+            continue
+
+        m = COPY_RE.match(line)
+        if m:
+            table = fold(m.group(1))
+            column_names = [fold(c) for c in m.group(2).split(",")]
+            delim = m.group(3) or "\t"
+            writer = writers.get(table)
+            i += 1
+            while i < n and lines[i].rstrip("\r") != "\\.":
+                if writer is not None:
+                    fields = split_copy_row(lines[i].rstrip("\r"), delim)
+                    writer.write(column_names, [copy_field(f) for f in fields])
+                i += 1
+            i += 1  # skip the \. terminator
+            continue
+
+        m = INSERT_RE.match(line)
+        if m:
+            table = fold(m.group(1))
+            column_names = [fold(c) for c in m.group(2).split(",")]
+            statement, i = read_statement(lines, i)
+            writer = writers.get(table)
+            if writer is not None:
+                body = statement[statement.upper().index("VALUES") + len("VALUES"):]
+                for group in split_tuples(body):
+                    writer.write(column_names,
+                                 [insert_value(v) for v in split_values(group)])
+            continue
+
+        i += 1
+
+
+def ends_statement(line, in_string):
+    """Track quote state across a line; report whether a ';' closes outside it.
+
+    Same helper as the DuckDB hook, and needed for the same reason: a
+    multi-row INSERT spans hundreds of lines and a literal inside it may hold a
+    semicolon, so `';' in line` is not a statement terminator test.
+    """
+    i, n, done = 0, len(line), False
+    while i < n:
+        c = line[i]
+        if in_string:
+            if c == "'" and i + 1 < n and line[i + 1] == "'":
+                i += 2; continue
+            if c == "'":
+                in_string = False
+        elif c == "'":
+            in_string = True
+        elif c == ";":
+            done = True
+        i += 1
+    return in_string, done
+
+
+def read_statement(lines, i):
+    """Collect lines[i:] up to the ';' that closes the statement."""
+    block = [lines[i]]
+    in_string, done = ends_statement(lines[i], False)
+    while not done and i + 1 < len(lines):
+        i += 1
+        block.append(lines[i])
+        in_string, done = ends_statement(lines[i], in_string)
+    return "\n".join(block), i + 1
+
+
+def read_ddl_statement(lines, i):
+    """read_statement, but with ``--`` comments removed line by line.
+
+    Kept separate from read_statement, which the INSERT path uses: there, every
+    byte between the parentheses is *data*, and a value that happens to contain
+    ``--`` (a usda description, a MoMA title) must reach the CSV intact.
+    """
+    block, in_string, done, n = [], False, False, len(lines)
+    while i < n:
+        text = strip_line_comment(lines[i], in_string)
+        block.append(text)
+        in_string, done = ends_statement(text, in_string)
+        i += 1
+        if done:
+            break
+    return "\n".join(block), i
+
+
+def write_artifacts(out_dir, tables, writers):
+    """Emit the schema/table-config JSON per table plus the tables.tsv manifest."""
+    manifest = []
+    for table in sorted(tables):
+        columns = tables[table]
+        with open(os.path.join(out_dir, table + ".schema.json"),
+                  "w", encoding="utf-8") as fh:
+            json.dump(pinot_schema(table, columns), fh, indent=2)
+            fh.write("\n")
+        with open(os.path.join(out_dir, table + ".table.json"),
+                  "w", encoding="utf-8") as fh:
+            json.dump(pinot_table_config(table), fh, indent=2)
+            fh.write("\n")
+        manifest.append("{}\t{}".format(table, writers[table].rows))
+    with open(os.path.join(out_dir, "tables.tsv"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(manifest) + ("\n" if manifest else ""))
+
+
+def main():
+    files = os.environ.get("SQL_FILES", "").split() or sorted(glob.glob("*.sql"))
+    files = [f for f in files if os.path.isfile(f)]
+    if not files:
+        sys.exit("pinot pgsql transform: no SQL files to convert")
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    tables, writers = {}, {}
+    for path in files:
+        convert(transcode(path), tables, writers, OUT_DIR)
+    for writer in writers.values():
+        writer.close()
+    if not tables:
+        sys.exit("pinot pgsql transform: no CREATE TABLE found in " + " ".join(files))
+    write_artifacts(OUT_DIR, tables, writers)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,64 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. usda is the widest
+# dataset here (10 tables, ~370k rows, nut_data alone is 253,825) and the one
+# that exercises two things nothing else does:
+#
+#   * it is a Latin-1 dump, so the transform has to transcode it. A byte
+#     sequence that survived as Latin-1 would be invalid UTF-8 in the CSV and
+#     the ingest would fail on it.
+#   * several of its food descriptions contain semicolons, which is Pinot's
+#     default multi-value delimiter. Left at that default, ingestion does not
+#     degrade -- it errors out. The entrypoint disables it, and common.yaml is
+#     where that config lives; this file just records that the data really does
+#     contain the character.
+#
+# usda also has the family's only quoted identifier that is a reserved word,
+# `"year"`, which has to come through as a plain column name.
+
+fileExistenceTests:
+  - name: "nut_data artifacts exist"
+    path: "/opt/pinot/dataset/nut_data.csv"
+    shouldExist: true
+  - name: "nut_data schema exists"
+    path: "/opt/pinot/dataset/nut_data.schema.json"
+    shouldExist: true
+  - name: "nut_data table config exists"
+    path: "/opt/pinot/dataset/nut_data.table.json"
+    shouldExist: true
+
+  - name: "food_des artifacts exist"
+    path: "/opt/pinot/dataset/food_des.csv"
+    shouldExist: true
+  - name: "data_src schema exists"
+    path: "/opt/pinot/dataset/data_src.schema.json"
+    shouldExist: true
+  - name: "weight table config exists"
+    path: "/opt/pinot/dataset/weight.table.json"
+    shouldExist: true
+
+fileContentTests:
+  - name: "usda declares all ten expected tables in the manifest"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^data_src[[:space:]]'
+      - '(?m)^datsrcln[[:space:]]'
+      - '(?m)^deriv_cd[[:space:]]'
+      - '(?m)^fd_group[[:space:]]'
+      - '(?m)^food_des[[:space:]]'
+      - '(?m)^footnote[[:space:]]'
+      - '(?m)^nut_data[[:space:]]'
+      - '(?m)^nutr_def[[:space:]]'
+      - '(?m)^src_cd[[:space:]]'
+      - '(?m)^weight[[:space:]]'
+
+  - name: "data_src keeps its quoted reserved-word column"
+    path: "/opt/pinot/dataset/data_src.schema.json"
+    expectedContents:
+      - '"name": "year",\n      "dataType": "INT"'
+
+  - name: "food_des was transcoded to UTF-8 and kept its semicolons"
+    path: "/opt/pinot/dataset/food_des.csv"
+    expectedContents:
+      - '(?m)^ndb_no,fdgrp_cd,long_desc,'
+      - 'Cartilage'

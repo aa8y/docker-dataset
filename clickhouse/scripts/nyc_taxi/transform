@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# The NYC TLC trip-record dataset ships as Parquet, not SQL, so author the two
+# statements that turn it into a table and let the generic LOAD step run them.
+#
+# Unlike the DuckDB tag -- which reads the Parquet at *build* time and ships
+# only the finished database file -- ClickHouse loads at first container start,
+# so the Parquet file itself travels into the image (the load hook next to this
+# one moves it under /docker-entrypoint-initdb.d/${DATASET}/) and the entrypoint's
+# `clickhouse-client --multiquery` reads it from there. `FROM INFILE` is a
+# client-side read: the client opens the path, decodes the Parquet and streams
+# the blocks to the server, so no server-side file access or table function is
+# involved and the path is the one inside this image.
+#
+# The schema is written out in full rather than inferred, so the table's shape is
+# a property of this repository and not of whichever month is pinned. Its column
+# names and types are the TLC's own, taken from the file itself:
+#
+#   docker run --rm -v "$PWD:/d" clickhouse/clickhouse-server:26.8.2.7-alpine \
+#     clickhouse-local -q "DESCRIBE file('/d/yellow_tripdata_2025-06.parquet')"
+#
+# which reports every column as Nullable (Parquet marks them all optional), an
+# Int32/Int64 split that is the file's own, and UTC-stamped microsecond
+# timestamps. That is reproduced here verbatim, with exactly one change:
+# `tpep_pickup_datetime` is not Nullable, because MergeTree refuses a nullable
+# sorting key ("Sorting key contains nullable columns, but merge tree setting
+# `allow_nullable_key` is disabled"). It is the natural sorting key for a trip
+# table -- almost every query over trip records filters or groups by pickup time,
+# and MergeTree's sparse index makes that a range scan -- and the pinned month
+# carries no NULL in it (4,322,960 rows, 0 nulls), so nothing is lost. The five
+# columns that *are* sparsely populated upstream (passenger_count, RatecodeID,
+# store_and_fwd_flag, congestion_surcharge, Airport_fee are NULL in 1,212,946
+# rows apiece) keep their Nullable, so a query can still tell "not recorded"
+# from zero.
+set -e
+for parquet in ./*.parquet; do
+  cat >"${DATASET}.sql" <<EOF
+-- NYC TLC yellow-taxi trip records, loaded at container start from the Parquet
+-- file fetched by EXTRACT_URL and shipped alongside this script.
+-- See clickhouse/scripts/nyc_taxi/transform.
+CREATE TABLE \`trips\` (
+  \`VendorID\` Nullable(Int32),
+  \`tpep_pickup_datetime\` DateTime64(6, 'UTC'),
+  \`tpep_dropoff_datetime\` Nullable(DateTime64(6, 'UTC')),
+  \`passenger_count\` Nullable(Int64),
+  \`trip_distance\` Nullable(Float64),
+  \`RatecodeID\` Nullable(Int64),
+  \`store_and_fwd_flag\` Nullable(String),
+  \`PULocationID\` Nullable(Int32),
+  \`DOLocationID\` Nullable(Int32),
+  \`payment_type\` Nullable(Int64),
+  \`fare_amount\` Nullable(Float64),
+  \`extra\` Nullable(Float64),
+  \`mta_tax\` Nullable(Float64),
+  \`tip_amount\` Nullable(Float64),
+  \`tolls_amount\` Nullable(Float64),
+  \`improvement_surcharge\` Nullable(Float64),
+  \`total_amount\` Nullable(Float64),
+  \`congestion_surcharge\` Nullable(Float64),
+  \`Airport_fee\` Nullable(Float64),
+  \`cbd_congestion_fee\` Nullable(Float64)
+) ENGINE = MergeTree ORDER BY (\`tpep_pickup_datetime\`);
+
+INSERT INTO \`trips\` FROM INFILE '/docker-entrypoint-initdb.d/${DATASET}/${parquet#./}' FORMAT Parquet;
+EOF
+done

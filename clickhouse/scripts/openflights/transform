@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# OpenFlights publishes no SQL, so stage the authored ClickHouse schema (shipped
+# alongside these build scripts) into the build dir as openflights.sql and
+# append the loads for the files fetched by EXTRACT_URL. The files themselves
+# are shipped next to the init script by the load hook and read at container
+# start -- `FROM INFILE` is a client-side read, so the paths are the ones inside
+# this image.
+#
+# The files are already RFC4180 CSV with no header row, so plain `FORMAT CSV`
+# reads them as-is and no settings are needed: the unquoted `\N` the data
+# dictionary uses for a missing value is ClickHouse's own default CSV null
+# representation (format_csv_null_representation), so it lands as NULL the way
+# `WITH nullif = '\N'` does on the other engines. A blank field lands as NULL
+# too, which is where this differs slightly from the postgres load (there a
+# blank is an empty string) -- for these columns, all of which are optional
+# free-text or optional ids, the two are the same statement about the row.
+set -e
+cp /usr/local/lib/scripts/openflights/schema.sql openflights.sql
+cat >>openflights.sql <<EOF
+
+INSERT INTO \`airports\` FROM INFILE '/docker-entrypoint-initdb.d/${DATASET}/airports.dat' FORMAT CSV;
+INSERT INTO \`airlines\` FROM INFILE '/docker-entrypoint-initdb.d/${DATASET}/airlines.dat' FORMAT CSV;
+INSERT INTO \`routes\` FROM INFILE '/docker-entrypoint-initdb.d/${DATASET}/routes.dat' FORMAT CSV;
+EOF

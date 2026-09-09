@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+#
+# Bring up a one-container Apache Pinot cluster and load the image's dataset
+# into it, then hold the cluster in the foreground.
+#
+# Why an entrypoint does this at all. Every other engine in this repo either
+# ships a database file (sqlite, duckdb) or drops SQL into a directory the
+# official entrypoint already replays (postgres, mysql, cockroach). Pinot has
+# neither: there is no single-file database to bake, and no init-script
+# convention in the official image -- its entrypoint is `pinot-admin.sh`, a CLI
+# multiplexer. A Pinot table is created by POSTing two JSON documents to a
+# *running* controller and filled by pushing a segment to it, so the dataset can
+# only be materialized against a live cluster. The build therefore stops at
+# authoring the artifacts (see ../scripts/pgsql/transform) and this script
+# replays them at container start, which is the same shape as the server
+# engines' init-at-start model even though the mechanism is REST rather than
+# SQL.
+#
+# Topology: all four roles in this one container.
+#   * ZooKeeper in its own small JVM. Pinot's cluster state lives in Helix,
+#     which needs ZooKeeper, and `StartServiceManager -bootstrapServices` only
+#     knows the CONTROLLER/BROKER/SERVER/MINION roles -- ZOOKEEPER is not a
+#     Pinot service role, so it cannot be bootstrapped alongside them and has
+#     to be its own process.
+#   * Controller + broker + server in a second JVM, via StartServiceManager and
+#     the three ../conf/*.conf files. `QuickStart -type EMPTY` would also give a
+#     one-JVM cluster, but it assigns its own ports (broker 8000, server 7050,
+#     ZK 2123) and starts a minion nobody here needs, so the container would not
+#     answer on the ports the base image EXPOSEs. The conf-file route keeps
+#     9000/8099/8098/8097 exactly where upstream documents them.
+#
+# The tools available inside the official image shape the code below: it is
+# Ubuntu 24.04 with bash and curl, but no jq and no python3. So the JSON that
+# comes back from the controller and broker is picked apart with bash parameter
+# expansion, and the row counts this script waits for are precomputed at build
+# time into dataset/tables.tsv rather than derived here.
+#
+# Exit is loud on purpose: any failure below aborts the container instead of
+# leaving a half-loaded cluster listening on 9000, so the test harness sees a
+# dead container rather than a silently short table.
+set -euo pipefail
+
+PINOT_HOME="${PINOT_HOME:-/opt/pinot}"
+DATASET_DIR="${PINOT_DATASET_DIR:-${PINOT_HOME}/dataset}"
+DATA_ROOT="${PINOT_DATA_ROOT:-/var/lib/pinot}"
+CONTROLLER="http://localhost:9000"
+BROKER="http://localhost:8099"
+
+# One wall-clock budget for the whole bring-up (cluster start + table creation +
+# ingestion + the wait for every row to be queryable). Generous because the
+# floor is dominated by two JVM starts and Helix's own settling time, and the
+# ceiling by the largest dataset's segment build; a container that blows it is
+# broken, not slow.
+READY_TIMEOUT="${PINOT_READY_TIMEOUT:-900}"
+
+# The batch config handed to the controller's ingestion endpoint, once per CSV.
+# Two of its three keys are not optional, and both were found the hard way:
+#
+#   nullStringValue=\N       The transform hook writes SQL NULL as a literal
+#                            \N (PostgreSQL's own COPY marker, which it escapes
+#                            in real data, so it is unambiguous). Left at the
+#                            default, Pinot would store those two characters as
+#                            *text* in every nullable column.
+#   multiValueDelimiter=""   Disabled. Pinot's CSV reader otherwise splits every
+#                            field on ';' to build multi-valued columns -- and
+#                            when the column is single-valued, as all of these
+#                            are, the ingest does not degrade, it *fails*
+#                            ("Caught exception while reading data"). usda's
+#                            food descriptions contain semicolons, so this is
+#                            the difference between a working image and none.
+#
+# The CSVs carry a header line, which the reader picks up by default, and the
+# delimiter is the default comma.
+BATCH_CONFIG='{"inputFormat":"csv","recordReader.prop.nullStringValue":"\\N","recordReader.prop.multiValueDelimiter":""}'
+
+log() { printf 'pinot-dataset: %s\n' "$*"; }
+die() { printf 'pinot-dataset: error: %s\n' "$*" >&2; exit 1; }
+
+urlencode() {
+  # urlencode <string> — percent-encode for a query string. Hand-rolled because
+  # the image has neither jq nor python3, and curl's --data-urlencode only
+  # applies to a request *body*; the ingestion endpoint takes its config in the
+  # query string alongside a multipart body.
+  local s="$1" out="" i c
+  for (( i = 0; i < ${#s}; i++ )); do
+    c="${s:i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-]) out+="$c" ;;
+      *)               out+=$(printf '%%%02X' "'$c") ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+json_number_after() {
+  # json_number_after <json> <needle> — the first integer following <needle>.
+  # Enough of a JSON reader for the two shapes this script consumes, and the
+  # callers check the result is numeric before trusting it.
+  local json="$1" needle="$2" rest
+  case "$json" in
+    *"$needle"*) rest="${json#*"$needle"}" ;;
+    *)           return 1 ;;
+  esac
+  rest="${rest%%[!0-9-]*}"
+  [ -n "$rest" ] || return 1
+  printf '%s' "$rest"
+}
+
+broker_count() {
+  # broker_count <table> — SELECT COUNT(*), or a non-zero return if the query
+  # did not come back clean. A response carrying anything in "exceptions" is
+  # treated as a failure rather than parsed: mid-startup the broker will happily
+  # answer "0 rows" for a table whose segments have not landed yet, and taking
+  # that at face value is exactly how a half-loaded image would pass.
+  local table="$1" response
+  response="$(curl -sS -m 30 -X POST -H 'Content-Type: application/json' \
+    -d "{\"sql\":\"SELECT COUNT(*) FROM \\\"${table}\\\"\"}" \
+    "${BROKER}/query/sql" 2>/dev/null)" || return 1
+  case "$response" in
+    *'"exceptions":[]'*) ;;
+    *) return 1 ;;
+  esac
+  json_number_after "$response" '"rows":[[' || return 1
+}
+
+# ---------------------------------------------------------------------------
+# Process supervision.
+# ---------------------------------------------------------------------------
+ZK_PID=""
+SM_PID=""
+
+shutdown() {
+  # Forward the stop signal to both JVMs and reap them, so `docker stop` is a
+  # clean shutdown rather than a 10-second wait for SIGKILL. pinot-admin.sh
+  # `exec`s the JVM, so $! is the java process itself and the signal lands on
+  # it directly.
+  log "stopping"
+  [ -n "$SM_PID" ] && kill -TERM "$SM_PID" 2>/dev/null || true
+  [ -n "$ZK_PID" ] && kill -TERM "$ZK_PID" 2>/dev/null || true
+  wait "$SM_PID" 2>/dev/null || true
+  wait "$ZK_PID" 2>/dev/null || true
+  exit 0
+}
+trap shutdown TERM INT
+
+# ---------------------------------------------------------------------------
+# Escape hatch: with arguments, behave exactly like the base image.
+# ---------------------------------------------------------------------------
+# The official image's entrypoint is `./bin/pinot-admin.sh`, so
+# `docker run <image> <subcommand>` is its documented interface. Preserve it:
+# only a bare `docker run` starts the dataset cluster.
+if [ "$#" -gt 0 ]; then
+  exec "${PINOT_HOME}/bin/pinot-admin.sh" "$@"
+fi
+
+[ -f "${DATASET_DIR}/tables.tsv" ] || die "no dataset manifest at ${DATASET_DIR}/tables.tsv"
+
+cd "$PINOT_HOME"
+mkdir -p "${DATA_ROOT}/zk" "${DATA_ROOT}/controller" \
+         "${DATA_ROOT}/server/index" "${DATA_ROOT}/server/segmentTar"
+
+deadline=$(( SECONDS + READY_TIMEOUT ))
+
+# ---------------------------------------------------------------------------
+# 1. ZooKeeper.
+# ---------------------------------------------------------------------------
+# Its own JAVA_OPTS: ZooKeeper here holds a handful of Helix znodes for one
+# cluster with one node, so it gets a fraction of the heap the Pinot JVM does
+# and the container's total stays well under what a single -Xmx4G default would
+# have reserved.
+log "starting zookeeper"
+JAVA_OPTS="${PINOT_ZK_JAVA_OPTS:--Xms64M -Xmx256M}" \
+  ./bin/pinot-admin.sh StartZookeeper -zkPort 2181 -dataDir "${DATA_ROOT}/zk" &
+ZK_PID=$!
+
+# /dev/tcp rather than a client call: there is no zkCli in this image and no nc,
+# and bash's own network redirection answers the only question that matters --
+# is something accepting connections on 2181 yet.
+until (exec 3<>/dev/tcp/localhost/2181) 2>/dev/null; do
+  kill -0 "$ZK_PID" 2>/dev/null || die "zookeeper exited during startup"
+  (( SECONDS < deadline )) || die "zookeeper did not start within ${READY_TIMEOUT}s"
+  sleep 1
+done
+exec 3<&- 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 2. Controller + broker + server, one JVM.
+# ---------------------------------------------------------------------------
+log "starting controller, broker and server"
+./bin/pinot-admin.sh StartServiceManager \
+  -bootstrapConfigPaths conf/controller.conf conf/broker.conf conf/server.conf &
+SM_PID=$!
+
+wait_http() {
+  # wait_http <label> <url> — poll until the endpoint answers 200.
+  local label="$1" url="$2"
+  until [ "$(curl -sS -o /dev/null -w '%{http_code}' -m 5 "$url" 2>/dev/null)" = "200" ]; do
+    kill -0 "$SM_PID" 2>/dev/null || die "${label} exited during startup"
+    (( SECONDS < deadline )) || die "${label} did not become healthy within ${READY_TIMEOUT}s"
+    sleep 2
+  done
+}
+wait_http controller "${CONTROLLER}/health"
+wait_http broker "${BROKER}/health"
+
+# The server registers with Helix a moment after its HTTP listener is up, and a
+# table created before it has joined gets no segment assignment at all. Wait for
+# the controller to actually list a live server instance.
+until curl -sS -m 10 "${CONTROLLER}/instances" 2>/dev/null | grep -q '"Server_'; do
+  kill -0 "$SM_PID" 2>/dev/null || die "service manager exited while the server was registering"
+  (( SECONDS < deadline )) || die "no server instance registered within ${READY_TIMEOUT}s"
+  sleep 2
+done
+
+# ---------------------------------------------------------------------------
+# 3. Create every table, then ingest its rows.
+# ---------------------------------------------------------------------------
+# Sequentially, not in parallel: each ingestion builds a whole segment in the
+# controller's heap, and doing several at once is how a small -Xmx turns into an
+# OOM on the wider datasets.
+batch_config_encoded="$(urlencode "$BATCH_CONFIG")"
+table_count=0
+
+while IFS=$'\t' read -r table rows; do
+  [ -n "$table" ] || continue
+  table_count=$(( table_count + 1 ))
+
+  response="$(curl -sS -m 60 -X POST \
+    -F "schemaName=@${DATASET_DIR}/${table}.schema.json" "${CONTROLLER}/schemas")" \
+    || die "${table}: schema POST failed"
+  case "$response" in
+    *'successfully added'*) ;;
+    *) die "${table}: schema rejected: ${response}" ;;
+  esac
+
+  response="$(curl -sS -m 60 -X POST -H 'Content-Type: application/json' \
+    -d "@${DATASET_DIR}/${table}.table.json" "${CONTROLLER}/tables")" \
+    || die "${table}: table config POST failed"
+  case "$response" in
+    *'successfully added'*) ;;
+    *) die "${table}: table config rejected: ${response}" ;;
+  esac
+
+  # The controller's synchronous ingestion endpoint: it reads the uploaded CSV,
+  # builds one segment, and pushes it to the deep store before answering. A
+  # 0-row CSV (dellstore's `reorder`) is fine -- it produces an empty segment,
+  # which keeps the table queryable and counting 0 rather than erroring.
+  response="$(curl -sS -m 1800 -X POST -F "file=@${DATASET_DIR}/${table}.csv" \
+    "${CONTROLLER}/ingestFromFile?tableNameWithType=${table}_OFFLINE&batchConfigMapStr=${batch_config_encoded}")" \
+    || die "${table}: ingestion request failed"
+  case "$response" in
+    *'Successfully ingested'*) ;;
+    *) die "${table}: ingestion failed: ${response}" ;;
+  esac
+  log "loaded ${table} (${rows} rows)"
+done < "${DATASET_DIR}/tables.tsv"
+
+# ---------------------------------------------------------------------------
+# 4. Wait for every row to actually be queryable.
+# ---------------------------------------------------------------------------
+# A pushed segment is not a queryable segment: the controller has to assign it,
+# the server has to download and mmap it, and the broker has to pick up the
+# routing change. Waiting for the exact row count the build recorded -- rather
+# than for a segment to exist, or for a non-zero answer -- is what makes the
+# ready marker below mean "all of this dataset is here".
+while IFS=$'\t' read -r table rows; do
+  [ -n "$table" ] || continue
+  until [ "$(broker_count "$table" || echo unavailable)" = "$rows" ]; do
+    kill -0 "$SM_PID" 2>/dev/null || die "service manager exited while ${table} was loading"
+    (( SECONDS < deadline )) || die "${table} did not reach ${rows} rows within ${READY_TIMEOUT}s"
+    sleep 2
+  done
+done < "${DATASET_DIR}/tables.tsv"
+
+# The single line every consumer keys on: test/integration/run-pinot.sh waits
+# for it before querying, and a human watching `docker logs` gets one
+# unambiguous "it is up" among Pinot's very chatty startup output.
+log "${DATASET:-dataset} ready (${table_count} tables)"
+
+# Hold the cluster in the foreground. Interrupted by the TERM trap above.
+wait "$SM_PID"

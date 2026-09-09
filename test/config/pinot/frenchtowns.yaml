@@ -1,0 +1,67 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. frenchtowns is the
+# pgFoundry French communes sample, and the dump that exercises two of the
+# transform's sharper edges:
+#
+#   * it declares `CREATE TABLE Regions` but loads `COPY regions`. Pinot table
+#     names are case-sensitive, so without PostgreSQL's own identifier folding
+#     the DDL and the data would land in two different tables and every table
+#     would ship empty. Hence the lower-case names asserted below -- note these
+#     differ from the DuckDB tag, which is case-preserving and keeps `Regions`.
+#   * it annotates half its columns with inline `--` comments, one of which is a
+#     commented-out `REFERENCES Towns (code),`. Read naively those become
+#     columns named `--` and swallow `article`/`department`, which the row count
+#     would not notice; the towns header assertion is what pins that down.
+
+fileExistenceTests:
+  - name: "regions artifacts exist"
+    path: "/opt/pinot/dataset/regions.csv"
+    shouldExist: true
+  - name: "regions schema exists"
+    path: "/opt/pinot/dataset/regions.schema.json"
+    shouldExist: true
+  - name: "regions table config exists"
+    path: "/opt/pinot/dataset/regions.table.json"
+    shouldExist: true
+
+  - name: "departments artifacts exist"
+    path: "/opt/pinot/dataset/departments.csv"
+    shouldExist: true
+  - name: "departments schema exists"
+    path: "/opt/pinot/dataset/departments.schema.json"
+    shouldExist: true
+  - name: "departments table config exists"
+    path: "/opt/pinot/dataset/departments.table.json"
+    shouldExist: true
+
+  - name: "towns artifacts exist"
+    path: "/opt/pinot/dataset/towns.csv"
+    shouldExist: true
+  - name: "towns schema exists"
+    path: "/opt/pinot/dataset/towns.schema.json"
+    shouldExist: true
+  - name: "towns table config exists"
+    path: "/opt/pinot/dataset/towns.table.json"
+    shouldExist: true
+
+fileContentTests:
+  - name: "frenchtowns folds its declared identifiers to lower case"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^regions[[:space:]]'
+      - '(?m)^departments[[:space:]]'
+      - '(?m)^towns[[:space:]]'
+    excludedContents:
+      - '(?m)^Regions[[:space:]]'
+      - '(?m)^Towns[[:space:]]'
+
+  - name: "towns keeps the columns its inline comments sit next to"
+    path: "/opt/pinot/dataset/towns.csv"
+    expectedContents:
+      - '(?m)^id,code,article,name,department$'
+
+  - name: "no column was parsed out of a SQL comment"
+    path: "/opt/pinot/dataset/towns.schema.json"
+    excludedContents:
+      - '"name": "--"'

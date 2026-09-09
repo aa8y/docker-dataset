@@ -1,0 +1,43 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. world is the pgFoundry
+# three-table sample (city, country, countrylanguage), read out of its
+# PostgreSQL dump at build time by the shared scripts/pgsql hook into one CSV
+# and one native batch spec per table. Both halves are asserted: a spec with no
+# data file (or the reverse) would boot into a failed ingestion task, which is
+# far more expensive to discover in the integration test.
+#
+# The spec bodies are checked for the two settings the row counts depend on --
+# `"rollup": false`, without which Druid would merge identical rows and
+# COUNT(*) would stop counting rows, and the local inputSource pointing at the
+# runtime data directory. Row counts themselves are the integration test's job.
+
+fileExistenceTests:
+  - name: "city ingestion spec exists"
+    path: "/opt/druid/dataset/specs/city.json"
+    shouldExist: true
+  - name: "city data file exists"
+    path: "/opt/druid/dataset/data/city.csv"
+    shouldExist: true
+
+  - name: "country ingestion spec exists"
+    path: "/opt/druid/dataset/specs/country.json"
+    shouldExist: true
+  - name: "country data file exists"
+    path: "/opt/druid/dataset/data/country.csv"
+    shouldExist: true
+
+  - name: "countrylanguage ingestion spec exists"
+    path: "/opt/druid/dataset/specs/countrylanguage.json"
+    shouldExist: true
+  - name: "countrylanguage data file exists"
+    path: "/opt/druid/dataset/data/countrylanguage.csv"
+    shouldExist: true
+
+fileContentTests:
+  - name: "city spec names its datasource and disables rollup"
+    path: "/opt/druid/dataset/specs/city.json"
+    expectedContents:
+      - '"dataSource": "city"'
+      - '"rollup": false'
+      - '"baseDir": "/opt/druid/dataset/data"'

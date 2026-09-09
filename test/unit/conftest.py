@@ -124,3 +124,40 @@ def moma():
     # import, so loading is side-effect free -- but both must be patched on the
     # module object before main() runs.
     return _load("moma_transform", "cockroach/scripts/moma/transform")
+
+
+@pytest.fixture(scope="session")
+def pinot_pgsql():
+    # OUT_DIR is bound from $PINOT_DATASET_DIR at import time, like the cockroach
+    # hooks' CSV_DIR: a test that runs main() must patch the module attribute
+    # (or reload the module with the env var already set, as the golden test in
+    # test_pinot_pgsql.py does) -- setting the env var inside a test is too late.
+    return _load("pinot_pgsql_transform", "pinot/scripts/pgsql/transform")
+
+
+@pytest.fixture(scope="session")
+def clickhouse_pgsql():
+    return _load("clickhouse_pgsql_transform", "clickhouse/scripts/pgsql/transform")
+
+
+@pytest.fixture(scope="session")
+def se_clickhouse():
+    return _load("se_clickhouse_transform", "clickhouse/scripts/stackexchange/transform")
+
+
+@pytest.fixture(scope="session")
+def druid_pgsql():
+    # DATA_DIR, SPEC_DIR and RUNTIME_DATA_DIR are bound from the environment at
+    # import time (the Dockerfile sets them), so a test that runs main() must
+    # monkeypatch.setattr them on the module object -- setting the env vars
+    # inside the test is too late. Same shape as the cockroach moma/stackexchange
+    # hooks above; test_druid_pgsql.py wraps it in a per-test fixture that does.
+    return _load("druid_pgsql_transform", "druid/scripts/pgsql/transform")
+
+
+@pytest.fixture(scope="session")
+def pgdump():
+    # An ordinary module rather than a hook, but loaded the same way for
+    # symmetry (and because the hooks that use it reach it by absolute path
+    # inside the builder, not by package import).
+    return _load("druid_pgdump", "druid/scripts/pgdump.py")

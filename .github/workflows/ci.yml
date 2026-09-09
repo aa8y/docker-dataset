@@ -54,11 +54,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 5 contexts x 2 native runners = 10 shards. Sharding by context bounds
+        # 8 contexts x 2 native runners = 16 shards. Sharding by context bounds
         # the critical path at the slowest single context on one arch instead
         # of every context serially on one runner, and each shard's dave run
         # is further parallelized within a command type via --jobs.
-        context: [postgres, mysql, sqlite, cockroach, duckdb]
+        context: [postgres, mysql, sqlite, cockroach, duckdb, clickhouse, druid, pinot]
         arch: [amd64, arm64]
         include:
           - arch: amd64
@@ -69,8 +69,19 @@ jobs:
             runner: ubuntu-24.04-arm
             platform: linux/arm64
             cst_arch: arm64
+          # Per-context shard budget, read by timeout-minutes below (30 when
+          # unset). Pinot's base image is ~2.65 GB unpacked and every one of
+          # its tags boots a two-JVM cluster that builds real segments at
+          # container start; Druid downloads a 625 MB engine tarball on a cold
+          # cache and every one of its tags boots six JVMs and re-ingests at
+          # container start. Both shards need more headroom than the SQL
+          # engines.
+          - context: pinot
+            timeout: 45
+          - context: druid
+            timeout: 45
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout || 30 }}
     env:
       # Build only this runner's native platform; the buildcache refs are
       # arch-scoped so the two arches never clobber each other's cache (the

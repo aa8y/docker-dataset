@@ -1,0 +1,511 @@
+#!/usr/bin/env python3
+"""Turn a PostgreSQL SQL dump into Apache Druid ingestion artifacts at build time.
+
+Where the other engines' pgsql hooks *rewrite* a dump into SQL their engine can
+run, Druid has no SQL load path at all: a datasource comes into existence only
+when an ingestion task writes segments for it. So this hook does not translate
+SQL -- it reads the dump and emits, for each table, the two files the image
+ships and the entrypoint feeds to the Overlord on first boot:
+
+    $DATA_DIR/<table>.csv     the rows, as RFC 4180 CSV with no header
+    $SPEC_DIR/<table>.json    a native batch (`index_parallel`) ingestion spec
+
+One table becomes one datasource of the same name, so `SELECT * FROM city`
+works here exactly as it does on the relational engines. Everything below is
+dataset-agnostic and keyed only on $SQL_FILES; each dataset that needs it
+symlinks its scripts/<dataset> directory to scripts/pgsql, exactly like the
+DuckDB and SQLite sides.
+
+What is parsed
+--------------
+Only three constructs matter, and these dumps are pg_dump output so all three
+are regular:
+
+  * ``CREATE TABLE <name> ( ... );`` -- the column names, in order, and their
+    declared types and NOT NULL flags. Constraint clauses (PRIMARY KEY, FOREIGN
+    KEY, UNIQUE, CHECK, CONSTRAINT ...) are skipped: Druid has no constraints.
+  * ``COPY <table> (cols) FROM stdin [DELIMITER 'x'];`` + TEXT-format rows + a
+    ``\\.`` terminator -- the pgFoundry dumps' data format, tab-separated by
+    default and pipe-separated in iso3166. The COPY escapes (``\\N`` for NULL,
+    ``\\t``/``\\n``/``\\r``/``\\\\`` and octal ``\\NNN``) are decoded here.
+  * ``INSERT INTO <table> (cols) VALUES (...), (...);`` -- the Yugabyte
+    clubdata (pgexercises) dump's format, one statement spanning thousands of
+    lines. Values are tokenized rather than regex-matched, because a string
+    literal may contain commas, parentheses and doubled quotes.
+
+Everything else in a dump -- SET, GRANT, setval, ALTER TABLE, CREATE INDEX,
+PL/pgSQL functions, schema declarations -- is simply not looked at, because
+none of it has a Druid counterpart.
+
+Identifier folding follows PostgreSQL's own rule: an unquoted identifier folds
+to lower case, a double-quoted one keeps its case. That is what makes
+frenchtowns work, whose DDL declares ``Regions``/``Departments``/``Towns`` and
+whose COPY blocks name ``regions``/``departments``/``towns`` -- the same table
+under PostgreSQL rules, and so the same datasource here. (The DuckDB tag keeps
+the declared spelling instead, because DuckDB is case-preserving; these tags
+match the PostgreSQL, MySQL, SQLite and CockroachDB spelling.)
+
+Type mapping
+------------
+Druid dimensions are typed, and picking a type per column (rather than letting
+Druid's schema discovery guess) keeps a column's type stable across rebuilds:
+
+    smallint, integer, bigint, serial and friends       -> long
+    real, double precision, numeric, decimal, money     -> double
+    everything else (text, char, varchar, boolean,
+    date, timestamp, ...)                               -> string
+
+`boolean` maps to string on purpose: Druid has no boolean dimension type, and
+the COPY encoding is already the two strings ``t``/``f``. Date and timestamp
+columns also map to string so their exact source text survives; the one that
+becomes ``__time`` (below) is *additionally* kept as a dimension, so no column
+is lost either way.
+
+`__time`
+--------
+Druid requires every row to have a primary timestamp. The first NOT NULL
+date/timestamp column of a table becomes it, with an explicit Joda format --
+`date` columns are ``yyyy-MM-dd``, `timestamp` columns ``yyyy-MM-dd HH:mm:ss``
+-- rather than Druid's `auto`, which does not accept the space-separated form
+pg_dump writes. Every value is verified against that format here, at build
+time, and a single unparseable one demotes the table to the constant fallback
+below. That check is not paranoia: Druid *silently drops* a row whose timestamp
+cannot be parsed, and these images are asserted on exact ``COUNT(*)`` parity
+with their PostgreSQL and DuckDB siblings, so a dropped row would surface as a
+mysterious count mismatch rather than as an error.
+
+A table with no such column (most of them: world, iso3166, frenchtowns and usda
+have no date columns at all) gets a constant timestamp instead, via
+``timestampSpec.missingValue``. Nothing is lost by that: the specs set
+``rollup: false`` and ``segmentGranularity: ALL``, so ``__time`` never merges
+rows and never splits segments.
+
+Two deliberate lossy edges, both reported at build time
+------------------------------------------------------
+  * Druid's CSV reader splits input into lines before parsing them, so a value
+    containing a newline cannot round-trip. Carriage returns and newlines
+    inside a value are replaced with a single space, and the count of affected
+    values is printed.
+  * Druid cannot represent an empty datasource: an ingestion task that produces
+    no segments succeeds and leaves nothing behind to query. A table with zero
+    rows is therefore skipped (dellstore's `reorder` is the only one in these
+    datasets), and named on stderr so it never goes unnoticed.
+"""
+import csv
+import glob
+import json
+import os
+import re
+import sys
+from datetime import datetime
+
+# Where the artifacts are written at build time, and where the data files will
+# live at *run* time -- the ingestion spec's inputSource has to name the latter.
+# Both are set by the Dockerfile and overridden by the unit tests.
+DATA_DIR = os.environ.get("DATA_DIR", "/druid-dataset/data")
+SPEC_DIR = os.environ.get("SPEC_DIR", "/druid-dataset/specs")
+RUNTIME_DATA_DIR = os.environ.get("RUNTIME_DATA_DIR", "/opt/druid/dataset/data")
+
+# The primary timestamp for tables that have no natural one. Any fixed instant
+# would do; a round one makes it obvious in a query result that it is a
+# placeholder rather than data.
+CONSTANT_TIME = "2000-01-01T00:00:00Z"
+# timestampSpec.column must name something; a name no dump can produce keeps
+# Druid on the missingValue path.
+CONSTANT_TIME_COLUMN = "!no-timestamp-column!"
+
+# PostgreSQL base types, matched against the first word(s) of a column's
+# declared type after any precision/length is stripped.
+LONG_TYPES = {
+    "smallint", "integer", "int", "int2", "int4", "int8", "bigint",
+    "serial", "bigserial", "smallserial", "serial2", "serial4", "serial8",
+}
+DOUBLE_TYPES = {
+    "real", "double", "double precision", "float", "float4", "float8",
+    "numeric", "decimal", "money",
+}
+# Joda pattern for the spec, and the strptime pattern used to verify it here.
+TIME_FORMATS = {
+    "date": ("yyyy-MM-dd", "%Y-%m-%d"),
+    "timestamp": ("yyyy-MM-dd HH:mm:ss", "%Y-%m-%d %H:%M:%S"),
+}
+
+CREATE_TABLE_RE = re.compile(
+    r'^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)\s*\(', re.IGNORECASE)
+COPY_RE = re.compile(
+    r"^COPY\s+([^\s(]+)\s*\(([^)]*)\)\s+FROM\s+stdin"
+    r"(?:\s+DELIMITER\s+'([^']*)')?\s*;", re.IGNORECASE)
+INSERT_RE = re.compile(
+    r'^\s*INSERT\s+INTO\s+([^\s(]+)\s*\(([^)]*)\)\s+VALUES\b', re.IGNORECASE)
+# Lines inside a CREATE TABLE body that declare a constraint, not a column.
+CONSTRAINT_RE = re.compile(
+    r'^\s*(CONSTRAINT|PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|EXCLUDE)\b',
+    re.IGNORECASE)
+
+
+def transcode(path):
+    """Read a dump as text. world / usda / dellstore ship Latin-1 bytes."""
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+def fold(identifier):
+    """PostgreSQL identifier folding: unquoted lowercases, quoted keeps case."""
+    identifier = identifier.strip().split(".")[-1].strip()
+    if identifier.startswith('"') and identifier.endswith('"'):
+        return identifier[1:-1]
+    return identifier.lower()
+
+
+def dimension_type(pg_type):
+    """Map a declared PostgreSQL type onto a Druid dimension type."""
+    base = re.sub(r"\(.*", "", pg_type).strip().lower()
+    if base in LONG_TYPES:
+        return "long"
+    if base in DOUBLE_TYPES or base.startswith("double"):
+        return "double"
+    return "string"
+
+
+def time_formats(pg_type):
+    """(joda, strptime) patterns if this type is a usable timestamp, else None."""
+    base = re.sub(r"\(.*", "", pg_type).strip().lower()
+    if base.startswith("timestamp"):
+        return TIME_FORMATS["timestamp"]
+    if base == "date":
+        return TIME_FORMATS["date"]
+    return None
+
+
+def parse_create_table(lines, i):
+    """Read the CREATE TABLE block at lines[i]; return (table, columns, next_i).
+
+    `columns` is a list of (name, pg_type, not_null). The body ends at the first
+    line whose first non-blank character is the closing paren -- checked after
+    stripping, because frenchtowns indents its closing paren where pg_dump's
+    output does not.
+    """
+    table = fold(CREATE_TABLE_RE.match(lines[i]).group(1))
+    columns = []
+    i += 1
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith(")"):
+            return table, columns, i + 1
+        i += 1
+        body = line.strip().rstrip(",").strip()
+        if not body or body.startswith("--") or CONSTRAINT_RE.match(body):
+            continue
+        m = re.match(r'("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)\s+(.*)$', body)
+        if not m:
+            continue
+        rest = m.group(2)
+        not_null = bool(re.search(r"\bNOT\s+NULL\b", rest, re.IGNORECASE))
+        # Strip the column constraints that may follow the type, leaving the
+        # type itself (which may carry a parenthesised precision).
+        pg_type = re.split(
+            r"\s+(?:NOT\s+NULL|NULL|DEFAULT|PRIMARY|UNIQUE|REFERENCES|CHECK|CONSTRAINT|COLLATE)\b",
+            rest, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        columns.append((fold(m.group(1)), pg_type, not_null))
+    return table, columns, i
+
+
+_UNESCAPE = {"t": "\t", "n": "\n", "r": "\r", "\\": "\\",
+             "b": "\b", "f": "\f", "v": "\v"}
+
+
+def split_copy_row(line, delim):
+    """Split a COPY TEXT row on unescaped delimiters, keeping escape pairs."""
+    fields, cur, i, n = [], [], 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n:
+            cur.append(line[i:i + 2]); i += 2; continue
+        if c == delim:
+            fields.append("".join(cur)); cur = []; i += 1; continue
+        cur.append(c); i += 1
+    fields.append("".join(cur))
+    return fields
+
+
+def copy_value(field):
+    """Decode one COPY TEXT field. ``\\N`` is NULL, which CSV writes as empty."""
+    if field == "\\N":
+        return None
+    out, i = [], 0
+    while i < len(field):
+        if field[i] == "\\" and i + 1 < len(field):
+            nxt = field[i + 1]
+            if nxt in _UNESCAPE:
+                out.append(_UNESCAPE[nxt]); i += 2; continue
+            octal = re.match(r"[0-7]{1,3}", field[i + 1:i + 4])
+            if octal:
+                out.append(chr(int(octal.group(0), 8)))
+                i += 1 + len(octal.group(0)); continue
+            out.append(nxt); i += 2; continue
+        out.append(field[i]); i += 1
+    return "".join(out)
+
+
+def parse_insert_tuples(text):
+    """Yield one list of values per ``(...)`` tuple in an INSERT's VALUES list.
+
+    Tokenized rather than regex-split: a literal may hold commas, parentheses
+    and doubled quotes ('8 Bloomsbury Close, Boston'), all of which a naive
+    split would cut in the wrong place.
+
+    Quoted and unquoted text are collected separately, which settles the two
+    questions a single buffer gets wrong. Whitespace outside a literal is SQL
+    formatting and must go; whitespace inside one is data and must stay. And a
+    *bare* NULL is a null while a quoted 'NULL' is the four-character string,
+    so nullness is decided by where the token came from, not by what it reads.
+    Everything else passes through as its source text, which is what the CSV
+    wants.
+    """
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "(":
+            i += 1
+            continue
+        i += 1
+        values, literal, bare, in_string, quoted = [], [], [], False, False
+        while i < n:
+            c = text[i]
+            if in_string:
+                if c == "'" and i + 1 < n and text[i + 1] == "'":
+                    literal.append("'"); i += 2; continue
+                if c == "'":
+                    in_string = False; i += 1; continue
+                literal.append(c); i += 1; continue
+            if c == "'":
+                in_string = True; quoted = True; i += 1; continue
+            if c == "," or c == ")":
+                if quoted:
+                    values.append("".join(literal))
+                else:
+                    token = "".join(bare).strip()
+                    values.append(None if token.upper() == "NULL" else token)
+                literal, bare, quoted = [], [], False
+                i += 1
+                if c == ")":
+                    break
+                continue
+            bare.append(c); i += 1
+        yield values
+
+
+class Table:
+    """Accumulates one table's rows on their way to CSV, and what the spec needs.
+
+    Rows are streamed to disk as they are parsed rather than collected: usda's
+    nut_data alone is 253,825 rows, and there is no reason for the builder to
+    hold a dataset in memory.
+    """
+
+    def __init__(self, name, columns):
+        self.name = name
+        self.columns = columns          # [(name, pg_type, not_null)]
+        self.names = [c[0] for c in columns]
+        self.rows = 0
+        self.sanitized = 0
+        self.path = os.path.join(DATA_DIR, name + ".csv")
+        self._fh = open(self.path, "w", newline="", encoding="utf-8")
+        self._writer = csv.writer(self._fh, lineterminator="\n")
+        # Every NOT NULL date/timestamp column, best first, still eligible to be
+        # __time. A value that fails to parse strikes its column off the list.
+        self._candidates = [
+            (name_, time_formats(pg_type))
+            for name_, pg_type, not_null in columns
+            if not_null and time_formats(pg_type)
+        ]
+
+    def write(self, values, order):
+        """Write one row. `order` is the column order this data block uses."""
+        by_name = dict(zip(order, values))
+        row = []
+        for name in self.names:
+            value = by_name.get(name)
+            if value is None:
+                row.append("")
+                continue
+            clean = value.replace("\r", " ").replace("\n", " ")
+            if clean != value:
+                self.sanitized += 1
+            row.append(clean)
+        self._writer.writerow(row)
+        self.rows += 1
+        self._check_candidates(by_name)
+
+    def _check_candidates(self, by_name):
+        for candidate in list(self._candidates):
+            name, (_, strptime_fmt) = candidate
+            value = by_name.get(name)
+            try:
+                datetime.strptime((value or "").strip(), strptime_fmt)
+            except (ValueError, TypeError):
+                self._candidates.remove(candidate)
+
+    def close(self):
+        self._fh.close()
+
+    def timestamp_spec(self):
+        """The timestampSpec: a verified natural column, or the constant."""
+        if self._candidates:
+            name, (joda_fmt, _) = self._candidates[0]
+            return {"column": name, "format": joda_fmt}
+        return {"column": CONSTANT_TIME_COLUMN, "format": "auto",
+                "missingValue": CONSTANT_TIME}
+
+    def spec(self):
+        """The native batch ingestion spec Druid is handed on first boot."""
+        return {
+            "type": "index_parallel",
+            "spec": {
+                "dataSchema": {
+                    "dataSource": self.name,
+                    "timestampSpec": self.timestamp_spec(),
+                    # Explicit and typed: schema discovery would otherwise infer
+                    # a column's type per build, so a refreshed upstream could
+                    # silently change one.
+                    "dimensionsSpec": {"dimensions": [
+                        {"type": dimension_type(pg_type), "name": name}
+                        for name, pg_type, _ in self.columns
+                    ]},
+                    "granularitySpec": {
+                        "type": "uniform",
+                        # One segment per datasource, however wide the data's
+                        # time range: these are small, static tables.
+                        "segmentGranularity": "ALL",
+                        # NONE, not ALL. queryGranularity truncates __time to
+                        # the start of its bucket, and the ALL bucket starts at
+                        # Druid's minimum instant -- so ALL would rewrite every
+                        # row's __time to -146136543-09-08, discarding both the
+                        # real timestamps the dellstore/pgexercises tables have
+                        # and the readable constant below. With rollup off it
+                        # buys nothing in return, since nothing is being merged.
+                        "queryGranularity": "NONE",
+                        # Mandatory: with rollup on, Druid would collapse
+                        # identical rows and COUNT(*) would stop counting rows.
+                        "rollup": False,
+                    },
+                },
+                "ioConfig": {
+                    "type": "index_parallel",
+                    "inputSource": {
+                        "type": "local",
+                        "baseDir": RUNTIME_DATA_DIR,
+                        "filter": self.name + ".csv",
+                    },
+                    "inputFormat": {
+                        "type": "csv",
+                        "findColumnsFromHeader": False,
+                        "columns": self.names,
+                    },
+                },
+                "tuningConfig": {
+                    "type": "index_parallel",
+                    # One sub-task, so the ingestion runs in a single peon and
+                    # the image's peak memory does not depend on table count.
+                    "maxNumConcurrentSubTasks": 1,
+                    "partitionsSpec": {"type": "dynamic"},
+                },
+            },
+        }
+
+
+def convert(lines, tables):
+    """Walk the dump, filling `tables` from its DDL and its data blocks."""
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+
+        if CREATE_TABLE_RE.match(line):
+            name, columns, i = parse_create_table(lines, i)
+            if columns and name not in tables:
+                tables[name] = Table(name, columns)
+            continue
+
+        m = COPY_RE.match(line)
+        if m:
+            name = fold(m.group(1))
+            order = [fold(c) for c in m.group(2).split(",")]
+            delim = m.group(3) or "\t"
+            table = tables.get(name)
+            i += 1
+            while i < n and lines[i].rstrip("\r") != "\\.":
+                if table is not None:
+                    table.write(
+                        [copy_value(f) for f in split_copy_row(lines[i], delim)],
+                        order)
+                i += 1
+            i += 1  # skip the \. terminator
+            continue
+
+        m = INSERT_RE.match(line)
+        if m:
+            name = fold(m.group(1))
+            order = [fold(c) for c in m.group(2).split(",")]
+            table = tables.get(name)
+            # The statement runs to the ';' that closes it; clubdata's are
+            # thousands of lines long, so the block is gathered and tokenized
+            # rather than matched line by line.
+            block = [line[m.end():]]
+            while i + 1 < n and not block[-1].rstrip().endswith(";"):
+                i += 1
+                block.append(lines[i])
+            if table is not None:
+                for values in parse_insert_tuples("\n".join(block)):
+                    table.write(values, order)
+            i += 1
+            continue
+
+        i += 1
+
+
+def main():
+    files = os.environ.get("SQL_FILES", "").split() or sorted(glob.glob("*.sql"))
+    files = [f for f in files if os.path.isfile(f)]
+    if not files:
+        sys.exit("druid pgsql transform: no SQL files to convert")
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(SPEC_DIR, exist_ok=True)
+
+    # One pass over the dump set in SQL_FILES order: these dumps always declare
+    # a table before loading it, including the two-file clubdata pair.
+    tables = {}
+    for path in files:
+        convert(transcode(path).split("\n"), tables)
+
+    kept = 0
+    for name in sorted(tables):
+        table = tables[name]
+        table.close()
+        if table.rows == 0:
+            # See the module docstring: Druid has no empty datasource.
+            os.remove(table.path)
+            print("druid pgsql transform: skipping {} (0 rows; Druid cannot "
+                  "represent an empty datasource)".format(name), file=sys.stderr)
+            continue
+        with open(os.path.join(SPEC_DIR, name + ".json"), "w",
+                  encoding="utf-8") as out:
+            json.dump(table.spec(), out, indent=2)
+            out.write("\n")
+        stamp = table.timestamp_spec()
+        print("druid pgsql transform: {} -> {} rows, __time from {}{}".format(
+            name, table.rows,
+            stamp["column"] if "missingValue" not in stamp else "a constant",
+            ", {} value(s) had newlines replaced".format(table.sanitized)
+            if table.sanitized else ""))
+        kept += 1
+
+    if kept == 0:
+        sys.exit("druid pgsql transform: no tables with rows found")
+
+
+if __name__ == "__main__":
+    main()

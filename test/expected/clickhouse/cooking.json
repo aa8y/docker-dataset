@@ -1,0 +1,10 @@
+{
+  "cooking.Badges": ">=148321",
+  "cooking.Comments": ">=135773",
+  "cooking.PostHistory": ">=221071",
+  "cooking.PostLinks": ">=8869",
+  "cooking.Posts": ">=87590",
+  "cooking.Tags": ">=791",
+  "cooking.Users": ">=74472",
+  "cooking.Votes": ">=470645"
+}

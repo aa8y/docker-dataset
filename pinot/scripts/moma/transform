@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Build MoMA's Pinot ingestion artifacts from the published CSV exports.
+
+MoMA publishes only CSV (no SQL), so the two table schemas are authored
+alongside this hook (schema.sql) and the data arrives as Artworks.csv /
+Artists.csv, fetched by the generic extract step. This is the bulkiest dataset
+shipped on this engine -- ~177k rows across the two tables, but 82 MB of CSV,
+since artworks is 30 columns of free text (usda has twice the rows in a fifth
+of the space) -- and the exports are messy: variable column counts, embedded
+newlines, embedded quotes. Each row is
+therefore parsed with csv.reader, padded or truncated to the schema's column
+count -- so a refreshed export with an extra or missing trailing column still
+loads -- and re-written through the shared TableWriter.
+
+Like the geonames and openflights hooks, the DDL parsing and artifact emission
+come from ../pgsql/transform, loaded as a library, so the authored schema.sql
+gets the same PostgreSQL-type-to-Pinot mapping as a real dump's CREATE TABLE.
+
+Every column is text and an empty cell means "not recorded", so nothing here
+needs the NULL sentinel: an empty CSV field is read as null by Pinot anyway.
+"""
+import csv
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+# CSV file -> table. The schema's column order matches each export's column
+# order (the schema was authored against these CSVs), so rows map positionally,
+# exactly as the other engines' header-based loads do.
+SOURCES = [("Artists.csv", "artists"), ("Artworks.csv", "artworks")]
+
+# Authored schema, staged alongside these build scripts. Overridable for tests.
+SCHEMA = os.environ.get(
+    "PINOT_SCHEMA_SQL", "/usr/local/lib/scripts/moma/schema.sql")
+
+# The shared hook, loaded as a library. Overridable for tests.
+SHARED_HOOK = os.environ.get(
+    "PINOT_PGSQL_HOOK", "/usr/local/lib/scripts/pgsql/transform")
+
+
+def load_shared():
+    """Import scripts/pgsql/transform as a module (see the geonames hook)."""
+    loader = importlib.machinery.SourceFileLoader("pinot_pgsql", SHARED_HOOK)
+    spec = importlib.util.spec_from_loader("pinot_pgsql", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def main():
+    shared = load_shared()
+    out_dir = shared.OUT_DIR
+    os.makedirs(out_dir, exist_ok=True)
+
+    tables = shared.parse_tables(shared.transcode(SCHEMA))
+    writers = {}
+    for source, table in SOURCES:
+        if not os.path.isfile(source):
+            sys.exit("moma transform: {} not found".format(source))
+        if table not in tables:
+            sys.exit("moma transform: no CREATE TABLE for {}".format(table))
+        columns = tables[table]
+        names = [name for name, _ in columns]
+        writer = shared.TableWriter(out_dir, table, columns)
+        with open(source, encoding="utf-8", newline="") as fh:
+            reader = csv.reader(fh)
+            next(reader, None)  # skip the header row (and its UTF-8 BOM)
+            for row in reader:
+                writer.write(names, (row + [None] * len(names))[:len(names)])
+        writer.close()
+        writers[table] = writer
+
+    shared.write_artifacts(out_dir, {t: tables[t] for t in writers}, writers)
+
+
+if __name__ == "__main__":
+    main()

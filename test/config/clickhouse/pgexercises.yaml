@@ -1,0 +1,43 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. pgexercises is Yugabyte's
+# `clubdata` sample (facilities, members, bookings), translated by the shared
+# scripts/pgsql hook. Upstream puts its tables in a dedicated `cd` schema and
+# ships its data as multi-row INSERTs rather than COPY; the hook drops the
+# schema (ClickHouse's namespace is the database, and each image carries one
+# dataset) and passes the INSERTs through with their identifiers rewritten.
+#
+# The table assertions use `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "pgexercises init script exists"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "pgexercises selects its database"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "USE `pgexercises`;"
+
+  - name: "pgexercises declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `facilities` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `members` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `bookings` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "pgexercises loads data into every table"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    expectedContents:
+      - "INSERT INTO `facilities` \\("
+      - "INSERT INTO `members` \\("
+      - "INSERT INTO `bookings` \\("
+
+  - name: "pgexercises keeps no cd. schema qualifier"
+    path: "/docker-entrypoint-initdb.d/pgexercises.sql"
+    excludedContents:
+      - "CREATE SCHEMA"
+      - "INSERT INTO cd\\."

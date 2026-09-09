@@ -1,0 +1,33 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. iso3166 is the pgFoundry
+# two-table country/subcountry sample, translated from its PostgreSQL dump by
+# the shared scripts/pgsql hook (its COPY blocks use a `|` delimiter, which the
+# hook honours).
+#
+# The table assertions use `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "iso3166 init script exists"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "iso3166 selects its database"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "USE `iso3166`;"
+
+  - name: "iso3166 declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `country` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `subcountry` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "iso3166 loads data into every table"
+    path: "/docker-entrypoint-initdb.d/iso3166.sql"
+    expectedContents:
+      - "INSERT INTO `country` \\("
+      - "INSERT INTO `subcountry` \\("

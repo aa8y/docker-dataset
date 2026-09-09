@@ -24,7 +24,7 @@ jobs:
       matrix:
         # Each context directory maps to the Hub repo aa8y/<context>-dataset,
         # matching the `repository:` parameters in manifest.yml.
-        context: [postgres, mysql, cockroach, sqlite, duckdb]
+        context: [postgres, mysql, cockroach, sqlite, duckdb, clickhouse, druid, pinot]
     steps:
       - uses: actions/checkout@v7
 

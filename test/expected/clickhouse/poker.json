@@ -1,0 +1,10 @@
+{
+  "poker.Badges": ">=12194",
+  "poker.Comments": ">=8374",
+  "poker.PostHistory": ">=17925",
+  "poker.PostLinks": ">=601",
+  "poker.Posts": ">=6660",
+  "poker.Tags": ">=125",
+  "poker.Users": ">=9673",
+  "poker.Votes": ">=21026"
+}

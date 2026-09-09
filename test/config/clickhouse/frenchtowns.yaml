@@ -1,0 +1,41 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. frenchtowns is the pgFoundry
+# regions/departments/towns sample, translated from its PostgreSQL dump by the
+# shared scripts/pgsql hook.
+#
+# The table names are asserted lower-case on purpose. The dump declares them
+# unquoted as `Regions`, `Departments`, `Towns` and then COPYs into `regions`,
+# `departments`, `towns` -- consistent only because PostgreSQL folds unquoted
+# identifiers. ClickHouse folds nothing, so the hook applies PostgreSQL's own
+# rule and lower-cases them; without it the tables and the loads would name
+# different things.
+#
+# The table assertions use `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "frenchtowns init script exists"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "frenchtowns selects its database"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    expectedContents:
+      - "USE `frenchtowns`;"
+
+  - name: "frenchtowns declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `regions` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `departments` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `towns` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "frenchtowns loads data into every table"
+    path: "/docker-entrypoint-initdb.d/frenchtowns.sql"
+    expectedContents:
+      - "INSERT INTO `regions` \\("
+      - "INSERT INTO `departments` \\("
+      - "INSERT INTO `towns` \\("

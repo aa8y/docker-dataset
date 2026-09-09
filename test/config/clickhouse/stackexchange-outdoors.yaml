@@ -1,0 +1,46 @@
+schemaVersion: "2.0.0"
+
+# The StackExchange "outdoors" site dump ships as per-table XML (no SQL); the outdoors
+# transform hook converts each table to a MergeTree CREATE TABLE keyed on Id
+# plus batched INSERTs. No indexes: ClickHouse's CREATE INDEX declares a
+# data-skipping index rather than the ordinary lookup index the other engines
+# emit, and the sorting key already does that job.
+#
+# The table assertions use `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "outdoors init script exists"
+    path: "/docker-entrypoint-initdb.d/outdoors.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "outdoors selects its database"
+    path: "/docker-entrypoint-initdb.d/outdoors.sql"
+    expectedContents:
+      - "USE `outdoors`;"
+
+  - name: "outdoors declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/outdoors.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `Users` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Posts` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Comments` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Votes` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Badges` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Tags` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `PostLinks` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `PostHistory` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "outdoors loads data into every table"
+    path: "/docker-entrypoint-initdb.d/outdoors.sql"
+    expectedContents:
+      - "INSERT INTO `Users` \\("
+      - "INSERT INTO `Posts` \\("
+      - "INSERT INTO `Comments` \\("
+      - "INSERT INTO `Votes` \\("
+      - "INSERT INTO `Badges` \\("
+      - "INSERT INTO `Tags` \\("
+      - "INSERT INTO `PostLinks` \\("
+      - "INSERT INTO `PostHistory` \\("

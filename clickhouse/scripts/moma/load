@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Ship MoMA's CSV data next to the init script so the `INSERT ... FROM INFILE`
+# statements the transform hook appended resolve at container start. ClickHouse
+# loads at first boot rather than at build time, so unlike the DuckDB tag the
+# CSVs are part of the image.
+set -e
+mkdir -p "/docker-entrypoint-initdb.d/${DATASET}"
+mv Artworks.csv Artists.csv "/docker-entrypoint-initdb.d/${DATASET}/"

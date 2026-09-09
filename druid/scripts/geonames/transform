@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# GeoNames publishes no SQL, so build the PostgreSQL dump it never shipped and
+# let the shared scripts/pgsql hook do the rest.
+#
+# That indirection is the point. Turning a table into Druid ingestion artifacts
+# is fiddly -- typed dimensions, an explicit column list, the __time decision
+# and its build-time validation -- and scripts/pgsql already does all of it,
+# under unit test. What it needs is a PostgreSQL dump: DDL plus a
+# `COPY ... FROM stdin` block. The authored schema (schema.sql, shipped
+# alongside these build scripts) supplies the DDL, and the GeoNames export
+# *is already* COPY TEXT: tab-separated, one row per line, no quoting, no
+# escaping, blank for a missing value. So the whole conversion is a header line,
+# the file, and a terminator -- no re-encoding, and no second implementation of
+# anything.
+#
+# (Verified against the published export rather than assumed: it contains no
+# backslashes at all, so there is nothing COPY would misread as an escape.
+# A blank field arrives as an empty string, which Druid reads as null in the
+# numeric dimensions -- `elevation` is blank for most cities -- matching what
+# the other engines' `nullif = ''` bulk loads do.)
+set -e
+
+# The COPY header is one long line because that is what pg_dump writes and what
+# the shared hook matches; wrapping it would leave the block unrecognised and
+# the table empty.
+COLUMNS='geonameid, name, asciiname, alternatenames, latitude, longitude, feature_class, feature_code, country_code, cc2, admin1_code, admin2_code, admin3_code, admin4_code, population, elevation, dem, timezone, modification_date'
+
+DUMP=geonames.sql
+cp /usr/local/lib/scripts/geonames/schema.sql "$DUMP"
+{
+  echo
+  echo "COPY cities (${COLUMNS}) FROM stdin;"
+  cat cities15000.txt
+  echo '\.'
+} >> "$DUMP"
+
+SQL_FILES="$DUMP" exec /usr/local/lib/scripts/pgsql/transform

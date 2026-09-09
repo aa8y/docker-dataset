@@ -1,0 +1,91 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. usda is the widest
+# dataset here -- ten tables, ~368k rows, and the slowest to ingest, since each
+# table is its own indexing task. All ten specs and data files are asserted,
+# because a missing one is a missing datasource and the integration test would
+# report it as a mystery rather than as a build failure.
+#
+# The dump is Latin-1, which the shared scripts/pgsql hook transcodes to UTF-8;
+# the nut_data spec's typed dimensions are checked below because that table's
+# 253,825 rows carry the numeric columns most likely to be mis-mapped.
+
+fileExistenceTests:
+  - name: "data_src ingestion spec exists"
+    path: "/opt/druid/dataset/specs/data_src.json"
+    shouldExist: true
+  - name: "data_src data file exists"
+    path: "/opt/druid/dataset/data/data_src.csv"
+    shouldExist: true
+
+  - name: "datsrcln ingestion spec exists"
+    path: "/opt/druid/dataset/specs/datsrcln.json"
+    shouldExist: true
+  - name: "datsrcln data file exists"
+    path: "/opt/druid/dataset/data/datsrcln.csv"
+    shouldExist: true
+
+  - name: "deriv_cd ingestion spec exists"
+    path: "/opt/druid/dataset/specs/deriv_cd.json"
+    shouldExist: true
+  - name: "deriv_cd data file exists"
+    path: "/opt/druid/dataset/data/deriv_cd.csv"
+    shouldExist: true
+
+  - name: "fd_group ingestion spec exists"
+    path: "/opt/druid/dataset/specs/fd_group.json"
+    shouldExist: true
+  - name: "fd_group data file exists"
+    path: "/opt/druid/dataset/data/fd_group.csv"
+    shouldExist: true
+
+  - name: "food_des ingestion spec exists"
+    path: "/opt/druid/dataset/specs/food_des.json"
+    shouldExist: true
+  - name: "food_des data file exists"
+    path: "/opt/druid/dataset/data/food_des.csv"
+    shouldExist: true
+
+  - name: "footnote ingestion spec exists"
+    path: "/opt/druid/dataset/specs/footnote.json"
+    shouldExist: true
+  - name: "footnote data file exists"
+    path: "/opt/druid/dataset/data/footnote.csv"
+    shouldExist: true
+
+  - name: "nut_data ingestion spec exists"
+    path: "/opt/druid/dataset/specs/nut_data.json"
+    shouldExist: true
+  - name: "nut_data data file exists"
+    path: "/opt/druid/dataset/data/nut_data.csv"
+    shouldExist: true
+
+  - name: "nutr_def ingestion spec exists"
+    path: "/opt/druid/dataset/specs/nutr_def.json"
+    shouldExist: true
+  - name: "nutr_def data file exists"
+    path: "/opt/druid/dataset/data/nutr_def.csv"
+    shouldExist: true
+
+  - name: "src_cd ingestion spec exists"
+    path: "/opt/druid/dataset/specs/src_cd.json"
+    shouldExist: true
+  - name: "src_cd data file exists"
+    path: "/opt/druid/dataset/data/src_cd.csv"
+    shouldExist: true
+
+  - name: "weight ingestion spec exists"
+    path: "/opt/druid/dataset/specs/weight.json"
+    shouldExist: true
+  - name: "weight data file exists"
+    path: "/opt/druid/dataset/data/weight.csv"
+    shouldExist: true
+
+fileContentTests:
+  - name: "nut_data keeps its numeric columns typed"
+    path: "/opt/druid/dataset/specs/nut_data.json"
+    expectedContents:
+      - '"dataSource": "nut_data"'
+      - '"rollup": false'
+      - '"type": "double"'
+      - '"type": "long"'

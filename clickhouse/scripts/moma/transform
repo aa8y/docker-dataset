@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# MoMA publishes no SQL, so stage the authored ClickHouse schema (shipped
+# alongside these build scripts) into the build dir as moma.sql and append the
+# statements that bulk-load the CSVs fetched by EXTRACT_URL. The CSVs themselves
+# are shipped next to the init script by the load hook and read at container
+# start -- `FROM INFILE` is a client-side read, so the path is the one inside
+# this image.
+#
+# Positional `FORMAT CSV` with the header line skipped, rather than the
+# name-matching `FORMAT CSVWithNames`. MoMA's header spells its columns
+# `ConstituentID`, `DisplayName`, ... and even `Wiki QID` (with a space); this
+# schema uses the snake_case names the other engines use, and CSVWithNames maps
+# by header name, so it would silently leave every column whose name did not
+# happen to match empty and shift the rest. The column order is the file's, so
+# reading positionally is both correct and what the other engines do.
+#
+# input_format_csv_skip_first_lines is set for the session rather than on the
+# statement: ClickHouse's parser does not accept a SETTINGS clause on
+# `INSERT ... FROM INFILE` (it reads the FROM as a SELECT source), so the value
+# is set before the loads and put back afterwards. The whole init script runs in
+# one `clickhouse-client --multiquery` session, so the setting spans both loads.
+#
+# The export quotes fields containing commas and newlines and escapes an
+# embedded quote by doubling it, which is ClickHouse's CSV default, so no other
+# dialect options are needed.
+set -e
+cp /usr/local/lib/scripts/moma/schema.sql moma.sql
+cat >>moma.sql <<EOF
+
+SET input_format_csv_skip_first_lines = 1;
+INSERT INTO \`artists\` FROM INFILE '/docker-entrypoint-initdb.d/${DATASET}/Artists.csv' FORMAT CSV;
+INSERT INTO \`artworks\` FROM INFILE '/docker-entrypoint-initdb.d/${DATASET}/Artworks.csv' FORMAT CSV;
+SET input_format_csv_skip_first_lines = 0;
+EOF

@@ -1,0 +1,44 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script and the data it reads. MoMA
+# publishes only CSV, so the schema is authored in-repo
+# (clickhouse/scripts/moma/schema.sql) and the transform hook appends the
+# `INSERT ... FROM INFILE` per table. `FROM INFILE` is a client-side read at
+# container start, so the CSVs ship in the image next to the init script --
+# which is what the existence tests below are for.
+#
+# The table assertions use `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "moma init script exists"
+    path: "/docker-entrypoint-initdb.d/moma.sql"
+    shouldExist: true
+
+  - name: "the artists CSV ships alongside the init script"
+    path: "/docker-entrypoint-initdb.d/moma/Artists.csv"
+    shouldExist: true
+
+  - name: "the artworks CSV ships alongside the init script"
+    path: "/docker-entrypoint-initdb.d/moma/Artworks.csv"
+    shouldExist: true
+
+fileContentTests:
+  - name: "moma selects its database"
+    path: "/docker-entrypoint-initdb.d/moma.sql"
+    expectedContents:
+      - "USE `moma`;"
+
+  - name: "moma declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/moma.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `artists` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `artworks` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "moma loads every table from its shipped CSV, header skipped"
+    path: "/docker-entrypoint-initdb.d/moma.sql"
+    expectedContents:
+      - "SET input_format_csv_skip_first_lines = 1;"
+      - "INSERT INTO `artists` FROM INFILE '/docker-entrypoint-initdb.d/moma/Artists.csv' FORMAT CSV;"
+      - "INSERT INTO `artworks` FROM INFILE '/docker-entrypoint-initdb.d/moma/Artworks.csv' FORMAT CSV;"

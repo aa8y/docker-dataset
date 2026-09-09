@@ -1,0 +1,51 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script and the data it reads.
+# OpenFlights publishes only three comma-separated data files, so the schema is
+# authored in-repo (clickhouse/scripts/openflights/schema.sql) and the transform
+# hook appends an `INSERT ... FROM INFILE ... FORMAT CSV` per table. The files
+# are already RFC4180 CSV and their `\N` sentinel is ClickHouse's own default
+# CSV null representation, so no settings are needed. `FROM INFILE` is a
+# client-side read at container start, so all three files ship in the image next
+# to the init script.
+#
+# The table assertions use `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "openflights init script exists"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    shouldExist: true
+
+  - name: "the airports data file ships alongside the init script"
+    path: "/docker-entrypoint-initdb.d/openflights/airports.dat"
+    shouldExist: true
+
+  - name: "the airlines data file ships alongside the init script"
+    path: "/docker-entrypoint-initdb.d/openflights/airlines.dat"
+    shouldExist: true
+
+  - name: "the routes data file ships alongside the init script"
+    path: "/docker-entrypoint-initdb.d/openflights/routes.dat"
+    shouldExist: true
+
+fileContentTests:
+  - name: "openflights selects its database"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    expectedContents:
+      - "USE `openflights`;"
+
+  - name: "openflights declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `airports` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `airlines` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `routes` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "openflights loads every table from its shipped data file"
+    path: "/docker-entrypoint-initdb.d/openflights.sql"
+    expectedContents:
+      - "INSERT INTO `airports` FROM INFILE '/docker-entrypoint-initdb.d/openflights/airports.dat' FORMAT CSV;"
+      - "INSERT INTO `airlines` FROM INFILE '/docker-entrypoint-initdb.d/openflights/airlines.dat' FORMAT CSV;"
+      - "INSERT INTO `routes` FROM INFILE '/docker-entrypoint-initdb.d/openflights/routes.dat' FORMAT CSV;"

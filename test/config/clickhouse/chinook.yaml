@@ -1,0 +1,57 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. chinook is Yugabyte's
+# PostgreSQL-dialect mirror of the Chinook digital-media store (the same dump
+# behind the postgres `yugabyte-chinook` and cockroach `chinook` tags), through
+# the shared scripts/pgsql hook. Its identifiers are quoted CamelCase upstream,
+# so they survive verbatim -- ClickHouse is case-sensitive and the hook only
+# folds *unquoted* names, exactly as PostgreSQL does.
+#
+# The dump ships one INSERT per row (15,607 of them). Every INSERT into a
+# MergeTree table writes a part, so the hook coalesces runs that share a column
+# list into batched multi-row INSERTs; the assertion below is on that batched
+# form (`VALUES` at the end of the line, rows following).
+#
+# The table assertions use `(?s)` so `.` spans newlines -- the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# sorting key sits after the column list, below the table name.
+
+fileExistenceTests:
+  - name: "chinook init script exists"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "chinook selects its database"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - "USE `chinook`;"
+
+  - name: "chinook declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `Album` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Artist` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Customer` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Employee` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Genre` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Invoice` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `InvoiceLine` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `MediaType` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Playlist` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `PlaylistTrack` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `Track` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "chinook loads data into representative tables, batched"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    expectedContents:
+      - "INSERT INTO `Album` \\(.*\\) VALUES\n"
+      - "INSERT INTO `Track` \\(.*\\) VALUES\n"
+      - "INSERT INTO `PlaylistTrack` \\(.*\\) VALUES\n"
+
+  - name: "chinook drops the constraints and indexes ClickHouse has no form for"
+    path: "/docker-entrypoint-initdb.d/chinook.sql"
+    excludedContents:
+      - "ALTER TABLE"
+      - "FOREIGN KEY"
+      - "CREATE INDEX"

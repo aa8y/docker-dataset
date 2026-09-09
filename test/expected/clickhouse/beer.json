@@ -1,0 +1,10 @@
+{
+  "beer.Badges": ">=12255",
+  "beer.Comments": ">=3806",
+  "beer.PostHistory": ">=9901",
+  "beer.PostLinks": ">=144",
+  "beer.Posts": ">=3727",
+  "beer.Tags": ">=144",
+  "beer.Users": ">=9659",
+  "beer.Votes": ">=19726"
+}

@@ -1,0 +1,10 @@
+{
+  "coffee.Badges": ">=13884",
+  "coffee.Comments": ">=4735",
+  "coffee.PostHistory": ">=11233",
+  "coffee.PostLinks": ">=590",
+  "coffee.Posts": ">=4298",
+  "coffee.Tags": ">=108",
+  "coffee.Users": ">=11014",
+  "coffee.Votes": ">=21021"
+}

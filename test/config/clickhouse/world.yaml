@@ -1,0 +1,39 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the per-dataset init script. world is the pgFoundry
+# three-table sample (city, country, countrylanguage), translated from its
+# PostgreSQL dump by the shared scripts/pgsql hook. The entrypoint creates the
+# database (CLICKHOUSE_DB) and the script's own header selects it, so each
+# table below is declared and loaded unqualified.
+#
+# The table assertions use `(?s)` so `.` spans newlines: the
+# `ENGINE = MergeTree ORDER BY ...` clause that gives a ClickHouse table its
+# storage engine and sorting key sits after the column list, several lines
+# below the table name. Matching the pair together is what proves the table is
+# declared the way this engine needs, rather than falling back to the server
+# default of a MergeTree with no sorting key at all.
+
+fileExistenceTests:
+  - name: "world init script exists"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    shouldExist: true
+
+fileContentTests:
+  - name: "world selects its database"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "USE `world`;"
+
+  - name: "world declares all expected tables as MergeTree"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "(?s)CREATE TABLE `city` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `country` \\(.*?\\) ENGINE = MergeTree"
+      - "(?s)CREATE TABLE `countrylanguage` \\(.*?\\) ENGINE = MergeTree"
+
+  - name: "world loads data into every table"
+    path: "/docker-entrypoint-initdb.d/world.sql"
+    expectedContents:
+      - "INSERT INTO `city` \\("
+      - "INSERT INTO `country` \\("
+      - "INSERT INTO `countrylanguage` \\("

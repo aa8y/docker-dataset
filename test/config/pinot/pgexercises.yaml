@@ -1,0 +1,73 @@
+schemaVersion: "2.0.0"
+
+# Static assertions on the shipped ingestion artifacts. pgexercises is the
+# Yugabyte `clubdata` sample, and the only dataset in this family whose data
+# arrives as multi-row `INSERT ... VALUES (...),(...)` rather than a COPY block
+# -- a completely separate parse path in the transform hook, so the row-bearing
+# CSV assertions below are load-bearing.
+#
+# It is also the one dump that puts its tables in a schema (`cd`). Pinot has no
+# schemas: a cluster is a flat namespace of tables, so the qualifier is dropped
+# and the tables are plain `bookings`/`facilities`/`members`.
+
+fileExistenceTests:
+  - name: "bookings artifacts exist"
+    path: "/opt/pinot/dataset/bookings.csv"
+    shouldExist: true
+  - name: "bookings schema exists"
+    path: "/opt/pinot/dataset/bookings.schema.json"
+    shouldExist: true
+  - name: "bookings table config exists"
+    path: "/opt/pinot/dataset/bookings.table.json"
+    shouldExist: true
+
+  - name: "facilities artifacts exist"
+    path: "/opt/pinot/dataset/facilities.csv"
+    shouldExist: true
+  - name: "facilities schema exists"
+    path: "/opt/pinot/dataset/facilities.schema.json"
+    shouldExist: true
+  - name: "facilities table config exists"
+    path: "/opt/pinot/dataset/facilities.table.json"
+    shouldExist: true
+
+  - name: "members artifacts exist"
+    path: "/opt/pinot/dataset/members.csv"
+    shouldExist: true
+  - name: "members schema exists"
+    path: "/opt/pinot/dataset/members.schema.json"
+    shouldExist: true
+  - name: "members table config exists"
+    path: "/opt/pinot/dataset/members.table.json"
+    shouldExist: true
+
+fileContentTests:
+  - name: "pgexercises declares all expected tables, unqualified by schema"
+    path: "/opt/pinot/dataset/tables.tsv"
+    expectedContents:
+      - '(?m)^bookings[[:space:]]'
+      - '(?m)^facilities[[:space:]]'
+      - '(?m)^members[[:space:]]'
+    excludedContents:
+      - "cd\\."
+
+  # `timestamp without time zone` -> TIMESTAMP, and the value rendered in the
+  # form Pinot's parser accepts. A row here also proves the INSERT tuple
+  # splitter kept an address containing a comma intact.
+  - name: "members maps its timestamp column and keeps commas inside values"
+    path: "/opt/pinot/dataset/members.schema.json"
+    expectedContents:
+      - '"name": "joindate",\n      "dataType": "TIMESTAMP"'
+  - name: "members rows survive the INSERT parse"
+    path: "/opt/pinot/dataset/members.csv"
+    expectedContents:
+      - '(?m)^memid,surname,firstname,address,zipcode,telephone,recommendedby,joindate$'
+      - '"8 Bloomsbury Close, Boston"'
+      - '2012-07-02 12:02:05'
+
+  # `numeric` with no precision -> DOUBLE (see the transform's docstring for why
+  # not BIG_DECIMAL).
+  - name: "facilities maps bare numeric to DOUBLE"
+    path: "/opt/pinot/dataset/facilities.schema.json"
+    expectedContents:
+      - '"name": "membercost",\n      "dataType": "DOUBLE"'
