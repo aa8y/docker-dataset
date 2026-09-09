@@ -312,13 +312,8 @@ contexts:
         indexMethod: btree
         structureTest:
           configs:
-            - test/config/yugabyte-sportsdb.yaml
-      # Alias of `sportsdb`, kept for the Yugabyte-prefixed naming the other
-      # Yugabyte-sourced tags use. See the retagFrom note at the top of the file.
-      yugabyte-sportsdb:
-        retagFrom: sportsdb
-        structureTest: false
-      yugabyte-chinook:
+            - test/config/sportsdb.yaml
+      chinook:
         dataset: chinook
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_ddl.sql
@@ -327,8 +322,8 @@ contexts:
         sqlFiles: chinook_ddl.sql chinook_genres_artists_albums.sql chinook_songs.sql
         structureTest:
           configs:
-            - test/config/yugabyte-chinook.yaml
-      yugabyte-northwind:
+            - test/config/chinook.yaml
+      northwind:
         dataset: northwind
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_ddl.sql
@@ -336,8 +331,8 @@ contexts:
         sqlFiles: northwind_ddl.sql northwind_data.sql
         structureTest:
           configs:
-            - test/config/yugabyte-northwind.yaml
-      yugabyte-pgexercises:
+            - test/config/northwind.yaml
+      pgexercises:
         dataset: pgexercises
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_ddl.sql
@@ -345,7 +340,7 @@ contexts:
         sqlFiles: clubdata_ddl.sql clubdata_data.sql
         structureTest:
           configs:
-            - test/config/yugabyte-pgexercises.yaml
+            - test/config/pgexercises.yaml
       usda:
         extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
         sqlFiles: usda-r18-1.0/usda.sql
@@ -665,7 +660,7 @@ contexts:
         -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
     tags:
       # Chinook digital-media store, sourced from Yugabyte's PostgreSQL-dialect
-      # mirror (the same dump behind the postgres `yugabyte-chinook` tag): plain
+      # mirror (the same dump behind the postgres `chinook` tag): plain
       # DDL + INSERT data with quoted CamelCase identifiers, which load on
       # CockroachDB unchanged.
       chinook:
@@ -681,7 +676,7 @@ contexts:
           configs:
             - test/config/cockroach/chinook.yaml
       # Northwind specialty-foods sample, same Yugabyte PostgreSQL-dialect dump
-      # behind the postgres `yugabyte-northwind` tag (DDL + INSERT data).
+      # behind the postgres `northwind` tag (DDL + INSERT data).
       northwind:
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_ddl.sql
@@ -1305,7 +1300,7 @@ contexts:
           configs:
             - test/config/duckdb/dellstore.yaml
       # Northwind specialty-foods sample, same Yugabyte PostgreSQL-dialect dump
-      # behind the postgres `yugabyte-northwind` and cockroach `northwind` tags
+      # behind the postgres `northwind` and cockroach `northwind` tags
       # (DDL + multi-row INSERT data). Everything but one token goes through the
       # shared scripts/pgsql hook unchanged; the exception is the empty bytea
       # literal `'\x'` the dump writes for categories.picture and
