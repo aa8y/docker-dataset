@@ -17,6 +17,29 @@ and then following the same steps for using your custom image as in that engine'
 
 Swap `-c postgres` (and the `postgres` build context) for `mysql`, `cockroach`, `sqlite`, `duckdb`, `clickhouse`, `druid`, or `pinot` to build the other engines.
 
+## Publishing
+
+`dave push -c <context>` publishes the images it has just (re)built. The push
+template re-runs the build, which is a full cache hit against the local image
+store and so only uploads the GHCR build cache, and then calls
+[`bin/push-image`](../bin/push-image), which `docker push`es the very image
+that was built and tested. With `PLATFORM` set the push is restricted to that
+one platform's manifest, and with `TAG_SUFFIX` set (CI uses `-<arch>`) it lands
+on `<repository>:<tag><suffix>`. Pushes are manifest and blob writes, which
+Docker Hub does not meter, so publishing costs no pull quota.
+
+CI builds each architecture on its own runner and pushes `<tag>-amd64` and
+`<tag>-arm64`. Each shard also records the descriptor of what it pushed
+(digest, size, media type, platform) under `DESCRIPTOR_DIR`, and the `merge`
+job feeds those files to [`bin/merge-manifests`](../bin/merge-manifests), which
+assembles the multi-arch OCI index for every real tag and `PUT`s it straight to
+the registry, then writes the same index under each alias (`retagFrom:`) tag.
+Nothing is read back from Docker Hub, so the merge costs no pull quota either;
+that was not true of the `imagetools create` approach it replaced, which paid
+about three metered reads per tag. Run it by hand with
+`DESCRIPTOR_DIR=<dir> bin/merge-manifests`, using your `docker login` session
+or `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`; `--dry-run` prints the plan.
+
 ## Build caching
 
 Every tag uses a [registry build cache](https://docs.docker.com/build/cache/backends/registry/)

@@ -1,44 +1,57 @@
 #!/usr/bin/env bash
-# Materializes the published tags after a per-arch push.
+# Materializes the published tags after a per-arch push -- without reading a
+# single manifest back from Docker Hub.
 #
 # `dave push` with TAG_SUFFIX set publishes one single-arch image per
 # architecture -- `<repo>:<tag>-amd64`, `<repo>:<tag>-arm64` -- because the two
-# arches are built on their own runners. This joins each pair into the real
-# multi-arch tag `<repo>:<tag>`, then points every alias tag (`retagFrom:` in
-# manifest.yml, e.g. `latest`) at its source. `imagetools create` only writes a
-# manifest list from images already in the registry: nothing is pulled, rebuilt
-# or re-uploaded.
+# arches are built on their own runners, and bin/push-image records each pushed
+# manifest's descriptor (digest, size, media type, platform) into
+# DESCRIPTOR_DIR. This assembles, from those descriptors alone, the OCI image
+# index for every real tag (pass 1) and PUTs it to the registry as
+# `<repo>:<tag>`; then PUTs the same index again under every alias tag
+# (`retagFrom:` in manifest.yml, e.g. `latest`; pass 2).
 #
-# The two passes must not overlap -- an alias can only be pointed at a tag that
-# already exists -- so pass 2 starts once pass 1 has fully drained.
+# Why not `docker buildx imagetools create`: it re-reads both per-arch
+# manifests and their configs to build the index, and Docker Hub counts each of
+# those GETs as a pull against the account's hourly quota -- ~3 per tag, ~500
+# for a full pass, against a 200-pull allowance. A manifest PUT is not metered,
+# and every byte an index needs is already known to the shard that pushed the
+# image. Docker Hub validates that the referenced manifests exist in the
+# repository at PUT time, so a bad descriptor fails loudly rather than
+# publishing a dangling tag.
 #
 # Done-stamps (opt-in): when MERGE_STAMP_DIR names a directory, each target tag
-# that merges cleanly leaves a stamp there, and a stamped tag is skipped on the
-# next invocation. Every `imagetools create` costs several registry manifest
-# reads plus a write, all counted against Docker Hub's hourly pull quota, and
-# the create is not incremental -- re-running it for an already-merged tag
-# spends the same quota again. Without stamps a partially rate-limited run can
-# never converge: each retry redoes the whole tag list and dies at the same
-# depth. With them, each retry only pays for the remainder. CI persists the
-# directory across re-run attempts of the same commit; the stamps are keyed by
-# target ref only, which is safe exactly because the cache scope is one
-# commit's attempts -- the per-arch source tags cannot change under a stamp
+# that lands leaves a stamp there, and a stamped tag is skipped on the next
+# invocation. CI persists the directory across re-run attempts of the same
+# commit, so a run that dies part-way only redoes the remainder. The stamps are
+# keyed by target ref only, which is safe exactly because the cache scope is one
+# commit's attempts -- the per-arch source images cannot change under a stamp
 # within that scope.
 #
-# Usage: merge-manifests [-c <context>] [-n|--dry-run]
+# Credentials: DOCKERHUB_USERNAME / DOCKERHUB_TOKEN when set (CI); otherwise the
+# credential helper `docker login` configured in ~/.docker/config.json, so a
+# human who is logged in can run this as-is. The secret is only ever handed to
+# curl through a config file on stdin, never as an argument.
+#
+# Usage: merge-manifests [-c <context>] [-m <manifest>] [-n|--dry-run]
+#   DESCRIPTOR_DIR   directory of descriptor files written by bin/push-image
+#                    (required unless --dry-run)
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 manifest="$root/manifest.yml"
 context=""
 dry_run=0
-jobs=8
+registry="https://registry-1.docker.io"
+auth_url="https://auth.docker.io/token?service=registry.docker.io"
+index_type="application/vnd.oci.image.index.v1+json"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -c|--context) context="${2-}"; shift 2 ;;
+    -m|--manifest) manifest="${2-}"; shift 2 ;;
     -n|--dry-run) dry_run=1; shift ;;
-    -h|--help) echo "Usage: merge-manifests [-c <context>] [-n|--dry-run]" >&2; exit 0 ;;
+    -h|--help) echo "Usage: merge-manifests [-c <context>] [-m <manifest>] [-n|--dry-run]" >&2; exit 0 ;;
     *) echo "merge-manifests: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -63,16 +76,17 @@ manifest_json() {
   return 1
 }
 
-# One `imagetools create` argument list per line, sorted for a stable run.
-# `pass` 1 is the real tags (join the per-arch images), 2 the aliases (retag an
-# existing tag). A context's own parameters.repository wins over the global one.
-# The arch suffixes come from parameters.platforms, which is also what dave
-# passes to `--platform`, so the names here cannot drift from what CI pushed.
-arg_lines() {
+# One target per line, tab-separated: `<repo> <tag> <source-tag> <arches>`,
+# sorted for a stable run. `pass` 1 is the real tags (source == tag), 2 the
+# aliases (source == retagFrom). A context's own parameters.repository wins over
+# the global one. The arch suffixes come from parameters.platforms, which is
+# also what dave passes to `--platform`, so the names here cannot drift from
+# what CI pushed.
+target_lines() {
   manifest_json | jq -r --arg ctx "$context" --arg pass "$1" '
     (.parameters.repository // "") as $global
     | (.parameters.platforms // "linux/amd64,linux/arm64"
-       | split(",") | map(sub("^.*/"; ""))) as $arches
+       | split(",") | map(sub("^.*/"; "")) | join(",")) as $arches
     | [ (.contexts // {})
         | to_entries[]
         | select($ctx == "" or .key == $ctx)
@@ -81,40 +95,134 @@ arg_lines() {
         | .key as $tag
         | ((.value // {}).retagFrom // "") as $from
         | select(if $pass == "1" then $from == "" else $from != "" end)
-        | if $pass == "1"
-          then "-t \($repo):\($tag) " + ([$arches[] | "\($repo):\($tag)-\(.)"] | join(" "))
-          else "-t \($repo):\($tag) \($repo):\($from)"
-          end
+        | [$repo, $tag, (if $from == "" then $tag else $from end), $arches] | @tsv
       ] | sort[]'
 }
 
-# Dry-run prints what would run; otherwise fan out over $jobs workers. The
-# NUL-delimited hand-off avoids GNU-only `xargs -d`, and `set -f; set -- $1`
-# splits a line back into arguments without an eval. Each worker checks and
-# writes the done-stamp itself ($2 is the target ref, the word after -t), so
-# stamps stay accurate under -P parallelism: only the tags that actually
-# merged are stamped, whichever those turn out to be when the registry starts
-# throttling.
-run_pass() {
-  local label="$1" lines="$2"
-  [ -n "$lines" ] || { echo "merge-manifests: $label: nothing to do" >&2; return 0; }
-  if [ "$dry_run" -eq 1 ]; then
-    printf '%s\n' "$lines" | sed 's|^|docker buildx imagetools create |'
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+}
+
+# Every descriptor file, as one JSON array. Empty when DESCRIPTOR_DIR is unset,
+# which only --dry-run tolerates.
+load_descriptors() {
+  if [ -z "${DESCRIPTOR_DIR:-}" ]; then
+    [ "$dry_run" -eq 1 ] || { echo "merge-manifests: DESCRIPTOR_DIR is required (see bin/push-image)" >&2; return 1; }
+    echo '[]'
     return 0
   fi
-  printf '%s\n' "$lines" | tr '\n' '\0' \
-    | xargs -0 -P "$jobs" -n 1 sh -c '
-        set -f; set -- $1
-        if [ -n "${MERGE_STAMP_DIR:-}" ]; then
-          stamp="${MERGE_STAMP_DIR}/$(printf %s "$2" | tr -c "A-Za-z0-9._-" "-")"
-          if [ -f "$stamp" ]; then
-            echo "merge-manifests: $2 already merged in an earlier attempt; skipping" >&2
-            exit 0
-          fi
-        fi
-        docker buildx imagetools create "$@" || exit 1
-        if [ -n "${MERGE_STAMP_DIR:-}" ]; then : > "$stamp"; fi
-      ' sh
+  [ -d "$DESCRIPTOR_DIR" ] || { echo "merge-manifests: DESCRIPTOR_DIR '$DESCRIPTOR_DIR' is not a directory" >&2; return 1; }
+  local files
+  files="$(find "$DESCRIPTOR_DIR" -name '*.json' | sort)"
+  if [ -z "$files" ]; then
+    [ "$dry_run" -eq 1 ] || { echo "merge-manifests: no descriptor files in $DESCRIPTOR_DIR" >&2; return 1; }
+    echo '[]'
+    return 0
+  fi
+  printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 jq -s '.'
+}
+
+# The index for `<repo>:<source>` from its per-arch descriptors, compact and
+# key-ordered so an alias assembled from the same descriptors is byte-for-byte
+# the source's index. Fails (exit 1, message on stderr) when any arch is
+# missing -- a partial index would publish a tag that silently lacks a
+# platform.
+compose_index() {
+  local repo="$1" source="$2" arches="$3"
+  printf '%s' "$descriptors" | jq -c -e \
+      --arg repo "$repo" --arg src "$source" --arg arches "$arches" '
+    ($arches | split(",")) as $want
+    | [ .[] | select(.repository == $repo and .tag == $src) ] as $have
+    | ($want | map(. as $a | ($have | map(select(.target == ($src + "-" + $a))) | .[0]))) as $picked
+    | if any($picked[]; . == null) then
+        error("missing per-arch descriptor for \($repo):\($src) -- have "
+              + ([$have[].target] | join(", ") | if . == "" then "none" else . end)
+              + ", want " + ($want | map($src + "-" + .) | join(", ")))
+      else
+        { schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json",
+          manifests: ($picked | map({ mediaType, digest, size, platform })) }
+      end' 2>&1 | sed 's/^jq: error ([^)]*): //'
+}
+
+# A bearer token with push rights on one repository, cached per repository for
+# the run. Credentials go to curl as a config document on stdin so the secret
+# never appears in an argument list.
+token_dir="$(mktemp -d)"
+trap 'rm -rf "$token_dir"' EXIT
+token_for() {
+  local repo="$1" cache user secret helper creds
+  cache="$token_dir/$(printf '%s' "$repo" | tr '/' '_')"
+  if [ -s "$cache" ]; then cat "$cache"; return 0; fi
+  if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+    user="$DOCKERHUB_USERNAME"; secret="$DOCKERHUB_TOKEN"
+  else
+    helper="$(jq -r '.credHelpers["index.docker.io"] // .credsStore // ""' "${DOCKER_CONFIG:-$HOME/.docker}/config.json" 2>/dev/null || true)"
+    [ -n "$helper" ] || { echo "merge-manifests: no DOCKERHUB_USERNAME/DOCKERHUB_TOKEN and no docker credential helper configured" >&2; return 1; }
+    creds="$(printf 'https://index.docker.io/v1/' | "docker-credential-$helper" get)" \
+      || { echo "merge-manifests: docker-credential-$helper has no Docker Hub login (run 'docker login')" >&2; return 1; }
+    user="$(printf '%s' "$creds" | jq -r .Username)"
+    secret="$(printf '%s' "$creds" | jq -r .Secret)"
+  fi
+  printf 'user = "%s:%s"\n' "$user" "$secret" \
+    | curl -fsS --config - "$auth_url&scope=repository:$repo:pull,push" \
+    | jq -r '.token // empty' > "$cache"
+  [ -s "$cache" ] || { echo "merge-manifests: could not obtain a push token for $repo" >&2; return 1; }
+  cat "$cache"
+}
+
+# PUT one index and confirm the registry stored exactly those bytes.
+put_index() {
+  local repo="$1" tag="$2" body="$3" headers token expect got
+  headers="$(mktemp)"
+  token="$(token_for "$repo")"
+  expect="sha256:$(sha256_of "$body")"
+  if ! curl -fsS -o /dev/null -D "$headers" -X PUT \
+        -H "Authorization: Bearer $token" -H "Content-Type: $index_type" \
+        --data-binary @"$body" "$registry/v2/$repo/manifests/$tag"; then
+    rm -f "$headers"; return 1
+  fi
+  got="$(tr -d '\r' < "$headers" | awk 'tolower($1) == "docker-content-digest:" {print $2}')"
+  rm -f "$headers"
+  if [ "$got" != "$expect" ]; then
+    echo "merge-manifests: $repo:$tag stored as $got, expected $expect" >&2
+    return 1
+  fi
+}
+
+# Serial on purpose: a PUT is a few hundred bytes and returns in well under a
+# second, so even the full tag list finishes in minutes, and one writer never
+# trips the registry's abuse limiter. The stamp is written only after the PUT
+# and digest check both pass.
+run_pass() {
+  local label="$1" lines="$2" repo tag source arches index body stamp
+  [ -n "$lines" ] || { echo "merge-manifests: $label: nothing to do" >&2; return 0; }
+  body="$(mktemp)"
+  while IFS="$(printf '\t')" read -r repo tag source arches; do
+    if [ -n "${MERGE_STAMP_DIR:-}" ]; then
+      stamp="${MERGE_STAMP_DIR}/$(printf '%s' "$repo:$tag" | tr -c 'A-Za-z0-9._-' '-')"
+      if [ -f "$stamp" ]; then
+        echo "merge-manifests: $repo:$tag already merged in an earlier attempt; skipping" >&2
+        continue
+      fi
+    fi
+    if [ "$dry_run" -eq 1 ]; then
+      if index="$(compose_index "$repo" "$source" "$arches")"; then
+        echo "PUT $repo:$tag <- $(printf '%s' "$index" | jq -r '[.manifests[] | "\(.platform.architecture)=\(.digest)"] | join(" ")')"
+      else
+        echo "PUT $repo:$tag <- $source-{$arches} (no descriptors loaded)"
+      fi
+      continue
+    fi
+    index="$(compose_index "$repo" "$source" "$arches")" \
+      || { echo "merge-manifests: $index" >&2; rm -f "$body"; return 1; }
+    printf '%s' "$index" > "$body"
+    put_index "$repo" "$tag" "$body" || { rm -f "$body"; return 1; }
+    echo "merge-manifests: $repo:$tag <- $(printf '%s' "$index" | jq -r '[.manifests[].platform.architecture] | join("+")')" >&2
+    if [ -n "${MERGE_STAMP_DIR:-}" ]; then : > "$stamp"; fi
+  done <<EOF
+$lines
+EOF
+  rm -f "$body"
 }
 
 # The stamp dir exists up front so a run that fails before its first clean
@@ -124,8 +232,9 @@ run_pass() {
 # Collected before either pass runs, and via plain assignments so that `set -e`
 # sees a failing extraction (inside a command substitution used as an argument
 # it would be swallowed, and the pass would look merely empty).
-pass1="$(arg_lines 1)"
-pass2="$(arg_lines 2)"
+descriptors="$(load_descriptors)"
+pass1="$(target_lines 1)"
+pass2="$(target_lines 2)"
 if [ -z "$pass1" ] && [ -z "$pass2" ]; then
   echo "merge-manifests: no tags found${context:+ for context '$context'} in $manifest" >&2
   exit 1

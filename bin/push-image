@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Publishes an already-built image and records what was pushed.
+#
+# Called by the manifest's push template after its (fully cached) rebuild.
+# Pushes `<repo>:<tag>${TAG_SUFFIX}` with `docker push`, restricted to
+# $PLATFORM when set: under the containerd image store a `--load` build is an
+# index holding the platform image plus its attestation, and `--platform`
+# pushes just the platform image manifest. That manifest is exactly what the
+# tests ran against, and pushing it is manifest/blob PUTs plus blob HEADs --
+# none of which Docker Hub meters. The `buildx build --push` this replaces
+# re-resolved every FROM against the registry, about one metered pull per tag,
+# enough to drain the account's hourly quota on a 170-tag master run.
+#
+# With DESCRIPTOR_DIR set, the pushed manifest's descriptor (as reported by
+# `docker image inspect --platform`, which is what the daemon just pushed) is
+# written there as `<ref>.json`, extended with the repository, the manifest
+# tag and the pushed target tag. bin/merge-manifests assembles the multi-arch
+# indexes from those files, so the merge job never has to read a manifest back
+# from the registry. Recording needs PLATFORM: the index-level descriptor of
+# an unrestricted local image is not something a multi-arch index can point at.
+#
+# Usage: push-image <repository>:<tag>
+set -euo pipefail
+
+[ $# -eq 1 ] || { echo "Usage: push-image <repository>:<tag>" >&2; exit 2; }
+image="$1"
+case "$image" in
+  */*:*) ;;
+  *) echo "push-image: expected <repository>:<tag>, got '$image'" >&2; exit 2 ;;
+esac
+repo="${image%:*}"
+tag="${image##*:}"
+target="$repo:$tag${TAG_SUFFIX:-}"
+platform="${PLATFORM:-}"
+
+if [ -n "${DESCRIPTOR_DIR:-}" ] && [ -z "$platform" ]; then
+  echo "push-image: DESCRIPTOR_DIR is set but PLATFORM is not; a recorded descriptor must name one platform" >&2
+  exit 2
+fi
+
+[ "$target" = "$image" ] || docker tag "$image" "$target"
+if [ -n "$platform" ]; then
+  docker push --platform "$platform" "$target"
+else
+  docker push "$target"
+fi
+
+[ -n "${DESCRIPTOR_DIR:-}" ] || exit 0
+
+descriptor="$(docker image inspect --platform "$platform" --format '{{json .Descriptor}}' "$image")"
+media_type="$(printf '%s' "$descriptor" | jq -r '.mediaType // ""')"
+case "$media_type" in
+  application/vnd.oci.image.manifest.v1+json|application/vnd.docker.distribution.manifest.v2+json) ;;
+  *) echo "push-image: $image for $platform is '$media_type', not an image manifest; refusing to record it" >&2; exit 1 ;;
+esac
+
+mkdir -p "$DESCRIPTOR_DIR"
+out="$DESCRIPTOR_DIR/$(printf '%s' "$target" | tr -c 'A-Za-z0-9._-' '-').json"
+printf '%s' "$descriptor" \
+  | jq --arg repo "$repo" --arg tag "$tag" --arg target "$tag${TAG_SUFFIX:-}" \
+      '{repository: $repo, tag: $tag, target: $target,
+        mediaType, digest, size, platform}' > "$out"
+echo "push-image: recorded $target -> $out" >&2
