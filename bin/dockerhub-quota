@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Prints the Docker Hub pull-quota headers for the current credentials.
+#
+# Docker Hub meters pulls per rolling window (the `w=` in the headers, in
+# seconds): 100 per IP anonymously, 200 per account on a Personal plan,
+# unlimited on paid plans. This asks the registry
+# for a token scoped to Docker's own `ratelimitpreview/test` image and HEADs
+# its manifest -- a HEAD is a version check, which does not consume quota --
+# then echoes the `ratelimit-limit` / `ratelimit-remaining` response headers.
+# With DOCKERHUB_USERNAME and DOCKERHUB_TOKEN set the token is issued for that
+# account and the numbers are the account's; otherwise they are the caller
+# IP's anonymous allowance.
+#
+# Purely informational: CI runs it before and after each shard so a run that
+# hits 429 can be read against the quota it actually had. It never fails.
+#
+# Usage: dockerhub-quota
+set -uo pipefail
+
+scope="repository:ratelimitpreview/test:pull"
+auth_url="https://auth.docker.io/token?service=registry.docker.io&scope=$scope"
+manifest_url="https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest"
+
+if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+  who="account $DOCKERHUB_USERNAME"
+  token="$(curl -fsS --user "$DOCKERHUB_USERNAME:$DOCKERHUB_TOKEN" "$auth_url" | jq -r .token)"
+else
+  who="anonymous (per-IP)"
+  token="$(curl -fsS "$auth_url" | jq -r .token)"
+fi
+
+if [ -z "$token" ] || [ "$token" = "null" ]; then
+  echo "dockerhub-quota: could not obtain a registry token ($who)" >&2
+  exit 0
+fi
+
+headers="$(curl -sS --head -H "Authorization: Bearer $token" "$manifest_url" | tr -d '\r' | grep -i '^ratelimit-')"
+if [ -z "$headers" ]; then
+  echo "dockerhub-quota: no ratelimit headers returned ($who) -- unlimited plan, or the request failed" >&2
+  exit 0
+fi
+
+echo "Docker Hub pull quota for $who (w=window in seconds):"
+echo "$headers"

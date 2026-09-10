@@ -9,9 +9,16 @@ templates:
   # Registry build cache (always on, for every tag): import a mode=max build
   # cache from the registry so the EXTRACT layer -- and thus the upstream
   # download -- is reused when nothing relevant changed. The push template below
-  # writes the cache, this one only reads it (the CI test job isn't logged in,
-  # but the repo is public so the import is anonymous). A missing ref is a cache
-  # miss, not an error.
+  # writes the cache, this one only reads it. A missing ref is a cache miss,
+  # not an error.
+  #
+  # The cache lives on GHCR (ghcr.io/<repository>:buildcache-...), not next to
+  # the published images on Docker Hub: buildx GETs each cache ref's manifest,
+  # and Docker Hub counts every such GET as a pull against the account's
+  # metered pull quota (200 per window on a Personal plan) -- ~120 tags x 2
+  # arches per CI run blew through it even fully authenticated. GHCR meters
+  # nothing for public packages. The packages are public, so a local
+  # `dave build` imports anonymously; CI writes them with its GITHUB_TOKEN.
   #
   # Correctness is gated by DATASET_CHECKSUM: bin/dataset-checksum fingerprints
   # the tag's upstream source(s) from cheap metadata (archive.org's JSON
@@ -73,9 +80,9 @@ templates:
   # image and no build ever produced one for them.
   build: >
     {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
-    --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
-    ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
-    ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
+    --cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+    ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
+    ${CACHE_TO_SCOPE:+--cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
     --build-arg DATASET={{dataset}}
     --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
     --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -93,7 +100,7 @@ templates:
   test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run.sh {{tag}} {{dataset}}{{/retagFrom}}'
   push: >
     {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
-    --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+    --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
     --build-arg DATASET={{dataset}}
     --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
     --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -373,9 +380,9 @@ contexts:
       # registry build cache gated by the DATASET_CHECKSUM fingerprint.
       build: >
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
-        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
-        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
+        --cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -385,7 +392,7 @@ contexts:
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-mysql.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
-        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -633,9 +640,9 @@ contexts:
       # registry build cache gated by the DATASET_CHECKSUM fingerprint.
       build: >
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
-        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
-        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
+        --cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -647,7 +654,7 @@ contexts:
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-cockroach.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
-        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -912,9 +919,9 @@ contexts:
       # SQL_FILES or DB_FILE per tag (Mustache sections), never both.
       build: >
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
-        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
-        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
+        --cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -925,7 +932,7 @@ contexts:
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-sqlite.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
-        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -1194,9 +1201,9 @@ contexts:
       # SQL_FILES or DB_FILE per tag (Mustache sections), never both.
       build: >
         {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
-        --cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
-        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
-        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
+        --cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}
+        ${CACHE_FROM_SCOPE:+--cache-from type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_FROM_SCOPE}}
+        ${CACHE_TO_SCOPE:+--cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-}-${CACHE_TO_SCOPE},mode=max,image-manifest=true}
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
@@ -1207,7 +1214,7 @@ contexts:
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-duckdb.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
         {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
-        --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
+        --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'

@@ -24,8 +24,23 @@ so the expensive `EXTRACT` layer (the upstream download) and the
 `TRANSFORM`/`LOAD` layers after it are reused across builds instead of being
 redone from scratch on every CI run. The cache is read on `dave build`
 (`--cache-from`) and written on `dave push` (`--cache-to ... mode=max`),
-stored per tag as `<repository>:buildcache-<tag>`. A missing cache ref is a
-cache miss, not an error, so the first build of a new tag simply populates it.
+stored per tag and architecture as
+`ghcr.io/<repository>:buildcache-<tag>-<arch>`. A missing cache ref is a
+cache miss, not an error, so the first build of a new tag simply populates it
+(buildx prints a `failed to configure registry cache importer` line — a 404,
+or a 403 when the package does not exist yet and the import is anonymous — and
+carries on with a cold build; the exit status is unaffected).
+
+The cache is deliberately kept on [GHCR](https://github.com/users/aa8y/packages)
+rather than next to the published images on Docker Hub. Docker Hub counts every
+manifest `GET` — including the one buildx makes per `--cache-from` ref — as a
+pull against the account's metered quota (200 per window on a Personal plan;
+the window is whatever the `ratelimit-limit` header reports), and one CI
+run imports well over that. GHCR does not meter pulls of public packages. The
+packages are public, so a local `dave build` reads the cache anonymously; only
+CI, with its `GITHUB_TOKEN`, writes to it. `bin/dockerhub-quota` prints the
+Docker Hub allowance left for the current credentials (or IP) without spending
+any; CI runs it at the start and end of every shard.
 
 Correctness is gated on the dataset's actual upstream content. Before each
 build, `bin/dataset-checksum` computes a cheap, stable fingerprint of the

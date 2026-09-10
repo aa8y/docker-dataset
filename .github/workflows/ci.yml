@@ -51,6 +51,11 @@ jobs:
 
   test:
     needs: unit
+    # packages: write is what lets GITHUB_TOKEN push the build cache to GHCR;
+    # on fork PRs GitHub downgrades it to read, which still imports.
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -134,8 +139,10 @@ jobs:
         with:
           driver: docker
 
-      # Master pushes need credentials to publish; same-repo PRs need them
-      # only so their cache export below can write to the registry.
+      # Docker Hub only ever sees the base-image pre-pulls and, on master, the
+      # image push. Logging in lifts the pre-pulls from the anonymous per-IP
+      # quota (shared with every other tenant of the runner's egress IP) to the
+      # account's own. Fork PRs cannot read the secrets and stay anonymous.
       - name: Log in to Docker Hub
         if: env.REGISTRY_AUTH == 'true'
         uses: docker/login-action@v4
@@ -143,13 +150,34 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Snapshot of the account's Docker Hub pull quota before any pull, so a
+      # 429 later in the shard can be read against what the window actually
+      # had left. Repeated at the end of the job. Informational only.
+      - name: Docker Hub quota (before)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: bin/dockerhub-quota
+
+      # The build cache (every buildcache-* ref in manifest.yml) lives on GHCR,
+      # where public packages are not pull-metered. GITHUB_TOKEN can always
+      # read; it can write only on pushes and same-repo PRs, which is exactly
+      # when the export steps below run. Fork PRs log in with a read-only token
+      # and import as before.
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       # Opt in to importing the PR-scoped cache refs (buildcache-<tag>-<arch>-pr)
       # during every build below, so a re-run attempt of this PR hits the cache
       # its own earlier attempt exported. Import only: the matching EXPORT
       # (CACHE_TO_SCOPE) is deliberately not set here but on the dedicated
       # serialized step after the build -- a mode=max cache export is a heavy
       # registry write, and with 10 shards building at -j 3 the fleet peaks at
-      # ~30 simultaneous writers, which trips Docker Hub's 429 rate limiting
+      # ~30 simultaneous writers, which is more than a registry tolerates
       # mid-build (the same arithmetic that forced `dave push` to -j 1). Gated
       # on the same-repo condition above: on fork PRs the guard is false, the
       # variable stays unset, and the manifest's ${CACHE_FROM_SCOPE:+...} guard
@@ -253,7 +281,7 @@ jobs:
 
       # Retried like the push below, and for the same reason: with the bases
       # pre-pulled above the remaining registry traffic is buildcache manifest
-      # resolution, which can still catch a transient 429. A second
+      # resolution against GHCR, which can still catch a transient error. A second
       # `dave build` finds every already-built layer in the local store, so a
       # retry redoes only the tags a failure actually killed.
       - name: Build images
@@ -275,8 +303,8 @@ jobs:
       # step above for the concurrency arithmetic). Re-running `dave build`
       # with CACHE_TO_SCOPE set resolves every layer from the local store --
       # the same full-cache-hit trick the Push step uses -- so this is
-      # upload-only, and -j 1 keeps the fleet at ~10 concurrent writers, the
-      # level the registry tolerates. continue-on-error because the cache is
+      # upload-only (to GHCR), and -j 1 keeps the fleet at ~10 concurrent
+      # writers. continue-on-error because the cache is
       # purely an optimization for the next attempt: a throttled export must
       # never fail a shard whose images built and will be tested regardless.
       - name: Export PR build cache
@@ -354,6 +382,16 @@ jobs:
         with:
           path: ${{ runner.temp }}/checksum-fallback
           key: checksum-lkg-${{ matrix.context }}-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Paired with the snapshot after login: the difference is what this
+      # shard actually spent on Docker Hub (should be the handful of base
+      # pre-pulls, and on master the push).
+      - name: Docker Hub quota (after)
+        if: always()
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: bin/dockerhub-quota
 
   # A per-arch push leaves `<tag>-amd64` / `<tag>-arm64` in the registry; this
   # joins each pair into the real multi-arch `<tag>` (pass 1) and then points
