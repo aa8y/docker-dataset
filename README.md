@@ -12,20 +12,20 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | [AdventureWorks](https://github.com/lorint/AdventureWorks-for-Postgres) | `adventureworks` | — | — | — | — | — | — | — |
 | [Airlines](https://postgrespro.com/education/demodb) | `airlines` | — | — | `airlines` | `airlines` | — | — | — |
-| Chinook | [`yugabyte-chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | — | — |
+| Chinook | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/lerocha/chinook-database) | [`chinook`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | — | — |
 | [Dell DVD Store](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `dellstore` | `dellstore` | `dellstore` | `dellstore` | `dellstore` | `dellstore` | `dellstore` | `dellstore` |
 | [Employees](https://github.com/datacharmer/test_db) | `employees` | `employees` | `employees` | `employees` | `employees` | — | — | — |
 | [French Towns](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` | `frenchtowns` |
 | [GeoNames](https://download.geonames.org/export/dump/) | `geonames` | `geonames` | `geonames` | `geonames` | `geonames` | `geonames` | `geonames` | `geonames` |
 | [ISO 3166](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `iso3166` | `iso3166` | `iso3166` | `iso3166` | `iso3166` | `iso3166` | `iso3166` | `iso3166` |
 | [MoMA](https://github.com/MuseumofModernArt/collection) | `moma` | `moma` | `moma` | `moma` | `moma` | `moma` | `moma` | `moma` |
-| Northwind | [`yugabyte-northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/dalers/mywind) | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/jpwhite3/northwind-SQLite3) | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | — | — | — |
+| Northwind | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/dalers/mywind) | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | [`northwind`](https://github.com/jpwhite3/northwind-SQLite3) | [`northwind`](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | — | — | — |
 | [NYC Taxi Trip Records](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) | — | — | — | — | `nyc-taxi` | `nyc-taxi` | — | — |
 | [OMDb](https://github.com/df7cb/omdb-postgresql) | `omdb` | — | — | — | — | — | — | — |
 | [OpenFlights](https://github.com/jpatokal/openflights/tree/master/data) | `openflights` | `openflights` | `openflights` | `openflights` | `openflights` | `openflights` | `openflights` | `openflights` |
-| [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `yugabyte-pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` |
+| [PGExercises](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` | `pgexercises` |
 | Sakila / Pagila | [`pagila`](https://github.com/devrimgunduz/pagila) | [`sakila`](https://dev.mysql.com/doc/sakila/en/) | [`sakila`](https://github.com/jOOQ/sakila) | [`sakila`](https://github.com/bradleygrant/sakila-sqlite3) | [`sakila`](https://github.com/jOOQ/sakila) | — | — | — |
-| [SportsDB](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `sportsdb`, `yugabyte-sportsdb` | `sportsdb` | `sportsdb` | `sportsdb` | `sportsdb` | — | — | — |
+| [SportsDB](https://github.com/yugabyte/yugabyte-db/tree/master/sample) | `sportsdb` | `sportsdb` | `sportsdb` | `sportsdb` | `sportsdb` | — | — | — |
 | [Stack Exchange](https://archive.org/details/stackexchange)¹ | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` | `stackexchange-<site>` | — | — |
 | [USDA](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | `usda` | `usda` | `usda` | `usda` | `usda` | `usda` | `usda` | `usda` |
 | World | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://dev.mysql.com/doc/world-setup/en/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) | [`world`](https://www.postgresql.org/ftp/projects/pgFoundry/dbsamples/) |
@@ -45,7 +45,7 @@ Each engine's README has the equivalent client invocation and per-dataset notes:
 
 ## Tag naming
 
-The database inside each image is the bare dataset name — the tag minus any `yugabyte-`/`stackexchange-` prefix (e.g. `yugabyte-chinook` → `chinook`, `stackexchange-beer` → `beer`). Source prefixes exist so a dataset could ship from a second mirror later; `sportsdb` and `yugabyte-sportsdb` are the same image today, with the unprefixed `sportsdb` kept as a backwards-compatible alias. One exception: on ClickHouse the `nyc-taxi` tag's database is `nyc_taxi`, because the base image interpolates the name into SQL unquoted and a hyphen does not survive that.
+The database inside each image is the bare dataset name — the tag minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`). One exception: on ClickHouse the `nyc-taxi` tag's database is `nyc_taxi`, because the base image interpolates the name into SQL unquoted and a hyphen does not survive that.
 
 ## Documentation
 
