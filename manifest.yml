@@ -37,7 +37,16 @@ templates:
   # manifest can drive both one runner building everything and a per-arch
   # fan-out that merges afterwards:
   #   PLATFORM        build: restrict the local build to a single platform.
-  #                   push:  the platform list to publish (default: both).
+  #                   push:  the one platform to publish. The push template
+  #                   re-runs the build (a full local cache hit, so it only
+  #                   uploads the GHCR build cache) and then hands the image to
+  #                   bin/push-image, which `docker push --platform`es the
+  #                   already-built, already-tested image as a single-platform
+  #                   manifest. Pushes are PUTs and blob HEADs, which Docker Hub
+  #                   does not meter; the previous `buildx build --push` cost
+  #                   about one pull per tag re-resolving bases. Multi-platform
+  #                   publishing is the merge job's business (bin/merge-manifests),
+  #                   never a single machine's.
   #   CACHE_ARCH      suffix for every buildcache ref, so an amd64 and an arm64
   #                   runner write to separate refs (`-amd64`, `-arm64`) instead
   #                   of clobbering one shared one. Unset, the ref is that
@@ -68,6 +77,11 @@ templates:
   #   TAG_SUFFIX      push: suffix for the published tag, so per-arch pushes
   #                   land on `<tag>-amd64` / `<tag>-arm64` for
   #                   bin/merge-manifests to join into one multi-arch tag.
+  #   DESCRIPTOR_DIR  push: when set, bin/push-image records the pushed
+  #                   manifest's descriptor (digest, size, media type,
+  #                   platform) there, one file per ref. bin/merge-manifests
+  #                   assembles the multi-arch indexes from those files alone,
+  #                   so the merge never reads a manifest back from Docker Hub.
   #
   # `retagFrom: <tag>` marks a tag as a pure alias of another tag in the same
   # context (`latest`, say). There is nothing to build, test or push for an
@@ -99,7 +113,7 @@ templates:
   # code, which is deterministic and so pointless to repeat. See docs/testing.md.
   test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run.sh {{tag}} {{dataset}}{{/retagFrom}}'
   push: >
-    {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+    {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
     --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
     --build-arg DATASET={{dataset}}
     --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -109,7 +123,7 @@ templates:
     {{#dbExtension}}--build-arg DB_EXTENSION={{.}}{{/dbExtension}}
     {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
     {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
-    -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+    -t {{{repository}}}:{{tag}} {{{context}}} && bin/push-image {{{repository}}}:{{tag}}{{/retagFrom}}
 contexts:
   postgres:
     tagKeys: dataset
@@ -312,13 +326,8 @@ contexts:
         indexMethod: btree
         structureTest:
           configs:
-            - test/config/yugabyte-sportsdb.yaml
-      # Alias of `sportsdb`, kept for the Yugabyte-prefixed naming the other
-      # Yugabyte-sourced tags use. See the retagFrom note at the top of the file.
-      yugabyte-sportsdb:
-        retagFrom: sportsdb
-        structureTest: false
-      yugabyte-chinook:
+            - test/config/sportsdb.yaml
+      chinook:
         dataset: chinook
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/chinook_ddl.sql
@@ -327,8 +336,8 @@ contexts:
         sqlFiles: chinook_ddl.sql chinook_genres_artists_albums.sql chinook_songs.sql
         structureTest:
           configs:
-            - test/config/yugabyte-chinook.yaml
-      yugabyte-northwind:
+            - test/config/chinook.yaml
+      northwind:
         dataset: northwind
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_ddl.sql
@@ -336,8 +345,8 @@ contexts:
         sqlFiles: northwind_ddl.sql northwind_data.sql
         structureTest:
           configs:
-            - test/config/yugabyte-northwind.yaml
-      yugabyte-pgexercises:
+            - test/config/northwind.yaml
+      pgexercises:
         dataset: pgexercises
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/clubdata_ddl.sql
@@ -345,7 +354,7 @@ contexts:
         sqlFiles: clubdata_ddl.sql clubdata_data.sql
         structureTest:
           configs:
-            - test/config/yugabyte-pgexercises.yaml
+            - test/config/pgexercises.yaml
       usda:
         extractUrl: https://ftp.postgresql.org/pub/projects/pgFoundry/dbsamples/usda/usda-r18-1.0/usda-r18-1.0.tar.gz
         sqlFiles: usda-r18-1.0/usda.sql
@@ -391,14 +400,14 @@ contexts:
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-mysql.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+        -t {{{repository}}}:{{tag}} {{{context}}} && bin/push-image {{{repository}}}:{{tag}}{{/retagFrom}}
     tags:
       # Sakila is MySQL's own sample database (the original of the model pagila
       # ports to Postgres). Ships schema + data as separate files in a tarball.
@@ -653,7 +662,7 @@ contexts:
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-cockroach.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -662,10 +671,10 @@ contexts:
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
         {{#cdDir}}--build-arg 'CD_DIR={{{.}}}'{{/cdDir}}
         {{#indexMethod}}--build-arg INDEX_METHOD={{.}}{{/indexMethod}}
-        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+        -t {{{repository}}}:{{tag}} {{{context}}} && bin/push-image {{{repository}}}:{{tag}}{{/retagFrom}}
     tags:
       # Chinook digital-media store, sourced from Yugabyte's PostgreSQL-dialect
-      # mirror (the same dump behind the postgres `yugabyte-chinook` tag): plain
+      # mirror (the same dump behind the postgres `chinook` tag): plain
       # DDL + INSERT data with quoted CamelCase identifiers, which load on
       # CockroachDB unchanged.
       chinook:
@@ -681,7 +690,7 @@ contexts:
           configs:
             - test/config/cockroach/chinook.yaml
       # Northwind specialty-foods sample, same Yugabyte PostgreSQL-dialect dump
-      # behind the postgres `yugabyte-northwind` tag (DDL + INSERT data).
+      # behind the postgres `northwind` tag (DDL + INSERT data).
       northwind:
         extractUrl: >-
           https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_ddl.sql
@@ -931,7 +940,7 @@ contexts:
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-sqlite.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -939,7 +948,7 @@ contexts:
         {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
         {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+        -t {{{repository}}}:{{tag}} {{{context}}} && bin/push-image {{{repository}}}:{{tag}}{{/retagFrom}}
     tags:
       # Chinook digital-media store. The vendor ships a native SQLite SQL script
       # (release v1.4.5), which the build runs through the sqlite3 CLI to create
@@ -1213,7 +1222,7 @@ contexts:
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-duckdb.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-to type=registry,ref=ghcr.io/{{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
@@ -1221,7 +1230,7 @@ contexts:
         {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
         {{#dbFile}}--build-arg 'DB_FILE={{{.}}}'{{/dbFile}}
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+        -t {{{repository}}}:{{tag}} {{{context}}} && bin/push-image {{{repository}}}:{{tag}}{{/retagFrom}}
     tags:
       # Chinook digital-media store, from the same pinned vendor release the
       # sqlite chinook tag uses. The scripts/chinook transform hook (python3)
@@ -1305,7 +1314,7 @@ contexts:
           configs:
             - test/config/duckdb/dellstore.yaml
       # Northwind specialty-foods sample, same Yugabyte PostgreSQL-dialect dump
-      # behind the postgres `yugabyte-northwind` and cockroach `northwind` tags
+      # behind the postgres `northwind` and cockroach `northwind` tags
       # (DDL + multi-row INSERT data). Everything but one token goes through the
       # shared scripts/pgsql hook unchanged; the exception is the empty bytea
       # literal `'\x'` the dump writes for categories.picture and
@@ -1563,14 +1572,14 @@ contexts:
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-pinot.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         {{#sqlFiles}}--build-arg 'SQL_FILES={{{.}}}'{{/sqlFiles}}
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+        -t {{{repository}}}:{{tag}} {{{context}}} && bin/push-image {{{repository}}}:{{tag}}{{/retagFrom}}
     tags:
       # PostgreSQL-dump datasets, the same sources the sqlite/duckdb tags use.
       # None of them can be *run* on Pinot, so the shared scripts/pgsql hook
@@ -1712,14 +1721,14 @@ contexts:
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-clickhouse.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+        -t {{{repository}}}:{{tag}} {{{context}}} && bin/push-image {{{repository}}}:{{tag}}{{/retagFrom}}
     tags:
       # PostgreSQL-dump datasets -- the pgFoundry family plus the two Yugabyte
       # mirrors -- all from the same sources the duckdb/cockroach tags use and
@@ -1950,14 +1959,14 @@ contexts:
         -t {{{repository}}}:{{tag}} {{{context}}}{{/retagFrom}}
       test: '{{^retagFrom}}REPOSITORY={{{repository}}} bash test/integration/with-retry.sh run-druid.sh {{tag}} {{dataset}}{{/retagFrom}}'
       push: >
-        {{^retagFrom}}docker buildx build --push --platform "${PLATFORM:-{{{platforms}}}}"
+        {{^retagFrom}}docker buildx build --load ${PLATFORM:+--platform "$PLATFORM"}
         --cache-to type=registry,ref={{{repository}}}:buildcache-{{tag}}${CACHE_ARCH:-},mode=max,image-manifest=true
         --build-arg DATASET={{dataset}}
         --build-arg DATASET_CHECKSUM="$(bin/dataset-checksum '{{{extractUrl}}}')"
         --build-arg 'EXTRACT_URL={{{extractUrl}}}'
         --build-arg 'SQL_FILES={{{sqlFiles}}}'
         {{#extraPrereqs}}--build-arg 'EXTRA_PREREQS={{{.}}}'{{/extraPrereqs}}
-        -t {{{repository}}}:{{tag}}${TAG_SUFFIX:-} {{{context}}}{{/retagFrom}}
+        -t {{{repository}}}:{{tag}} {{{context}}} && bin/push-image {{{repository}}}:{{tag}}{{/retagFrom}}
     tags:
       # PostgreSQL-dump datasets, the same sources the DuckDB and SQLite tags
       # use. None of the dumps' SQL survives -- Druid runs none of it -- so the

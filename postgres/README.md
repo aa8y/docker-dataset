@@ -18,15 +18,15 @@ and access it by:
 ```
 docker exec -it pg-ds-<tag> psql -d <db_name>
 ```
-where `<tag>` is one of the tags in the [matrix](../README.md#dataset-support-matrix) and `<db_name>` is the dataset baked into it — the tag itself, minus any `yugabyte-`/`stackexchange-` prefix (e.g. `yugabyte-chinook` → `chinook`, `stackexchange-beer` → `beer`). You can also use them with `docker-compose`. See [this example](https://github.com/aa8y/data-dude/blob/master/docker-compose.yml) for information on how to use them.
+where `<tag>` is one of the tags in the [matrix](../README.md#dataset-support-matrix) and `<db_name>` is the dataset baked into it — the tag itself, minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`). You can also use them with `docker-compose`. See [this example](https://github.com/aa8y/data-dude/blob/master/docker-compose.yml) for information on how to use them.
 
 ## PostgreSQL datasets
 
 Sources are in the [matrix](../README.md#dataset-support-matrix); the notes below are PostgreSQL-specific.
 
-* `yugabyte-chinook` (db `chinook`): 11 tables in the `public` schema, quoted CamelCase identifiers (e.g. `"Track"`, `"InvoiceLine"`).
-* `yugabyte-pgexercises` (db `pgexercises`): 3 tables in a dedicated `cd` schema (not `public`).
-* `sportsdb` / `yugabyte-sportsdb`: all 107 tables are created, but only the generic infrastructure tables plus American football, baseball, basketball, and ice hockey carry data — motor racing, soccer, tennis, wagering, and weather are schema-only.
+* `chinook`: 11 tables in the `public` schema, quoted CamelCase identifiers (e.g. `"Track"`, `"InvoiceLine"`).
+* `pgexercises`: 3 tables in a dedicated `cd` schema (not `public`).
+* `sportsdb`: all 107 tables are created, but only the generic infrastructure tables plus American football, baseball, basketball, and ice hockey carry data — motor racing, soccer, tennis, wagering, and weather are schema-only.
 * `pagila`: the `payment` table is range-partitioned by month (`payment_p2022_NN`), so row counts split across the parent and its partitions; upstream periodically shifts the sample dates to the current year, so absolute dates change between rebuilds.
 * `omdb`: CSVs are fetched at build time and shipped in the image so `\copy` resolves at start; the init script creates the `tsm_system_rows` extension the upstream views rely on. Heavy (~150 MB of CSV + indexes).
 * `adventureworks`: the upstream port pulls Microsoft's CSV bundle and runs a Python reformat before loading (68 tables across 5 schemas). Heavy (~90 MB of CSV).
@@ -39,7 +39,7 @@ Sources are in the [matrix](../README.md#dataset-support-matrix); the notes belo
 
 ## Tag naming
 
-The database inside each image is the bare dataset name — the tag minus any `yugabyte-`/`stackexchange-` prefix. Those source prefixes exist so a dataset could ship from a second mirror later; `sportsdb` and `yugabyte-sportsdb` are the same image today, with the unprefixed `sportsdb` kept as a backwards-compatible alias.
+The database inside each image is the bare dataset name — the tag minus any `stackexchange-` prefix.
 
 ## Custom images
 

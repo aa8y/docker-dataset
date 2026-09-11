@@ -140,9 +140,10 @@ jobs:
           driver: docker
 
       # Docker Hub only ever sees the base-image pre-pulls and, on master, the
-      # image push. Logging in lifts the pre-pulls from the anonymous per-IP
+      # `docker push`. Logging in lifts the pre-pulls from the anonymous per-IP
       # quota (shared with every other tenant of the runner's egress IP) to the
-      # account's own. Fork PRs cannot read the secrets and stay anonymous.
+      # account's own, and the push needs write access to the aa8y/* repos.
+      # Fork PRs cannot read the secrets and stay anonymous.
       - name: Log in to Docker Hub
         if: env.REGISTRY_AUTH == 'true'
         uses: docker/login-action@v4
@@ -335,28 +336,28 @@ jobs:
           key: itest-stamps-${{ matrix.context }}-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
 
       # Publish this shard's images natively as `<tag>-<arch>`; the merge job
-      # below joins the per-arch pairs into the real multi-arch tags. This
-      # `dave push` re-runs the same buildx build the Build step ran, against
-      # the same daemon on the same runner: under the docker driver every
-      # layer is already in the local image store, so the build resolves as a
-      # full cache hit and the step is effectively upload-only. The images
-      # being pushed are therefore bit-for-bit the ones the tests above
-      # validated.
+      # below joins the per-arch pairs into the real multi-arch tags. The push
+      # template first re-runs the same buildx build the Build step ran,
+      # against the same daemon: every layer is already in the local image
+      # store, so that resolves as a full cache hit and only uploads the GHCR
+      # build cache. It then hands the image to bin/push-image, which
+      # `docker push --platform`es it -- bit-for-bit the image the tests above
+      # validated, and, unlike a `buildx build --push`, without re-resolving
+      # the base images against Docker Hub (that cost ~1 metered pull per tag).
+      # DESCRIPTOR_DIR collects what was pushed for the merge job.
       - name: Push (native arch)
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         env:
           TAG_SUFFIX: -${{ matrix.arch }}
+          DESCRIPTOR_DIR: ${{ runner.temp }}/descriptors
         # -j 1: pushes from all matrix shards run simultaneously, so per-shard
-        # concurrency multiplies across 10 jobs. At -j 3 that is ~30 concurrent
-        # registry writers, which trips Docker Hub's 429 rate limiting; serial
-        # pushes per shard keep the fleet at ~10 and uploads are bandwidth-bound
-        # anyway. Raise only alongside a Docker Hub plan with higher limits.
-        # Even at ~10 writers a 429 still slips through occasionally, so retry
-        # up to three times with a lengthening pause: re-running `dave push`
-        # hits the same daemon whose image store already holds every layer, so
-        # the rebuild resolves as a full cache hit and the retry is
-        # upload-only and idempotent -- blobs that already landed are skipped
-        # by digest.
+        # concurrency multiplies across the matrix. At -j 3 that is ~50
+        # concurrent registry writers, which trips Docker Hub's abuse limiter;
+        # serial pushes per shard keep the fleet at ~16 and uploads are
+        # bandwidth-bound anyway. A 429 can still slip through, so retry up to
+        # three times with a lengthening pause: the retry is idempotent --
+        # blobs that already landed are skipped by digest, and a descriptor
+        # file is simply rewritten with the same content.
         run: |
           for attempt in 1 2 3; do
             if dave push -c ${{ matrix.context }} -j 1; then
@@ -370,6 +371,18 @@ jobs:
             echo "push attempt $attempt failed; retrying in ${delay}s" >&2
             sleep "$delay"
           done
+
+      # Hand the pushed manifests' descriptors to the merge job. Named per
+      # shard so the uploads never collide; the merge downloads them all into
+      # one directory.
+      - name: Upload pushed-manifest descriptors
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@v7
+        with:
+          name: descriptors-${{ matrix.context }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/descriptors
+          if-no-files-found: error
+          retention-days: 7
 
       # The fallback store is refreshed by every clean fetch above, so save it
       # at the very end of the job to bank whatever the run learned. `always()`
@@ -394,11 +407,14 @@ jobs:
         run: bin/dockerhub-quota
 
   # A per-arch push leaves `<tag>-amd64` / `<tag>-arm64` in the registry; this
-  # joins each pair into the real multi-arch `<tag>` (pass 1) and then points
-  # every alias tag -- retagFrom entries such as `latest` -- at its source
-  # (pass 2). Both are `imagetools create` calls: manifest-list writes against
-  # images already in the registry, so nothing is pulled, rebuilt or
-  # re-uploaded, which is why 15 minutes is generous.
+  # assembles each pair into the real multi-arch `<tag>` (pass 1) and then
+  # writes the same index under every alias tag -- retagFrom entries such as
+  # `latest` (pass 2). bin/merge-manifests builds each index from the
+  # descriptors the shards recorded when they pushed and PUTs it with curl:
+  # nothing is pulled, read back, rebuilt or re-uploaded, and Docker Hub does
+  # not meter manifest writes, so this job spends zero pull quota. The quota
+  # snapshots on either side of it are there to prove that. 15 minutes is
+  # generous for ~170 small PUTs.
   merge:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
@@ -407,18 +423,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+      - name: Download pushed-manifest descriptors
+        uses: actions/download-artifact@v8
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          pattern: descriptors-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/descriptors
+
+      - name: Docker Hub quota (before)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: bin/dockerhub-quota
 
       # Done-stamps persisted across re-run attempts of this commit, same idea
-      # as the integration-test stamps: `imagetools create` re-reads its
-      # sources and re-writes the target even for an already-merged tag, so
-      # without stamps a rate-limited merge can never converge -- every retry
-      # redoes all ~110 tags and dies at the same quota depth. With them, each
-      # retry only pays for the tags the previous attempt did not land.
+      # as the integration-test stamps: a re-run only PUTs the tags the
+      # previous attempt did not land. Cheap now that a PUT costs no quota,
+      # but still the difference between a retry that converges and one that
+      # re-does everything.
       - name: Restore merge stamps
         uses: actions/cache/restore@v5
         with:
@@ -429,7 +451,17 @@ jobs:
       - name: Merge per-arch manifests
         env:
           MERGE_STAMP_DIR: ${{ runner.temp }}/merge-stamps
+          DESCRIPTOR_DIR: ${{ runner.temp }}/descriptors
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: bin/merge-manifests
+
+      - name: Docker Hub quota (after)
+        if: always()
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: bin/dockerhub-quota
 
       - name: Save merge stamps
         if: always()
