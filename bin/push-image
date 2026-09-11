@@ -11,13 +11,20 @@
 # re-resolved every FROM against the registry, about one metered pull per tag,
 # enough to drain the account's hourly quota on a 170-tag master run.
 #
-# With DESCRIPTOR_DIR set, the pushed manifest's descriptor (as reported by
-# `docker image inspect --platform`, which is what the daemon just pushed) is
-# written there as `<ref>.json`, extended with the repository, the manifest
-# tag and the pushed target tag. bin/merge-manifests assembles the multi-arch
-# indexes from those files, so the merge job never has to read a manifest back
-# from the registry. Recording needs PLATFORM: the index-level descriptor of
-# an unrestricted local image is not something a multi-arch index can point at.
+# With DESCRIPTOR_DIR set, the pushed manifest's descriptor is written there
+# as `<ref>.json` -- media type, digest and size straight from the registry's
+# own answer to a HEAD of the tag just pushed (a HEAD is a version check,
+# which Docker Hub does not meter), plus the platform from $PLATFORM and the
+# repository / manifest tag / pushed target tag. bin/merge-manifests assembles
+# the multi-arch indexes from those files, so the merge job never has to read
+# a manifest back from the registry. Asking the registry rather than the
+# daemon keeps this working on the Docker 28.0 the CI runners ship, whose
+# `docker image inspect` cannot yet select a platform. Recording needs
+# PLATFORM: the index-level descriptor of an unrestricted local image is not
+# something a multi-arch index can point at.
+#
+# The HEAD uses DOCKERHUB_USERNAME / DOCKERHUB_TOKEN when set and an anonymous
+# token otherwise (the aa8y/* repositories are public).
 #
 # Usage: push-image <repository>:<tag>
 set -euo pipefail
@@ -30,8 +37,12 @@ case "$image" in
 esac
 repo="${image%:*}"
 tag="${image##*:}"
-target="$repo:$tag${TAG_SUFFIX:-}"
+target_tag="$tag${TAG_SUFFIX:-}"
+target="$repo:$target_tag"
 platform="${PLATFORM:-}"
+registry="https://registry-1.docker.io"
+auth_url="https://auth.docker.io/token?service=registry.docker.io"
+manifest_types="application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
 
 if [ -n "${DESCRIPTOR_DIR:-}" ] && [ -z "$platform" ]; then
   echo "push-image: DESCRIPTOR_DIR is set but PLATFORM is not; a recorded descriptor must name one platform" >&2
@@ -47,17 +58,38 @@ fi
 
 [ -n "${DESCRIPTOR_DIR:-}" ] || exit 0
 
-descriptor="$(docker image inspect --platform "$platform" --format '{{json .Descriptor}}' "$image")"
-media_type="$(printf '%s' "$descriptor" | jq -r '.mediaType // ""')"
+# Pull-scoped token for the HEAD: the account's when credentials are in the
+# environment (handed to curl as a config document on stdin, never as an
+# argument), anonymous otherwise.
+if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+  token="$(printf 'user = "%s:%s"\n' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" \
+    | curl -fsS --config - "$auth_url&scope=repository:$repo:pull" | jq -r '.token // empty')"
+else
+  token="$(curl -fsS "$auth_url&scope=repository:$repo:pull" | jq -r '.token // empty')"
+fi
+[ -n "$token" ] || { echo "push-image: could not obtain a registry token for $repo" >&2; exit 1; }
+
+headers="$(curl -fsS --head -H "Authorization: Bearer $token" -H "Accept: $manifest_types" \
+  "$registry/v2/$repo/manifests/$target_tag" | tr -d '\r')"
+header() { printf '%s\n' "$headers" | awk -v k="$1" 'tolower($1) == k":" {print $2; exit}'; }
+media_type="$(header content-type | cut -d';' -f1)"
+digest="$(header docker-content-digest)"
+size="$(header content-length)"
 case "$media_type" in
   application/vnd.oci.image.manifest.v1+json|application/vnd.docker.distribution.manifest.v2+json) ;;
-  *) echo "push-image: $image for $platform is '$media_type', not an image manifest; refusing to record it" >&2; exit 1 ;;
+  *) echo "push-image: $target is served as '$media_type', not an image manifest; refusing to record it" >&2; exit 1 ;;
 esac
+if [ -z "$digest" ] || [ -z "$size" ]; then
+  echo "push-image: registry HEAD of $target returned no digest/size" >&2
+  exit 1
+fi
 
 mkdir -p "$DESCRIPTOR_DIR"
 out="$DESCRIPTOR_DIR/$(printf '%s' "$target" | tr -c 'A-Za-z0-9._-' '-').json"
-printf '%s' "$descriptor" \
-  | jq --arg repo "$repo" --arg tag "$tag" --arg target "$tag${TAG_SUFFIX:-}" \
-      '{repository: $repo, tag: $tag, target: $target,
-        mediaType, digest, size, platform}' > "$out"
-echo "push-image: recorded $target -> $out" >&2
+jq -n --arg repo "$repo" --arg tag "$tag" --arg target "$target_tag" \
+      --arg mt "$media_type" --arg digest "$digest" --argjson size "$size" --arg platform "$platform" '
+  ($platform | split("/")) as $p
+  | {repository: $repo, tag: $tag, target: $target,
+     mediaType: $mt, digest: $digest, size: $size,
+     platform: ({os: $p[0], architecture: $p[1]} + (if ($p|length) > 2 then {variant: $p[2]} else {} end))}' > "$out"
+echo "push-image: recorded $target ($digest, $size bytes) -> $out" >&2
