@@ -21,7 +21,7 @@ Start a container and connect with the built-in `clickhouse-client`:
 docker run -d --name ch-ds-world aa8y/clickhouse-dataset:world
 docker exec -it ch-ds-world clickhouse-client -d world
 ```
-where the tag is one of the tags in the ClickHouse column of the [matrix](../README.md#dataset-support-matrix) and the database is the matching dataset name (the tag minus any `stackexchange-` prefix, e.g. `stackexchange-beer` → `beer`).
+where the tag is one of the tags in the ClickHouse column of the [matrix](../README.md#dataset-support-matrix) and the database is the matching dataset name (the tag minus any `stackexchange-` prefix, e.g. `stackexchange-beer` → `beer`). The one exception is `nyc-taxi`, whose database is `nyc_taxi` with an underscore — see the [per-dataset note](#clickhouse-datasets) for why.
 
 The images keep the base image's stock `default` user: **no password, reachable from any address** (`CLICKHOUSE_SKIP_USER_SETUP=1`). These are throwaway practice and test images, mirroring the trivial credentials the postgres and mysql images use and the insecure mode the cockroach ones run in; left to itself the entrypoint would restrict `default` to `127.0.0.1`, which would make these the only images here you could not reach over a published port. So you can also connect from outside:
 ```

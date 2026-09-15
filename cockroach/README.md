@@ -10,12 +10,22 @@ The available tags are the CockroachDB column of the [dataset support matrix](..
 
 ## Usage
 
-The images run a single-node cluster in insecure mode (these are throwaway practice/test images, mirroring the trivial credentials the postgres/mysql images use), which keeps connecting simple. Start a container and connect with the built-in `cockroach sql` client:
+The images run a single-node cluster in insecure mode (these are throwaway practice/test images, mirroring the trivial credentials the postgres/mysql images use), which keeps connecting simple. Start the `world` image, wait for it to initialize, and query it with the built-in `cockroach sql` client:
 ```
-docker run -d --name cr-ds-<tag> aa8y/cockroach-dataset:<tag>
-docker exec -it cr-ds-<tag> cockroach sql --insecure --database <db_name>
+docker run -d --name cr-ds-world aa8y/cockroach-dataset:world
+# The first start loads the dataset; give it a moment to initialize.
+docker exec -it cr-ds-world cockroach sql --insecure --database world -e 'SELECT count(*) FROM city'
 ```
-where `<tag>` is one of the tags in the CockroachDB column of the [matrix](../README.md#dataset-support-matrix) and `<db_name>` is the matching dataset name (the tag minus any `stackexchange-` prefix, e.g. `stackexchange-beer` → `beer`).
+To run a different dataset, swap `world` for any tag in the CockroachDB column of the [matrix](../README.md#dataset-support-matrix); the database inside is the tag name minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`).
+
+### Connecting from the host or another container
+
+Insecure mode means user `root` with no password on the standard SQL port 26257. CockroachDB is PostgreSQL wire-compatible, so publish the port and connect with `psql` (or any Postgres client):
+```
+docker run -d --name cr-ds-world -p 26257:26257 aa8y/cockroach-dataset:world
+psql -h localhost -p 26257 -U root -d world -c 'SELECT count(*) FROM city'
+```
+Don't put them anywhere that matters.
 
 ## CockroachDB datasets
 

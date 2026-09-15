@@ -10,12 +10,23 @@ The available tags are the MySQL column of the [dataset support matrix](../READM
 
 ## Usage
 
-Start a container and connect with the `mariadb` (MySQL-compatible) client:
+Start the `world` image, wait for it to initialize, and query it with the `mariadb` (MySQL-compatible) client:
 ```
-docker run -d --name my-ds-<tag> aa8y/mysql-dataset:<tag>
-docker exec -it my-ds-<tag> mariadb -uroot -pmysql <db_name>
+docker run -d --name my-ds-world aa8y/mysql-dataset:world
+# The first start loads the dataset; give it a moment to initialize (watch
+# `docker logs my-ds-world` for "ready for connections").
+docker exec -it my-ds-world mariadb -uroot -pmysql world -e 'SELECT count(*) FROM city'
 ```
-where `<tag>` is one of the tags in the MySQL column of the [matrix](../README.md#dataset-support-matrix) and `<db_name>` is the matching dataset name (the tag itself, minus any `stackexchange-` prefix). The root password is `mysql`.
+To run a different dataset, swap `world` for any tag in the MySQL column of the [matrix](../README.md#dataset-support-matrix); the database inside is the tag name minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`).
+
+### Connecting from the host or another container
+
+The root password is `mysql`, on the standard port 3306. Publish the port and connect with any MySQL client:
+```
+docker run -d --name my-ds-world -p 3306:3306 aa8y/mysql-dataset:world
+mariadb -h127.0.0.1 -uroot -pmysql world -e 'SELECT count(*) FROM city'
+```
+These are throwaway practice and test images with trivial credentials — don't put them anywhere that matters.
 
 ## MySQL datasets
 

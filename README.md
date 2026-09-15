@@ -2,7 +2,22 @@
 
 [![CI](https://github.com/aa8y/docker-dataset/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/aa8y/docker-dataset/actions/workflows/ci.yml)
 
-**Pre-populated sample databases as Docker images** — ready-to-run [PostgreSQL](https://www.postgresql.org/), [MySQL](https://www.mysql.com/), [CockroachDB](https://www.cockroachlabs.com/), [SQLite](https://www.sqlite.org/), [DuckDB](https://duckdb.org/), [ClickHouse](https://clickhouse.com/), [Apache Druid](https://druid.apache.org/), and [Apache Pinot](https://pinot.apache.org/) containers loaded with real, valid sample data (Chinook, Northwind, Sakila/Pagila, World, AdventureWorks, Stack Exchange, and more). Ever needed a database already populated with valid data — to practice SQL, run tests, demo an app, or benchmark — without hand-crafting rows or hunting for a usable dump? Every image ships exactly one dataset in its own database, so you just `docker run` and connect.
+**Pre-populated sample databases as Docker images** — ready-to-run [PostgreSQL](https://www.postgresql.org/), [MySQL](https://www.mysql.com/), [CockroachDB](https://www.cockroachlabs.com/), [SQLite](https://www.sqlite.org/), [DuckDB](https://duckdb.org/), [ClickHouse](https://clickhouse.com/), [Apache Druid](https://druid.apache.org/), and [Apache Pinot](https://pinot.apache.org/) containers loaded with real, valid sample data (Chinook, Northwind, Sakila/Pagila, World, AdventureWorks, Stack Exchange, and more). Ever needed a database already populated with valid data — to practice SQL, run tests, demo an app, or benchmark — without hand-crafting rows or hunting for a usable dump? Every image ships exactly one dataset, so you just `docker run` and connect.
+
+## Quick start
+
+Run the PostgreSQL `world` image, wait for it to initialize, run a real query, and clean up:
+
+```
+docker run -d --name pg-ds-world aa8y/postgres-dataset:world
+# The first start loads the dataset; give it a few seconds. Watch for the
+# second "database system is ready to accept connections":
+docker logs -f pg-ds-world
+docker exec -it pg-ds-world psql -d world -c 'SELECT name, population FROM city ORDER BY population DESC LIMIT 5'
+docker rm -f pg-ds-world
+```
+
+That is the whole shape of it: pull a tag from the [matrix](#dataset-support-matrix) below, `docker run`, connect. Each engine connects a little differently (server engines take a client over a port; SQLite and DuckDB open a file), and each has per-dataset notes — see its guide: [PostgreSQL](postgres/README.md) · [MySQL](mysql/README.md) · [CockroachDB](cockroach/README.md) · [SQLite](sqlite/README.md) · [DuckDB](duckdb/README.md) · [ClickHouse](clickhouse/README.md) · [Apache Druid](druid/README.md) · [Apache Pinot](pinot/README.md).
 
 ## Dataset support matrix
 
@@ -32,24 +47,18 @@ Each cell is the image tag to pull for that dataset on that engine; **—** mean
 
 ¹ `<site>` is one of `beer`, `coffee`, `poker`, `woodworking`, `chess`, `cooking`, `outdoors`, `boardgames` (e.g. `stackexchange-chess`).
 
-Every engine also publishes a `latest` tag: it tracks `world` on PostgreSQL, MySQL, Apache Druid, and Apache Pinot, `chinook` on CockroachDB, SQLite, and DuckDB, and `nyc-taxi` on ClickHouse.
-
-## Quick start
-
-```
-docker run -d --name pg-ds-world aa8y/postgres-dataset:world
-docker exec -it pg-ds-world psql -d world
-```
-
-Each engine's README has the equivalent client invocation and per-dataset notes: [PostgreSQL](postgres/README.md), [MySQL](mysql/README.md), [CockroachDB](cockroach/README.md), [SQLite](sqlite/README.md), [DuckDB](duckdb/README.md), [ClickHouse](clickhouse/README.md), [Apache Druid](druid/README.md), [Apache Pinot](pinot/README.md).
+Every engine also publishes a `latest` tag. It is an **alias**, not a dataset of its own: it opens the same dataset one of the named tags does — `world` on PostgreSQL, MySQL, Apache Druid, and Apache Pinot; `chinook` on CockroachDB, SQLite, and DuckDB; and `nyc-taxi` on ClickHouse.
 
 ## Tag naming
 
-The database inside each image is the bare dataset name — the tag minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`). One exception: on ClickHouse the `nyc-taxi` tag's database is `nyc_taxi`, because the base image interpolates the name into SQL unquoted and a hyphen does not survive that.
+A tag names the dataset an image carries. How that dataset is addressed once the container is up depends on the engine:
+
+* **PostgreSQL, MySQL, CockroachDB, SQLite, DuckDB, ClickHouse** put the dataset in a **named database** (or, for SQLite/DuckDB, a named file). The name is the tag minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`). Two things are not databases named after the tag: the `latest` alias opens its target dataset's database (e.g. `world`, not `latest`), and on ClickHouse the `nyc-taxi` tag's database is `nyc_taxi`, because the base image interpolates the name into SQL unquoted and a hyphen does not survive that.
+* **Apache Druid and Apache Pinot** have no per-dataset database to name — Druid exposes the dataset's tables as datasources in its single `druid` schema, and Pinot as a flat namespace of tables — so you query the tables directly. Each engine's guide shows how.
 
 ## Documentation
 
-* Engine guides: [PostgreSQL](postgres/README.md) · [MySQL](mysql/README.md) · [CockroachDB](cockroach/README.md) · [SQLite](sqlite/README.md) · [DuckDB](duckdb/README.md) · [ClickHouse](clickhouse/README.md) · [Apache Druid](druid/README.md) · [Apache Pinot](pinot/README.md)
+* Engine guides: [PostgreSQL](postgres/README.md) · [MySQL](mysql/README.md) · [CockroachDB](cockroach/README.md) · [SQLite](sqlite/README.md) · [DuckDB](duckdb/README.md) · [ClickHouse](clickhouse/README.md) · [Apache Druid](druid/README.md) · [Apache Pinot](pinot/README.md) — each has the client invocation, host-connection details, and per-dataset notes for its engine.
 * [Building images](docs/building.md) — `dave`, custom images, and build caching
 * [Testing](docs/testing.md) — structure tests and integration smoke tests
 * [Dataset attribution and licenses](docs/ATTRIBUTION.md)
@@ -62,10 +71,9 @@ This repository's own software and packaging are [MIT licensed](LICENSE). Each b
 
 ## Future Work
 
-* The last matrix gaps. `adventureworks` and `omdb` stay PostgreSQL-only by design (their upstreams lean on PostgreSQL-specific machinery — see [Datasets not ported to MySQL](mysql/README.md#datasets-not-ported-to-mysql)). `nyc-taxi` is Parquet, which only DuckDB reads natively; the other engines would need a Parquet-to-CSV stage in every Dockerfile and a ~500 MB CSV shipped in each image. `airlines` on MySQL and CockroachDB is a volume problem, not a dialect one: 10.7M rows replayed as init-time `INSERT`s would blow the smoke test's readiness budget, so it needs a bulk-load path first (MariaDB's `LOAD DATA INFILE`, CockroachDB's `IMPORT INTO` as the `employees` tag already does) and a ~500 MB data payload in the image.
-* More ClickHouse datasets: the engine carries the pgFoundry family, `chinook`, `nyc-taxi`, the CSV datasets and the Stack Exchange sites; the remaining gaps need per-dataset work (`northwind`'s `bytea` columns, `sportsdb`'s 107 mostly-empty tables) — see [Datasets not ported to ClickHouse](clickhouse/README.md#datasets-not-ported-to-clickhouse).
-* More DuckDB datasets: the engine now carries every dataset except `adventureworks` and `omdb` (see [duckdb/README.md](duckdb/README.md#duckdb-datasets)), so new additions here are about new sources rather than porting.
-* More Apache Druid datasets: the engine carries the pgFoundry family, `pgexercises`, `geonames`, `openflights` and `moma`; the gaps need either an input format that tolerates embedded newlines (the Stack Exchange sites) or per-tag JVM sizing (`nyc-taxi` ingests in under two minutes with a 1 GB peon, but the shared nano profile gives it 256 MB) — see [Datasets not ported to Druid](druid/README.md#datasets-not-ported-to-druid).
-* More Apache Pinot datasets: `nyc-taxi` is the obvious next tag — a single wide fact table with a real time column, which needs Pinot's Parquet ingestion job rather than the controller's synchronous CSV endpoint the current tags use — see [Datasets not ported to Pinot](pinot/README.md#datasets-not-ported-to-pinot).
-* More Parquet-native datasets: `nyc-taxi` showed the shape (fetch a Parquet file, `CREATE TABLE ... AS FROM read_parquet(...)`), and the open-data world publishes plenty more.
-* Find and add more free data sources.
+The remaining matrix gaps, and what each one is waiting on:
+
+* **The last matrix gaps.** `adventureworks` and `omdb` stay PostgreSQL-only by design (their upstreams lean on PostgreSQL-specific machinery — see [Datasets not ported to MySQL](mysql/README.md#datasets-not-ported-to-mysql)). `airlines` on MySQL and CockroachDB is a volume problem, not a dialect one: 10.7M rows replayed as init-time `INSERT`s would blow the smoke test's readiness budget, so it needs a bulk-load path first (MariaDB's `LOAD DATA INFILE`, CockroachDB's `IMPORT INTO` as the `employees` tag already does) and a ~500 MB data payload in the image.
+* **More OLAP datasets.** ClickHouse carries the pgFoundry family, `chinook`, `nyc-taxi`, the CSV datasets and the Stack Exchange sites; its remaining gaps need per-dataset work (`northwind`'s `bytea` columns, `sportsdb`'s 107 mostly-empty tables — see [Datasets not ported to ClickHouse](clickhouse/README.md#datasets-not-ported-to-clickhouse)). Druid needs an input format that tolerates embedded newlines (the Stack Exchange sites) or per-tag JVM sizing (`nyc-taxi`) — see [Datasets not ported to Druid](druid/README.md#datasets-not-ported-to-druid). Pinot's obvious next tag is `nyc-taxi`, which needs its Parquet ingestion job rather than the controller's synchronous CSV endpoint — see [Datasets not ported to Pinot](pinot/README.md#datasets-not-ported-to-pinot).
+* **More Parquet-native datasets.** DuckDB and ClickHouse both ship `nyc-taxi` from Parquet already (DuckDB reads it at build time; ClickHouse loads it at container start), and the open-data world publishes plenty more sources in that shape.
+* **More free data sources** across every engine.

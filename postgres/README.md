@@ -10,15 +10,23 @@ The available tags are the PostgreSQL column of the [dataset support matrix](../
 
 ## Usage
 
-You can start the container by running:
+Start the `world` image, wait for it to initialize, and query it with the in-container `psql` client:
 ```
-docker run -d --name pg-ds-<tag> aa8y/postgres-dataset:<tag>
+docker run -d --name pg-ds-world aa8y/postgres-dataset:world
+# The first start loads the dataset; give it a moment to initialize (watch
+# `docker logs pg-ds-world` for a *second* "ready to accept connections").
+docker exec -it pg-ds-world psql -d world -c 'SELECT count(*) FROM city'
 ```
-and access it by:
+To run a different dataset, swap `world` for any tag in the PostgreSQL column of the [matrix](../README.md#dataset-support-matrix); the database inside is the tag name minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`).
+
+### Connecting from the host or another container
+
+The image keeps the base image's default superuser `postgres` with password `postgres` on the standard port 5432. Publish the port and connect with any client:
 ```
-docker exec -it pg-ds-<tag> psql -d <db_name>
+docker run -d --name pg-ds-world -p 5432:5432 aa8y/postgres-dataset:world
+PGPASSWORD=postgres psql -h localhost -U postgres -d world -c 'SELECT count(*) FROM city'
 ```
-where `<tag>` is one of the tags in the [matrix](../README.md#dataset-support-matrix) and `<db_name>` is the dataset baked into it — the tag itself, minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`). You can also use them with `docker-compose`. See [this example](https://github.com/aa8y/data-dude/blob/master/docker-compose.yml) for information on how to use them.
+These are throwaway practice and test images with trivial credentials — don't put them anywhere that matters. They also compose: see [this example](https://github.com/aa8y/data-dude/blob/master/docker-compose.yml).
 
 ## PostgreSQL datasets
 

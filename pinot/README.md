@@ -6,31 +6,13 @@ Instead the build **decompiles** each dataset — parsing the source's DDL for c
 
 The available tags are the Pinot column of the [dataset support matrix](../README.md#dataset-support-matrix), which also lists each dataset's upstream source.
 
-## Base image
-
-[Apache Pinot](https://pinot.apache.org/) as [`aa8y/pinot-dataset`](https://hub.docker.com/r/aa8y/pinot-dataset), built on the official [`apachepinot/pinot`](https://hub.docker.com/r/apachepinot/pinot) image (multi-arch `amd64` + `arm64`, Java 21 on Ubuntu 24.04, pinned in the [Dockerfile](Dockerfile)). It is by far the heaviest base in this repo — roughly 2.6 GB on disk, because Pinot is a JVM application assembled from some forty plugin jars and upstream publishes no slim variant — but every tag here shares those layers, so the cost is paid once per host rather than once per dataset.
-
-Two things are changed on top of it:
-
-* **`JAVA_OPTS`** drops from the base image's `-Xms4G -Xmx4G` to `-Xms512M -Xmx2G`. That is a production-cluster figure on a container running one node holding one sample dataset; OFFLINE segments are memory-mapped rather than heaped, so the heap only has to cover query execution and the largest single segment build. Measured peak container memory across the shipped tags is **1.04 GB (`iso3166`) to 1.30 GB (`moma`)** — the whole range sits inside the 2 GB ceiling with room to spare.
-* **The entrypoint** is a wrapper that starts the cluster and loads the dataset. It still forwards any arguments to `pinot-admin.sh`, so the base image's own interface (`docker run <image> QuickStart -help`) keeps working; only a bare `docker run` starts a dataset cluster.
-
-## Topology
-
-Everything runs in one container, in two JVMs:
-
-* **ZooKeeper** on 2181, in its own small JVM (`-Xmx256M`). Pinot's cluster state lives in Apache Helix, which needs ZooKeeper, and `StartServiceManager -bootstrapServices` only knows the `CONTROLLER`/`BROKER`/`SERVER`/`MINION` roles — `ZOOKEEPER` is not a Pinot service role, so it cannot be bootstrapped alongside them.
-* **Controller (9000), broker (8099) and server (8098 query / 8097 admin)** in a second JVM, via `StartServiceManager` and the three [`conf/`](conf) files. `QuickStart -type EMPTY` would also give a one-JVM cluster, but it assigns its own ports (broker 8000, server 7050, ZooKeeper 2123) and starts a minion nobody here needs, so the container would not answer on the ports the base image exposes.
-
-Runtime state — the controller's deep store and the server's segment directory — lives under `/var/lib/pinot`, deliberately *not* under `/opt/pinot/data`, which the base image declares as a `VOLUME`.
-
 ## Usage
 
 ```
-docker run -d -p 9000:9000 -p 8099:8099 --name pinot-ds-<tag> aa8y/pinot-dataset:<tag>
+docker run -d -p 9000:9000 -p 8099:8099 --name pinot-ds-world aa8y/pinot-dataset:world
 ```
 
-where `<tag>` is one of the tags in the Pinot column of the [matrix](../README.md#dataset-support-matrix).
+To run a different dataset, swap `world` for any tag in the Pinot column of the [matrix](../README.md#dataset-support-matrix).
 
 **First start takes roughly 30–40 seconds** on an unloaded host — 27 s for the smallest dataset, 40 s for `moma` — and materially longer on a busy or memory-constrained one, because two JVM starts and Helix settling account for a fixed ~25 s of it and the rest is turning the shipped CSVs into real Pinot segments. The container prints one unmistakable line when it is genuinely ready:
 
@@ -57,6 +39,24 @@ curl -s -X POST -H 'Content-Type: application/json' \
 ```
 
 The controller's REST API is on the same port as the console — `curl -s http://localhost:9000/tables` lists what the image carries.
+
+## Base image
+
+[Apache Pinot](https://pinot.apache.org/) as [`aa8y/pinot-dataset`](https://hub.docker.com/r/aa8y/pinot-dataset), built on the official [`apachepinot/pinot`](https://hub.docker.com/r/apachepinot/pinot) image (multi-arch `amd64` + `arm64`, Java 21 on Ubuntu 24.04, pinned in the [Dockerfile](Dockerfile)). It is by far the heaviest base in this repo — roughly 2.6 GB on disk, because Pinot is a JVM application assembled from some forty plugin jars and upstream publishes no slim variant — but every tag here shares those layers, so the cost is paid once per host rather than once per dataset.
+
+Two things are changed on top of it:
+
+* **`JAVA_OPTS`** drops from the base image's `-Xms4G -Xmx4G` to `-Xms512M -Xmx2G`. That is a production-cluster figure on a container running one node holding one sample dataset; OFFLINE segments are memory-mapped rather than heaped, so the heap only has to cover query execution and the largest single segment build. Measured peak container memory across the shipped tags is **1.04 GB (`iso3166`) to 1.30 GB (`moma`)** — the whole range sits inside the 2 GB ceiling with room to spare.
+* **The entrypoint** is a wrapper that starts the cluster and loads the dataset. It still forwards any arguments to `pinot-admin.sh`, so the base image's own interface (`docker run <image> QuickStart -help`) keeps working; only a bare `docker run` starts a dataset cluster.
+
+## Topology
+
+Everything runs in one container, in two JVMs:
+
+* **ZooKeeper** on 2181, in its own small JVM (`-Xmx256M`). Pinot's cluster state lives in Apache Helix, which needs ZooKeeper, and `StartServiceManager -bootstrapServices` only knows the `CONTROLLER`/`BROKER`/`SERVER`/`MINION` roles — `ZOOKEEPER` is not a Pinot service role, so it cannot be bootstrapped alongside them.
+* **Controller (9000), broker (8099) and server (8098 query / 8097 admin)** in a second JVM, via `StartServiceManager` and the three [`conf/`](conf) files. `QuickStart -type EMPTY` would also give a one-JVM cluster, but it assigns its own ports (broker 8000, server 7050, ZooKeeper 2123) and starts a minion nobody here needs, so the container would not answer on the ports the base image exposes.
+
+Runtime state — the controller's deep store and the server's segment directory — lives under `/var/lib/pinot`, deliberately *not* under `/opt/pinot/data`, which the base image declares as a `VOLUME`.
 
 ## How a dataset becomes a Pinot table
 
