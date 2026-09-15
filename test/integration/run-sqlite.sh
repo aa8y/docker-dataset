@@ -49,6 +49,7 @@ VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_SUBDIR="sqlite"
+# shellcheck source=test/integration/lib.sh
 . "${SCRIPT_DIR}/lib.sh"
 
 # Identical-image dedupe: some tags are just a second name for the same build
@@ -62,6 +63,12 @@ sqlite_q() {
   # container, returning pipe-free, header-less rows (default sqlite3 list mode).
   local db="$1" sql="$2"
   docker run --rm "$IMAGE" /usr/bin/sqlite3 "/data/${db}.db" "$sql"
+}
+
+probe_query() {
+  # probe_query <db> <sql> — the semantic-check hook lib.sh's check_semantics
+  # calls; the same client the counts use, one query, bare rows on stdout.
+  sqlite_q "$1" "$2"
 }
 
 # Authoritative counts for every table in a database, as a JSON object keyed by
@@ -92,16 +99,34 @@ integrity_ok() {
   # PRAGMA quick_check walks every table btree and prints exactly "ok" for a
   # sound file, or a list of problems for a truncated or corrupt one -- damage
   # that row counts alone can miss. It skips integrity_check's expensive
-  # index-content verification, so it costs about a second per dataset. A
-  # database sqlite cannot open at all prints its error on stderr and yields
-  # no stdout, which the empty-result message below covers; that is a fact
-  # about this one dataset file, not the run, so it must not abort the script.
-  local db="$1" result
-  result="$(sqlite_q "$db" "PRAGMA quick_check")" || true
+  # index-content verification, so it costs about a second per dataset.
+  #
+  # Exit codes, so the caller can honor the lib.sh retry contract:
+  #   0  the database opened and quick_check returned "ok".
+  #   1  the database opened but quick_check reported a problem, OR sqlite could
+  #      not open the file at all -- both are deterministic facts about this one
+  #      baked-in dataset file (a corrupt or truncated artifact), so the caller
+  #      maps this to $ASSERT_RC and never retries it.
+  #   2  the *check itself* could not run: `docker run` failed with 125/126/127
+  #      (daemon down, socket denied, image unpullable) or the container was
+  #      killed by a signal (128+n). That says nothing about the database, so
+  #      the caller must treat it as transient, not as corruption -- otherwise a
+  #      momentary daemon blip is misfiled as $ASSERT_RC and with-retry.sh, which
+  #      never retries that code, gives up on a failure a second attempt would
+  #      clear.
+  local db="$1" result drc=0
+  # `|| drc=$?` (not `|| true`) so the docker/sqlite exit status survives to be
+  # classified; the `$(...)` capture keeps sqlite's own stdout for the ok test.
+  result="$(sqlite_q "$db" "PRAGMA quick_check")" || drc=$?
+  if [[ "$drc" -ge 125 ]]; then
+    fail "${db}: could not run integrity check (docker exit ${drc}); treating as transient infrastructure failure, not corruption"
+    return 2
+  fi
   if [[ "$result" != "ok" ]]; then
     fail "${db}: PRAGMA quick_check failed: ${result:-no output (unreadable database?)}"
     return 1
   fi
+  return 0
 }
 
 # Assertion outcomes below are deterministic -- same image, same expected bytes,
@@ -109,7 +134,18 @@ integrity_ok() {
 rc=0
 for db in "${DATASETS[@]}"; do
   info "==> ${IMAGE} (${db})"
-  integrity_ok "$db" || { rc="$ASSERT_RC"; continue; }
+  # Separate the check *failing to run* (docker/infra, retryable) from the check
+  # *finding damage* (deterministic, $ASSERT_RC). A `|| irc=$?` capture, because
+  # set -e would otherwise abort on integrity_ok's own nonzero return.
+  irc=0
+  integrity_ok "$db" || irc=$?
+  if [[ "$irc" -eq 2 ]]; then
+    # The daemon/socket/image problem hits every dataset in this image, so there
+    # is nothing left to test: exit now with a plain (retryable) code rather
+    # than the deterministic $ASSERT_RC.
+    exit "$irc"
+  fi
+  [[ "$irc" -eq 0 ]] || { rc="$ASSERT_RC"; continue; }
   expected_file="${EXPECTED_DIR}/${db}.json"
   actual="$(actual_counts "$db")"
 
@@ -124,6 +160,7 @@ for db in "${DATASETS[@]}"; do
   fi
 
   check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
+  check_semantics "$db" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"

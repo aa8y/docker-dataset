@@ -23,10 +23,16 @@
 # Done-stamps (opt-in): when MERGE_STAMP_DIR names a directory, each target tag
 # that lands leaves a stamp there, and a stamped tag is skipped on the next
 # invocation. CI persists the directory across re-run attempts of the same
-# commit, so a run that dies part-way only redoes the remainder. The stamps are
-# keyed by target ref only, which is safe exactly because the cache scope is one
-# commit's attempts -- the per-arch source images cannot change under a stamp
-# within that scope.
+# commit, so a run that dies part-way only redoes the remainder. The stamp is
+# keyed by target ref, and its *body* is the per-arch source digests the index
+# was built from (`<arch>=<digest>,...`, sorted): a target is skipped only when a
+# stamp exists AND still names the same digests. The per-arch `<tag>-<arch>`
+# source tags are mutable and a re-run re-pushes them, so if an upstream, base,
+# or build result changed between attempts, push-image records a new digest, the
+# composed index and this signature move, the stamp no longer matches, and the
+# target is re-merged rather than left pointing at stale sources (audit
+# 2026-09-14, TST-05). An empty-bodied stamp from an older version simply never
+# matches, so it re-merges once -- safe.
 #
 # Credentials: DOCKERHUB_USERNAME / DOCKERHUB_TOKEN when set (CI); otherwise the
 # credential helper `docker login` configured in ~/.docker/config.json, so a
@@ -193,32 +199,50 @@ put_index() {
 # second, so even the full tag list finishes in minutes, and one writer never
 # trips the registry's abuse limiter. The stamp is written only after the PUT
 # and digest check both pass.
+# The sorted per-arch source-digest signature of a composed index, the stamp
+# body: `<arch>=<digest>,...`. Two runs that composed the same target from the
+# same per-arch images produce the same string; a moved source digest changes it.
+index_signature() {
+  printf '%s' "$1" | jq -r '[.manifests[] | "\(.platform.architecture)=\(.digest)"] | sort | join(",")'
+}
+
 run_pass() {
-  local label="$1" lines="$2" repo tag source arches index body stamp
+  local label="$1" lines="$2" repo tag source arches index sig body stamp
   [ -n "$lines" ] || { echo "merge-manifests: $label: nothing to do" >&2; return 0; }
   body="$(mktemp)"
   while IFS="$(printf '\t')" read -r repo tag source arches; do
-    if [ -n "${MERGE_STAMP_DIR:-}" ]; then
-      stamp="${MERGE_STAMP_DIR}/$(printf '%s' "$repo:$tag" | tr -c 'A-Za-z0-9._-' '-')"
-      if [ -f "$stamp" ]; then
-        echo "merge-manifests: $repo:$tag already merged in an earlier attempt; skipping" >&2
-        continue
-      fi
-    fi
+    stamp=""
+    [ -z "${MERGE_STAMP_DIR:-}" ] || stamp="${MERGE_STAMP_DIR}/$(printf '%s' "$repo:$tag" | tr -c 'A-Za-z0-9._-' '-')"
+
     if [ "$dry_run" -eq 1 ]; then
-      if index="$(compose_index "$repo" "$source" "$arches")"; then
+      # Preview only: without descriptors there is no signature to compare, so
+      # fall back to presence for the skip note.
+      if [ -n "$stamp" ] && [ -f "$stamp" ]; then
+        echo "PUT $repo:$tag (stamped; would skip unless sources moved)"
+      elif index="$(compose_index "$repo" "$source" "$arches")"; then
         echo "PUT $repo:$tag <- $(printf '%s' "$index" | jq -r '[.manifests[] | "\(.platform.architecture)=\(.digest)"] | join(" ")')"
       else
         echo "PUT $repo:$tag <- $source-{$arches} (no descriptors loaded)"
       fi
       continue
     fi
+
     index="$(compose_index "$repo" "$source" "$arches")" \
       || { echo "merge-manifests: $index" >&2; rm -f "$body"; return 1; }
+    sig="$(index_signature "$index")"
+
+    # Skip only a stamp that names the very digests this run would publish: a
+    # bare presence check would leave a target pointing at sources a re-run has
+    # since moved (TST-05).
+    if [ -n "$stamp" ] && [ -f "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$sig" ]; then
+      echo "merge-manifests: $repo:$tag already merged from identical sources; skipping" >&2
+      continue
+    fi
+
     printf '%s' "$index" > "$body"
     put_index "$repo" "$tag" "$body" || { rm -f "$body"; return 1; }
     echo "merge-manifests: $repo:$tag <- $(printf '%s' "$index" | jq -r '[.manifests[].platform.architecture] | join("+")')" >&2
-    if [ -n "${MERGE_STAMP_DIR:-}" ]; then : > "$stamp"; fi
+    [ -z "$stamp" ] || printf '%s\n' "$sig" > "$stamp"
   done <<EOF
 $lines
 EOF

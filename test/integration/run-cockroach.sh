@@ -51,6 +51,7 @@ VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_SUBDIR="cockroach"
+# shellcheck source=test/integration/lib.sh
 . "${SCRIPT_DIR}/lib.sh"
 
 CONTAINER="cr-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
@@ -69,6 +70,12 @@ crdb_q() {
   # test container with TSV output and the header row stripped.
   local db="$1"; shift
   docker exec "$CONTAINER" cockroach sql --insecure --database="$db" --format=tsv "$@" 2>/dev/null | tail -n +2
+}
+
+probe_query() {
+  # probe_query <db> <sql> — the semantic-check hook lib.sh's check_semantics
+  # calls; the same client the counts use, one query, bare rows on stdout.
+  crdb_q "$1" -e "$2"
 }
 
 # Authoritative counts for every base table in a database, as a JSON object
@@ -160,6 +167,7 @@ for db in "${DATASETS[@]}"; do
   fi
 
   check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
+  check_semantics "$db" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"

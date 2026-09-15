@@ -45,6 +45,17 @@ else
   sha256() { shasum -a 256; }
 fi
 
+# A cache/fallback entry is only trustworthy when it is exactly the advertised
+# output shape: 16 lowercase hex chars (see the Usage line below). Anything else
+# -- a truncated write from an interrupted run, a hand-edit, restored bytes from
+# an unrelated file, outright corruption -- must be treated as *absent* so the
+# value is recomputed, never propagated verbatim into a build arg as accepted
+# upstream identity. `-s` already rejects empty files; this rejects nonempty
+# garbage, which `-s` cannot see.
+valid_fingerprint() {
+  [[ "$1" =~ ^[0-9a-f]{16}$ ]]
+}
+
 # Entry key, shared by the memo cache and the fallback directory: sha256 of the
 # URL list, first 16 hex chars. Computing it once (and only when something
 # actually needs it) keeps the two directories addressable by the same name, so
@@ -60,8 +71,13 @@ cache_file=""
 if [ -n "${DATASET_CHECKSUM_CACHE:-}" ]; then
   cache_file="${DATASET_CHECKSUM_CACHE}/${key}"
   if [ -s "$cache_file" ]; then
-    cat "$cache_file"
-    exit 0
+    cached="$(head -n 1 "$cache_file" | tr -d '[:space:]')"
+    if valid_fingerprint "$cached"; then
+      printf '%s\n' "$cached"
+      exit 0
+    fi
+    # A nonempty entry that is not a fingerprint is not a hit: fall through and
+    # recompute, which overwrites it with a real value via write_entry below.
   fi
   mkdir -p "$DATASET_CHECKSUM_CACHE" 2>/dev/null || cache_file=""
 fi
@@ -146,7 +162,10 @@ else
   # one fingerprint, because the manifest reads it via $(...).
   if [ -n "$fallback_file" ] && [ -s "$fallback_file" ]; then
     fallback="$(head -n 1 "$fallback_file" | tr -d '[:space:]')"
-    if [ -n "$fallback" ]; then
+    # Only a well-formed fingerprint is worth reusing: a corrupt last-known-good
+    # entry must not become the value baked into the build arg. A malformed one
+    # is ignored, leaving the freshly computed (degraded) checksum in place.
+    if valid_fingerprint "$fallback"; then
       echo "dataset-checksum: upstream metadata unavailable; reusing last-known-good ${fallback} instead of degraded ${checksum}" >&2
       checksum="$fallback"
       # Memo cache only, never the fallback file: memoizing keeps every tag in

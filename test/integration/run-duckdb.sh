@@ -48,6 +48,7 @@ VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_SUBDIR="duckdb"
+# shellcheck source=test/integration/lib.sh
 . "${SCRIPT_DIR}/lib.sh"
 
 # Identical-image dedupe: some tags are just a second name for the same build,
@@ -64,6 +65,12 @@ duckdb_q() {
   # -readonly keeps a query from ever mutating the shipped file.
   local db="$1" sql="$2"
   docker run --rm "$IMAGE" /duckdb -readonly -csv -noheader -c "$sql" "/data/${db}.duckdb"
+}
+
+probe_query() {
+  # probe_query <db> <sql> — the semantic-check hook lib.sh's check_semantics
+  # calls; the same client the counts use, one query, bare rows on stdout.
+  duckdb_q "$1" "$2"
 }
 
 # Authoritative counts for every table in a database, as a JSON object keyed by
@@ -117,6 +124,7 @@ for db in "${DATASETS[@]}"; do
   fi
 
   check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
+  check_semantics "$db" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"

@@ -57,6 +57,22 @@ fi
 retries="${DDS_ITEST_RETRIES:-1}"
 delay="${DDS_ITEST_RETRY_DELAY:-10}"
 
+# Validate the knobs before the first attempt rather than failing through the
+# arithmetic and `sleep` that use them: an unset-but-nonempty junk value like
+# `banana` would otherwise reach `[[ attempt -ge banana ]]` and abort with an
+# opaque `banana: unbound variable` only *after* a full test attempt has run,
+# and a negative count would silently disable retries with no hint why. Both are
+# non-negative integers or nothing; anything else is a caller error (exit 2, as
+# for a missing script).
+for _knob in "DDS_ITEST_RETRIES=$retries" "DDS_ITEST_RETRY_DELAY=$delay"; do
+  _name="${_knob%%=*}"; _val="${_knob#*=}"
+  case "$_val" in
+    ''|*[!0-9]*)
+      printf 'with-retry.sh: %s must be a non-negative integer, got: %s\n' "$_name" "$_val" >&2
+      exit 2 ;;
+  esac
+done
+
 attempt=0
 while :; do
   rc=0

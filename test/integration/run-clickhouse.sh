@@ -56,6 +56,7 @@ VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_SUBDIR="clickhouse"
+# shellcheck source=test/integration/lib.sh
 . "${SCRIPT_DIR}/lib.sh"
 
 CONTAINER="ch-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
@@ -78,6 +79,13 @@ ch_q() {
   # ch_q <sql> — run one query with clickhouse-client in the test container,
   # returning the raw rows (TSV, header-less, which is the client's default).
   docker exec "$CONTAINER" clickhouse-client --query "$1" 2>/dev/null
+}
+
+probe_query() {
+  # probe_query <db> <sql> — the semantic-check hook lib.sh's check_semantics
+  # calls. clickhouse-client selects no default database, so a probe's SQL
+  # qualifies tables as <db>.<table> (the counts do the same); <db> is unused.
+  ch_q "$2"
 }
 
 # Authoritative counts for every base table in a database, as a JSON object
@@ -183,6 +191,7 @@ for db in "${DATASETS[@]}"; do
   fi
 
   check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
+  check_semantics "$db" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"

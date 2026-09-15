@@ -59,6 +59,7 @@ VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_SUBDIR=""   # postgres, the original engine, keeps test/expected/ un-nested
+# shellcheck source=test/integration/lib.sh
 . "${SCRIPT_DIR}/lib.sh"
 
 CONTAINER="pg-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"
@@ -76,6 +77,12 @@ psql_db() {
   # psql_db <db> <args...> — run psql against <db> in the test container.
   local db="$1"; shift
   docker exec "$CONTAINER" psql -U postgres -d "$db" -At "$@"
+}
+
+probe_query() {
+  # probe_query <db> <sql> — the semantic-check hook lib.sh's check_semantics
+  # calls; the same client the counts use, one query, bare rows on stdout.
+  psql_db "$1" -c "$2"
 }
 
 # Authoritative counts for every base table in a database, as a JSON object
@@ -147,6 +154,7 @@ for db in "${DATASETS[@]}"; do
   fi
 
   check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
+  check_semantics "$db" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"
