@@ -1,5 +1,21 @@
 # Building images
 
+## Prerequisites
+
+The build commands below are run from the root of a clone of this repository —
+they read [`manifest.yml`](../manifest.yml) and each engine's build context by
+relative path. You need [Docker](https://docs.docker.com/get-docker/) (with
+Buildx, which ships with modern Docker) and **`dave`**, the small build driver
+that turns a manifest tag into the right `docker build` invocation. It is an npm
+package:
+```
+npm install -g dave
+```
+CI pins it to the version in [`DAVE_VERSION`](../.github/workflows/ci.yml); any
+recent `dave >= 0.5.0` works locally. Its own documentation lives with the
+package on npm. You can also skip `dave` entirely and call `docker build` with
+the same build args by hand — see [Custom images](#custom-images) below.
+
 ## Custom images
 
 Each image carries one dataset, selected with the `DATASET` build arg along with that dataset's sources (declared per tag in [`manifest.yml`](../manifest.yml)). The simplest way to build a tag is through `dave`:
@@ -82,8 +98,15 @@ references just before `EXTRACT`:
 
 The fingerprint is recorded on the final image as the
 `org.opencontainers.image.revision` label (`docker inspect`). The computation
-is fail-open: a source that exposes no usable metadata (or is momentarily
-unreachable) collapses to a stable marker and caches as before rather than
-forcing a spurious full rebuild. The script needs `curl`, `jq`, and `git` on
-the host (all present on the CI runners; `jq` is already required by the
-integration tests).
+is fail-open: a source whose metadata cannot be read (or is momentarily
+unreachable) folds in as an `unknown` marker, so a flaky upstream never fails a
+build. That is safe but not free. A source that *previously* had readable
+metadata and now reads as `unknown` has a *different* fingerprint, which busts
+`EXTRACT` and forces a full rebuild — a re-download from the very upstream that
+just failed to answer; only a source that never exposed usable metadata caches
+on a stable marker. The opt-in `DATASET_CHECKSUM_FALLBACK` last-known-good
+directory closes that gap by re-emitting the stored fingerprint on a degraded
+read — see [Flaky upstreams and the dataset
+fingerprint](testing.md#flaky-upstreams-and-the-dataset-fingerprint) in the
+testing guide. The script needs `curl`, `jq`, and `git` on the host (all present
+on the CI runners; `jq` is already required by the integration tests).

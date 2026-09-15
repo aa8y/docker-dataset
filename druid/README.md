@@ -4,24 +4,12 @@ The Apache Druid images follow the same one-dataset-per-image model as the rest 
 
 Each [`aa8y/druid-dataset`](https://hub.docker.com/r/aa8y/druid-dataset) image is built through the [Dockerfile](Dockerfile) driven by [`manifest.yml`](../manifest.yml). The available tags are the Druid column of the [dataset support matrix](../README.md#dataset-support-matrix), which also lists each dataset's upstream source.
 
-## Base image
-
-[Apache Druid](https://druid.apache.org/) 37.0.0 on [`eclipse-temurin:21-jre-alpine`](https://hub.docker.com/_/eclipse-temurin), built from the **binary distribution** rather than `FROM apache/druid`.
-
-That is not a preference, it is a constraint. Every published `apache/druid` tag is **amd64-only** — the upstream image builds Druid's web console during its own build, which does not resolve on arm64, so its Dockerfile pins `--platform=linux/amd64` — while this repo publishes every image for `linux/amd64` *and* `linux/arm64` on native runners. Druid itself is pure Java and architecture-independent, so the build fetches the pinned release tarball, verifies it against the SHA-512 published at [downloads.apache.org](https://downloads.apache.org/druid/37.0.0/) (pinned in the Dockerfile, so the bytes are the ones this repo was written against), trims it, and lays it on the multi-arch Temurin JRE.
-
-Java 21 rather than 17 for the same reason: Druid 37 supports both, but `eclipse-temurin:17-jre-alpine` is published for amd64 only. Alpine rather than a glibc variant purely for size — Druid is pure Java, and the one place musl would show up, the distribution's own `bash` launcher scripts, is covered by installing `bash`.
-
-The distribution is trimmed from 687 MB to 279 MB. `extensions/` is 474 MB of it and Druid loads only what `druid.extensions.loadList` names, so all but one are dropped: nothing these images do reaches HDFS, S3, Azure, GCS, Kafka, Kinesis, Kubernetes, Avro, ORC, Protobuf or the security extensions. `quickstart/` (the tutorial's own sample data and specs) goes too. `LICENSE`, `NOTICE` and `licenses/` stay — they are the Apache-2.0 attribution that has to travel with a redistributed binary release. The one kept, `druid-parquet-extensions` (68 MB), is not loaded by any dataset shipped today; it is there because Parquet is the obvious next source format for this engine and adding it later would otherwise change the base image for every tag. `--build-arg DRUID_EXTENSIONS=` drops it, and a space-separated list keeps others; the entrypoint refuses to start if a dataset asks for one the image does not have, so a trimmed extension can never be half-referenced.
-
-Services are started the way the official image starts them — `bin/run-java` (which supplies the `--add-exports`/`--add-opens` flags Java 17+ needs) against the distribution's own `conf/druid/single-server/nano-quickstart` profile, with `DRUID_SINGLE_NODE_CONF` and the `druid_*` environment convention both honoured — so what you know about `apache/druid` still applies. The one deliberate difference: where the official `druid.sh` rewrites `runtime.properties` files before launching, [`druid-dataset.sh`](druid-dataset.sh) passes the same settings as `-D` system properties, which Druid reads at higher precedence.
-
 ## Usage
 
 Start a container and query through the router, which is the single endpoint for SQL, the JSON APIs and the web console:
 
 ```
-docker run -d -p 8888:8888 --name druid-ds-<tag> aa8y/druid-dataset:<tag>
+docker run -d -p 8888:8888 --name druid-ds-world aa8y/druid-dataset:world
 ```
 
 Then open the **web console** at <http://localhost:8888>, or query over HTTP:
@@ -32,7 +20,7 @@ curl -s http://localhost:8888/druid/v2/sql \
   -d '{"query": "SELECT continent, count(*) AS n FROM country GROUP BY 1 ORDER BY 2 DESC"}'
 ```
 
-where `<tag>` is one of the tags in the Druid column of the [matrix](../README.md#dataset-support-matrix). There is no database to name: an image carries one dataset, and its tables are the datasources in the single `druid` schema — `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'druid'` lists them. The image ships `curl`, so the same query works from inside with `docker exec`.
+To run a different dataset, swap `world` for any tag in the Druid column of the [matrix](../README.md#dataset-support-matrix). There is no database to name: an image carries one dataset, and its tables are the datasources in the single `druid` schema — `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'druid'` lists them. The image ships `curl`, so the same query works from inside with `docker exec`.
 
 ### First start
 
@@ -54,6 +42,18 @@ Each service also writes its own rolling log under `/opt/druid/var/log/`, which 
 ```
 docker exec druid-ds-world tail -f var/log/broker.log
 ```
+
+## Base image
+
+[Apache Druid](https://druid.apache.org/) 37.0.0 on [`eclipse-temurin:21-jre-alpine`](https://hub.docker.com/_/eclipse-temurin), built from the **binary distribution** rather than `FROM apache/druid`.
+
+That is not a preference, it is a constraint. Every published `apache/druid` tag is **amd64-only** — the upstream image builds Druid's web console during its own build, which does not resolve on arm64, so its Dockerfile pins `--platform=linux/amd64` — while this repo publishes every image for `linux/amd64` *and* `linux/arm64` on native runners. Druid itself is pure Java and architecture-independent, so the build fetches the pinned release tarball, verifies it against the SHA-512 published at [downloads.apache.org](https://downloads.apache.org/druid/37.0.0/) (pinned in the Dockerfile, so the bytes are the ones this repo was written against), trims it, and lays it on the multi-arch Temurin JRE.
+
+Java 21 rather than 17 for the same reason: Druid 37 supports both, but `eclipse-temurin:17-jre-alpine` is published for amd64 only. Alpine rather than a glibc variant purely for size — Druid is pure Java, and the one place musl would show up, the distribution's own `bash` launcher scripts, is covered by installing `bash`.
+
+The distribution is trimmed from 687 MB to 279 MB. `extensions/` is 474 MB of it and Druid loads only what `druid.extensions.loadList` names, so all but one are dropped: nothing these images do reaches HDFS, S3, Azure, GCS, Kafka, Kinesis, Kubernetes, Avro, ORC, Protobuf or the security extensions. `quickstart/` (the tutorial's own sample data and specs) goes too. `LICENSE`, `NOTICE` and `licenses/` stay — they are the Apache-2.0 attribution that has to travel with a redistributed binary release. The one kept, `druid-parquet-extensions` (68 MB), is not loaded by any dataset shipped today; it is there because Parquet is the obvious next source format for this engine and adding it later would otherwise change the base image for every tag. `--build-arg DRUID_EXTENSIONS=` drops it, and a space-separated list keeps others; the entrypoint refuses to start if a dataset asks for one the image does not have, so a trimmed extension can never be half-referenced.
+
+Services are started the way the official image starts them — `bin/run-java` (which supplies the `--add-exports`/`--add-opens` flags Java 17+ needs) against the distribution's own `conf/druid/single-server/nano-quickstart` profile, with `DRUID_SINGLE_NODE_CONF` and the `druid_*` environment convention both honoured — so what you know about `apache/druid` still applies. The one deliberate difference: where the official `druid.sh` rewrites `runtime.properties` files before launching, [`druid-dataset.sh`](druid-dataset.sh) passes the same settings as `-D` system properties, which Druid reads at higher precedence.
 
 ## Druid datasets
 
@@ -89,4 +89,4 @@ Each image carries one dataset, selected with the `DATASET` build arg along with
 dave build -c druid -t world
 ```
 
-To add or change a Druid dataset, declare its `extractUrl`, `sqlFiles` and any extras under a new tag in `manifest.yml` — the [ETL Dockerfile](Dockerfile) reads them as build args. `SQL_FILES` keeps its name for manifest uniformity across engines; here it names the ordered list of source files the transform hook reads, not files fed to a SQL client. Two more build args are specific to this engine: `DRUID_VERSION` / `DRUID_SHA512` pin the distribution, and `DRUID_EXTENSIONS` is the space-separated list of extensions to keep (empty by default). See [docs/building.md](../docs/building.md) for the full build instructions and how the build cache works.
+To add or change a Druid dataset, declare its `extractUrl`, `sqlFiles` and any extras under a new tag in `manifest.yml` — the [ETL Dockerfile](Dockerfile) reads them as build args. `SQL_FILES` keeps its name for manifest uniformity across engines; here it names the ordered list of source files the transform hook reads, not files fed to a SQL client. Two more build args are specific to this engine: `DRUID_VERSION` / `DRUID_SHA512` pin the distribution, and `DRUID_EXTENSIONS` is the space-separated list of extensions to keep (`druid-parquet-extensions` by default; `--build-arg DRUID_EXTENSIONS=` drops it, as the [Base image](#base-image) section describes). See [docs/building.md](../docs/building.md) for the full build instructions and how the build cache works.

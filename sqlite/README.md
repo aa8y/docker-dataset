@@ -12,13 +12,23 @@ The available tags are the SQLite column of the [dataset support matrix](../READ
 
 Start a container and open the database with the bundled `sqlite3` shell:
 ```
-docker run -it --rm aa8y/sqlite-dataset:<tag>
+docker run -it --rm aa8y/sqlite-dataset:world
 ```
-which opens `/data/<db_name>.db` directly. You can also run a one-off query:
+which opens `/data/world.db` directly (the container's `CMD`); at the `sqlite>` prompt, `SELECT count(*) FROM city;`. You can also run a one-off query without an interactive session:
 ```
-docker run --rm aa8y/sqlite-dataset:<tag> /usr/bin/sqlite3 /data/<db_name>.db "SELECT count(*) FROM ..."
+docker run --rm aa8y/sqlite-dataset:world /usr/bin/sqlite3 /data/world.db "SELECT count(*) FROM city"
 ```
-where `<tag>` is one of the tags in the SQLite column of the [matrix](../README.md#dataset-support-matrix) and `<db_name>` is the matching dataset name.
+To open a different dataset, swap `world` for any tag in the SQLite column of the [matrix](../README.md#dataset-support-matrix); the file is `/data/<tag>.db`, the tag minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`).
+
+### Keeping edits, and what `--rm` means
+
+These examples pass `--rm`, so the container — and any change you make to the database inside it — is discarded when it exits. That is what you want for a throwaway query session, but it means edits do not survive. To keep working against a modified database, copy the file out and open your own copy:
+```
+docker create --name sqlite-world aa8y/sqlite-dataset:world
+docker cp sqlite-world:/data/world.db ./world.db
+docker rm sqlite-world
+sqlite3 ./world.db   # a persistent copy on the host
+```
 
 ## SQLite datasets
 

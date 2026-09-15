@@ -12,13 +12,23 @@ The available tags are the DuckDB column of the [dataset support matrix](../READ
 
 Start a container and open the database with the bundled `duckdb` shell:
 ```
-docker run -it --rm aa8y/duckdb-dataset:<tag>
+docker run -it --rm aa8y/duckdb-dataset:world
 ```
-which opens `/data/db.duckdb` (a symlink to `/data/<db_name>.duckdb`) directly. You can also run a one-off query — the image has no shell, so the arguments replace the `CMD` and must name the binary by its absolute path:
+which opens `/data/db.duckdb` (a symlink to `/data/world.duckdb`) directly; at the `D` prompt, `SELECT count(*) FROM city;`. You can also run a one-off query — the image has no shell, so the arguments replace the `CMD` and must name the binary by its absolute path:
 ```
-docker run --rm aa8y/duckdb-dataset:<tag> /duckdb -readonly -csv -c "SELECT count(*) FROM ..." /data/<db_name>.duckdb
+docker run --rm aa8y/duckdb-dataset:world /duckdb -readonly -csv -c "SELECT count(*) FROM city" /data/world.duckdb
 ```
-where `<tag>` is one of the tags in the DuckDB column of the [matrix](../README.md#dataset-support-matrix) and `<db_name>` is the matching dataset name.
+To open a different dataset, swap `world` for any tag in the DuckDB column of the [matrix](../README.md#dataset-support-matrix); the file is `/data/<tag>.duckdb`, the tag minus any `stackexchange-` prefix (e.g. `stackexchange-beer` → `beer`).
+
+### Keeping edits, and what `--rm` means
+
+These examples pass `--rm`, so the container — and any change you make to the database inside it — is discarded when it exits. That suits a throwaway query session, but edits do not survive it. The image is distroless (no shell to exec), so to keep working against a modified database, copy the file out of a created container and open your own copy:
+```
+docker create --name duckdb-world aa8y/duckdb-dataset:world
+docker cp duckdb-world:/data/world.duckdb ./world.duckdb
+docker rm duckdb-world
+duckdb ./world.duckdb   # a persistent copy on the host
+```
 
 ## DuckDB datasets
 
