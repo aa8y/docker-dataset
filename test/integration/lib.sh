@@ -36,6 +36,18 @@
 # clear of the 126/127/128+n range the shell assigns itself.
 ASSERT_RC=3
 
+# The runner that sourced this library (run.sh, run-sqlite.sh, ...), captured
+# here at source time -- the one moment BASH_SOURCE[1] still names it rather than
+# some lib.sh function's caller. Folded into the pass stamp (see protocol_id) so
+# a change to the test protocol invalidates stamps written by an older version.
+DDS_RUNNER="${BASH_SOURCE[1]:-}"
+
+sha256_hex() {
+  # sha256 of stdin, hex digest only. sha256sum on GNU coreutils, shasum(1) on
+  # macOS (which only guarantees the latter).
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
+}
+
 GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; RESET=$'\033[0m'
 info() { printf '%s\n' "$*" >&2; }
 pass() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*" >&2; }
@@ -206,26 +218,44 @@ wait_for_log_marker() {
 # a pure function of its image, so once an image ID has passed a given set of
 # expectations there is nothing left to learn from booting it again.
 #
-# "a given set of expectations" is the point of the stamp: it holds the dataset
-# list plus the bytes of every expected/*.json this run reads, so two tags that
-# share an image but assert different datasets still both run, and editing an
-# expected file invalidates the entry rather than silently skipping past it.
-# Only a clean assert run writes a stamp -- a failure has to stay reproducible --
-# --update neither reads nor writes one, and DDS_DEDUPE=0 opts out entirely.
+# "a given set of expectations" is the point of the stamp: it holds a digest of
+# the test protocol (this library, the retry wrapper, the runner), the dataset
+# list, and the bytes of every expected/*.json this run reads, so two tags that
+# share an image but assert different datasets still both run, editing an
+# expected file invalidates the entry rather than silently skipping past it, and
+# changing the assertion code itself does too. Only a clean assert run writes a
+# stamp -- a failure has to stay reproducible -- --update neither reads nor
+# writes one, and DDS_DEDUPE=0 opts out entirely.
 #
 # Correctness here does not depend on the cache being ephemeral. The key is the
-# image ID, and the stamp body is the dataset list plus the exact bytes of every
-# expected file the run reads: change the image and the key moves, change an
-# expectation and the body no longer matches, either way the entry misses and
-# the run happens. That is what makes it safe for CI to persist this directory
-# across re-run attempts of the same commit -- a re-run then skips the tags that
-# already passed, which is the whole point, without ever being able to skip a
-# tag whose image or expectations differ from the ones that passed.
+# image ID, and the stamp body is the protocol digest plus the dataset list plus
+# the exact bytes of every expected file the run reads: change the image and the
+# key moves, change an expectation or the test code and the body no longer
+# matches, either way the entry misses and the run happens. That is what makes it
+# safe for CI to persist this directory across re-run attempts of the same commit
+# -- a re-run then skips the tags that already passed, which is the whole point,
+# without ever being able to skip a tag whose image, expectations, or test
+# protocol differ from the ones that passed.
 CACHE_DIR="${DDS_TEST_CACHE:-${TMPDIR:-/tmp}/docker-dataset-itest}"
 stamp_file=""
 
+protocol_id() {
+  # A digest of the test protocol -- this shared library, the retry wrapper, and
+  # the engine runner that sourced it. Folded into the stamp body so a stamp
+  # written by one version of the assertion code is never honored by another.
+  #
+  # Without it (TST-04) the stamp key is only the image ID and the body only the
+  # dataset list plus expected bytes: if a re-run under the same commit context
+  # executed changed test logic (a workflow/tool checkout discrepancy, a manual
+  # local reuse across an edit), an old pass could skip the corrected assertion.
+  # A missing or unreadable file folds in as empty, which simply changes the
+  # digest -- over-invalidation only re-runs, it never wrongly skips.
+  cat "${SCRIPT_DIR}/lib.sh" "${SCRIPT_DIR}/with-retry.sh" "$DDS_RUNNER" 2>/dev/null | sha256_hex
+}
+
 stamp_contents() {
   local db
+  printf 'protocol %s\n' "$(protocol_id)"
   printf '%s\n' "$DATASETS_CSV"
   for db in "${DATASETS[@]}"; do
     cat "${EXPECTED_DIR}/${db}.json" 2>/dev/null || true
@@ -257,8 +287,17 @@ record_pass_stamp() {
   # later tag resolving to this same image ID with these same expectations can
   # skip the run entirely. Clean runs only ($stamp_file is empty in --update
   # mode and when dedupe is off).
-  local rc="$1"
+  local rc="$1" tmp
   if [[ "$rc" -eq 0 && -n "$stamp_file" ]]; then
-    stamp_contents > "$stamp_file"
+    # Write-then-rename, like the checksum cache: a stamp is read back by a later
+    # tag's dedupe_skip via `cmp`, and an interrupted truncating write could
+    # otherwise leave a short, partial body -- harmless when it fails to match
+    # (the tag just re-runs) but not worth the risk when atomicity is one mv.
+    tmp="${stamp_file}.$$.tmp"
+    if stamp_contents > "$tmp"; then
+      mv -f "$tmp" "$stamp_file"
+    else
+      rm -f "$tmp"
+    fi
   fi
 }
