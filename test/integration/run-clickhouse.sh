@@ -81,6 +81,13 @@ ch_q() {
   docker exec "$CONTAINER" clickhouse-client --query "$1" 2>/dev/null
 }
 
+probe_query() {
+  # probe_query <db> <sql> — the semantic-check hook lib.sh's check_semantics
+  # calls. clickhouse-client selects no default database, so a probe's SQL
+  # qualifies tables as <db>.<table> (the counts do the same); <db> is unused.
+  ch_q "$2"
+}
+
 # Authoritative counts for every base table in a database, as a JSON object
 # keyed by <db>.<table>. List the tables from system.tables and then count them
 # all in a single generated UNION ALL query -- two `docker exec` round-trips and
@@ -184,6 +191,7 @@ for db in "${DATASETS[@]}"; do
   fi
 
   check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
+  check_semantics "$db" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"

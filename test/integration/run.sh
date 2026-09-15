@@ -79,6 +79,12 @@ psql_db() {
   docker exec "$CONTAINER" psql -U postgres -d "$db" -At "$@"
 }
 
+probe_query() {
+  # probe_query <db> <sql> — the semantic-check hook lib.sh's check_semantics
+  # calls; the same client the counts use, one query, bare rows on stdout.
+  psql_db "$1" -c "$2"
+}
+
 # Authoritative counts for every base table in a database, as a JSON object
 # keyed by schema.table. query_to_xml runs an actual count(*) per table.
 actual_counts() {
@@ -148,6 +154,7 @@ for db in "${DATASETS[@]}"; do
   fi
 
   check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
+  check_semantics "$db" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"

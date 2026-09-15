@@ -158,6 +158,40 @@ test/integration/run.sh --update iso3166 iso3166        # <tag> <datasets-csv>
 test/integration/run-sqlite.sh --update geonames geonames
 ```
 
+### Semantic checks (optional)
+
+Row counts and table sets prove breadth, not fidelity: a content replacement,
+duplicate growth, value corruption, type degradation, or a dropped constraint
+can preserve every count and still pass. A dataset may therefore ship an
+optional *semantic check* file next to its counts,
+`test/expected/<engine>/<dataset>.checks.json`, a JSON array of probes:
+
+```json
+[
+  { "name": "country codes are unique",
+    "sql": "SELECT count(*) - count(DISTINCT code) FROM public.country",
+    "expect": "0" },
+  { "name": "no orphaned subcountries",
+    "sql": "SELECT count(*) FROM public.subcountry s LEFT JOIN public.country c ON s.country = c.code WHERE c.code IS NULL",
+    "expect": "0" }
+]
+```
+
+Each `sql` is run through the engine's `probe_query <db> <sql>` helper — the same
+client the counts use — and its output, with trailing whitespace stripped, must
+equal `expect` exactly (a single scalar is the common case; a multi-row result
+compares against a newline-joined `expect`). A missing file is a clean no-op, so
+datasets without checks behave exactly as before. A mismatch or query error is a
+deterministic failure (exit `3`, never retried), and the checks file is folded
+into the dedupe stamp so editing it re-runs the affected tags.
+
+`probe_query` is wired for PostgreSQL, MySQL/MariaDB, CockroachDB, SQLite,
+DuckDB, and ClickHouse (for MySQL and ClickHouse the client selects no default
+schema, so a probe's SQL qualifies tables as `<db>.<table>`). Druid and Pinot
+answer over JSON HTTP rather than a row-returning client and are not wired yet.
+Author checks against a **freshly built image** and confirm they pass under
+`dave test` before committing — an unverified probe would fail the live suite.
+
 ### Identical-image dedupe
 
 Some tags are a second name for the same build, so a full `dave test` would boot

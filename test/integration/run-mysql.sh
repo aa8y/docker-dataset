@@ -76,6 +76,13 @@ mysql_q() {
   docker exec "$CONTAINER" mariadb -uroot -p"$ROOT_PW" -N -B "$@" 2>/dev/null
 }
 
+probe_query() {
+  # probe_query <db> <sql> — the semantic-check hook lib.sh's check_semantics
+  # calls. The mariadb client here selects no default schema, so a probe's SQL
+  # qualifies tables as <db>.<table> (the counts do the same); <db> is unused.
+  mysql_q -e "$2"
+}
+
 # Authoritative counts for every base table in a database, as a JSON object
 # keyed by <db>.<table>. MariaDB has no query_to_xml, so we list the base tables
 # from information_schema and then count them all in a single generated
@@ -158,6 +165,7 @@ for db in "${DATASETS[@]}"; do
   fi
 
   check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
+  check_semantics "$db" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"

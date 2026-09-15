@@ -65,6 +65,12 @@ sqlite_q() {
   docker run --rm "$IMAGE" /usr/bin/sqlite3 "/data/${db}.db" "$sql"
 }
 
+probe_query() {
+  # probe_query <db> <sql> — the semantic-check hook lib.sh's check_semantics
+  # calls; the same client the counts use, one query, bare rows on stdout.
+  sqlite_q "$1" "$2"
+}
+
 # Authoritative counts for every table in a database, as a JSON object keyed by
 # <db>.<table>. List the user tables (excluding sqlite internal tables and
 # views), then count every row with a single UNION ALL query and assemble the
@@ -154,6 +160,7 @@ for db in "${DATASETS[@]}"; do
   fi
 
   check_counts "$db" "$(cat "$expected_file")" "$actual" || rc="$ASSERT_RC"
+  check_semantics "$db" || rc="$ASSERT_RC"
 done
 
 record_pass_stamp "$rc"

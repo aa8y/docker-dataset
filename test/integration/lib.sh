@@ -184,6 +184,55 @@ check_counts() {
   return 1
 }
 
+check_semantics() {
+  # check_semantics <db> — run the optional semantic probes for <db>. Row counts
+  # and table sets prove breadth (audit TST-07); a probe proves fidelity: it
+  # asserts an actual queried value -- a specific row, a null rate, a foreign-key
+  # orphan count, a column type -- so a content regression that preserves counts
+  # is still caught.
+  #
+  # Probes live beside the counts as test/expected/<engine>/<db>.checks.json, a
+  # JSON array of {"name","sql","expect"} objects. Each <sql> is run through the
+  # engine's `probe_query <db> <sql>` helper (a thin wrapper each run script
+  # defines over the same client it counts with) and its stdout -- trailing
+  # whitespace stripped -- must equal <expect> exactly. A single scalar is the
+  # common case; multi-row results compare against a newline-joined <expect>.
+  #
+  # Absent file, or no probe_query defined, is a clean no-op, so a dataset with
+  # no checks and an engine not yet wired both behave exactly as before. A
+  # mismatch or query error is deterministic (same image, same probe, same
+  # verdict), so the caller maps a nonzero return to $ASSERT_RC. The checks file
+  # is folded into the dedupe stamp (see stamp_contents), so editing it re-runs
+  # the affected tags rather than skipping past the change.
+  local db="$1"
+  local file="${EXPECTED_DIR}/${db}.checks.json"
+  local n i name sql expect got ok=1
+  [[ -f "$file" ]] || return 0
+  declare -F probe_query >/dev/null 2>&1 || return 0
+  n="$(jq 'length' "$file")" || return 1
+  i=0
+  while [[ "$i" -lt "$n" ]]; do
+    name="$(jq -r --argjson i "$i" '.[$i].name // "probe \($i)"' "$file")"
+    sql="$(jq -r --argjson i "$i" '.[$i].sql' "$file")"
+    expect="$(jq -r --argjson i "$i" '.[$i].expect' "$file")"
+    if ! got="$(probe_query "$db" "$sql")"; then
+      fail "${db}: semantic check '${name}' — query failed"
+      ok=0; i=$(( i + 1 )); continue
+    fi
+    got="${got%"${got##*[![:space:]]}"}"   # strip trailing whitespace/newlines
+    if [[ "$got" != "$expect" ]]; then
+      fail "${db}: semantic check '${name}' — expected [${expect}] got [${got}]"
+      ok=0
+    fi
+    i=$(( i + 1 ))
+  done
+  if [[ "$ok" -eq 1 ]]; then
+    pass "${db}: ${n} semantic check(s) passed"
+    return 0
+  fi
+  return 1
+}
+
 wait_for_log_marker() {
   # wait_for_log_marker <marker> <deadline> — <deadline> is an absolute $SECONDS
   # value. A single `docker logs -f` stream fed to `grep -q -m1`, rather than
@@ -261,6 +310,9 @@ stamp_contents() {
   printf '%s\n' "$DATASETS_CSV"
   for db in "${DATASETS[@]}"; do
     cat "${EXPECTED_DIR}/${db}.json" 2>/dev/null || true
+    # The semantic-probe file is part of the assertion too, so editing it must
+    # invalidate a prior pass the same way editing a count expectation does.
+    cat "${EXPECTED_DIR}/${db}.checks.json" 2>/dev/null || true
   done
 }
 
