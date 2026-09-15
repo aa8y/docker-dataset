@@ -61,6 +61,43 @@ jobs:
       - name: Run unit and shell tests
         run: python -m pytest test/unit test/shell -q
 
+  lint:
+    # Static checks: workflow lint, shell lint (sources followed via
+    # .shellcheckrc so cross-file variables resolve), and manifest graph
+    # validation (every structureTest config exists, aliases are well-formed).
+    # Independent of the build matrix so it fails fast in parallel; a failure
+    # still turns the run red. Addresses the audit's lint/validation gap
+    # (2026-09-14, TST-08).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      # actionlint is not preinstalled; fetch the pinned release and verify it
+      # against the published checksum before running it (same posture as the
+      # container-structure-test download).
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Shellcheck
+        # shellcheck is preinstalled on the runner image.
+        run: shellcheck -x -S warning bin/* test/integration/*.sh
+
+      - name: actionlint
+        run: |
+          curl -fsSL -o /tmp/actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          /tmp/actionlint
+
+      - name: Validate manifest graph
+        run: |
+          pip install --quiet 'PyYAML==6.0.2'
+          python test/validate_manifest.py
+
   test:
     needs: unit
     # packages: write is what lets GITHUB_TOKEN push the build cache to GHCR;

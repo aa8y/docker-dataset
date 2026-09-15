@@ -59,6 +59,7 @@ VOLATILE_TAG_PREFIXES="stackexchange-"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_SUBDIR=""   # postgres, the original engine, keeps test/expected/ un-nested
+# shellcheck source=test/integration/lib.sh
 . "${SCRIPT_DIR}/lib.sh"
 
 CONTAINER="pg-ds-test-${TAG//[^a-zA-Z0-9_.-]/-}-$$"

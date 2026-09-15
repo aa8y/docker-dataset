@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # lib.sh -- shared plumbing for the run*.sh integration-test scripts in this
 # directory. Not an entry point: source it, don't run it.
 #
@@ -34,6 +35,7 @@
 #
 # 3 rather than 2, which shells conventionally use for usage errors, and well
 # clear of the 126/127/128+n range the shell assigns itself.
+# shellcheck disable=SC2034  # consumed by the sourcing run*.sh, not by lib.sh
 ASSERT_RC=3
 
 # The runner that sourced this library (run.sh, run-sqlite.sh, ...), captured

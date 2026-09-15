@@ -1,0 +1,6 @@
+# Follow `.`/`source` into other files so the `# shellcheck source=...` and
+# `# shellcheck shell=...` directives in test/integration and bin resolve
+# cross-file variables (VOLATILE_DATASETS, ASSERT_RC, EXPECTED_SUBDIR, ...).
+# With this a bare `shellcheck <file>` reproduces what the CI lint job runs
+# with `-x`.
+external-sources=true
