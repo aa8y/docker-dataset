@@ -128,6 +128,9 @@ code, never a wrapper-invented one.
   two attempts in total). `0` disables retrying.
 * **`DDS_ITEST_RETRY_DELAY`** — seconds between attempts (default `10`).
 
+Both must be non-negative integers; a malformed value is rejected with a clear
+message (exit `2`) before the first attempt rather than failing mid-run.
+
 ### Expected files and floors
 
 Expectations live per-dataset as JSON, keyed by qualified table name, e.g.
