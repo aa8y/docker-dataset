@@ -9,3 +9,9 @@ venv/
 
 # pytest
 .pytest_cache/
+
+# Local internal documentation
+/.internal/
+
+# macOS
+.DS_Store

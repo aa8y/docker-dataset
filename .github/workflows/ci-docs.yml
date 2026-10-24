@@ -1,0 +1,85 @@
+name: CI (docs)
+
+# ci.yml carries `paths-ignore: ['**/*.md']`, so a markdown-only pull request
+# never triggers it — and its jobs are the branch-protection required checks
+# (`unit` and `test (<engine>, <arch>)`). With ci.yml skipped, those contexts
+# are never reported, GitHub keeps the PR "Expected — waiting for status", and
+# a docs-only change can never merge.
+#
+# This workflow reports those same contexts for markdown-only PRs, so docs land
+# on their own without running the multi-arch build. It is deliberately NOT a
+# rubber stamp for code: the `detect` job checks whether the PR touches anything
+# other than markdown. If it does, ci.yml runs the real jobs and owns these
+# contexts, and the stubs here skip — so a real failure can never be masked by a
+# green stub. Only a genuinely markdown-only PR gets the stub successes.
+#
+# The stub job ids and matrix axes must stay identical to ci.yml's so the check
+# names match exactly (`unit`, `test (postgres, amd64)`, …). The `test` matrix
+# lists only the engines branch protection actually requires.
+
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+
+concurrency:
+  group: ci-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: diff
+        name: Determine whether the PR is markdown-only
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Files this PR changes, relative to the merge base. A single path
+          # that is not *.md means ci.yml runs the real checks and the stubs
+          # below must stand down.
+          changed=$(git diff --name-only "$BASE...$HEAD")
+          echo "Changed files:"
+          echo "$changed"
+          if echo "$changed" | grep -qvE '(^|/)[^/]+\.md$'; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "Non-markdown files changed: ci.yml owns the required checks."
+          else
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "Markdown-only: reporting the required checks as passed."
+          fi
+
+  unit:
+    needs: detect
+    if: needs.detect.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "Markdown-only PR — ci.yml is skipped; reporting 'unit' as passed."
+
+  test:
+    needs: detect
+    if: needs.detect.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # Must match the required contexts in branch protection exactly; keep in
+        # sync with ci.yml's `test` matrix (declaration order sets the check
+        # name, `test (<context>, <arch>)`).
+        context: [postgres, mysql, sqlite, cockroach, duckdb]
+        arch: [amd64, arm64]
+    steps:
+      - run: echo "Markdown-only PR — ci.yml is skipped; reporting 'test (${{ matrix.context }}, ${{ matrix.arch }})' as passed."
