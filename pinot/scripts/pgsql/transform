@@ -43,7 +43,7 @@ land in different tables. Quoted identifiers (usda's ``"year"``, world's
 ``"language"``, dellstore's ``"password"``) are already lower case in every
 dump here, so they survive folding unchanged.
 
-Type mapping (PostgreSQL -> Pinot), each verified against Pinot 1.5.0 by
+Type mapping (PostgreSQL -> Pinot), each verified against Pinot 1.6.0 by
 ingesting a probe CSV and reading the values back:
 
   ============================  =========  ====================================
