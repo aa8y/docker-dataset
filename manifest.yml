@@ -710,7 +710,7 @@ contexts:
       # Data loads through the shared scripts/pgfoundry hook (scripts/sakila is
       # a symlink to it): the schema is CockroachDB-clean as published -- ENUM
       # type, `text[]`, `bytea`, four views, `SET search_path`/`default_tablespace`
-      # and `ALTER ... OWNER TO root` all run unchanged on v25.4 -- but the
+      # and `ALTER ... OWNER TO root` all run unchanged on v26.3 -- but the
       # 46,273 data rows arrive in 15 `COPY ... FROM stdin` blocks, and CRDB's
       # init-time stdin COPY is far slower than batched INSERTs. The hook also
       # drops the dump's trailing per-table `analyze`. The staff<->store foreign

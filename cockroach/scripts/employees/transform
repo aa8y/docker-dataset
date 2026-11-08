@@ -8,7 +8,7 @@ PostgreSQL-compatible enough to run the upstream PostgreSQL one
 columns, composite `PRIMARY KEY`, the UNIQUE constraint, the
 `CHECK (gender IN ('M','F'))` that stands in for MySQL's ENUM, the
 `FOREIGN KEY ... ON DELETE CASCADE` references and both `CREATE OR REPLACE
-VIEW`s all load unchanged on v25.4. The only thing dropped is upstream's
+VIEW`s all load unchanged on v26.3. The only thing dropped is upstream's
 database-management preamble -- its DROP DATABASE / CREATE DATABASE /
 `\\connect` lines -- because the entrypoint creates the COCKROACH_DATABASE
 database and runs this script inside it (see ../../Dockerfile) -- and, with it,
@@ -27,7 +27,7 @@ foreign-key dependency order.
 
 IMPORT INTO does not refuse a table that has foreign keys: it imports the rows
 and leaves each constraint in place but unvalidated, so the six FKs stay in the
-schema exactly as upstream wrote them. Verified on the pinned v25.4.11 image --
+schema exactly as upstream wrote them. Verified on the pinned v26.3.5 image --
 every import succeeds and `pg_constraint` afterwards lists all six with
 `convalidated = false`. Unvalidated means only that the imported rows were not
 re-checked (they are consistent by construction: the IMPORTs run in dependency

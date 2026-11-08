@@ -39,7 +39,7 @@
 # ---------------------------------------------------------------------------
 # Builder: extract, transform, load.
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS builder
+FROM alpine:3.24.4 AS builder
 
 ARG DATASET
 # One URL or a space-separated list. Dispatched on suffix: *.git is cloned,
@@ -122,7 +122,7 @@ RUN bash -c ' \
 # ---------------------------------------------------------------------------
 # Final image: official CockroachDB + the assembled init artifacts only.
 # ---------------------------------------------------------------------------
-FROM cockroachdb/cockroach:v25.4.11
+FROM cockroachdb/cockroach:v26.3.5
 
 # Re-declared in this stage so the upstream-content fingerprint can be recorded
 # on the final image (visible via `docker inspect`) for observability.
