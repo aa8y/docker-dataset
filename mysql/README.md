@@ -6,7 +6,18 @@ The available tags are the MySQL column of the [dataset support matrix](../READM
 
 ## Base image
 
-[MySQL](https://www.mysql.com/) as [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset). There is no official Alpine image for Oracle MySQL (the official `mysql` image is Oracle Linux / Debian based) and Alpine's own package repositories ship [MariaDB](https://mariadb.org/) in place of MySQL, so to keep the "thin, Alpine-based" goal we build on the community [`yobasystems/alpine-mariadb`](https://hub.docker.com/r/yobasystems/alpine-mariadb) image. MariaDB is the MySQL drop-in Alpine substitutes, and its entrypoint honours the same `MYSQL_*` env vars and `/docker-entrypoint-initdb.d/*.sql` convention as the official postgres image, so the dataset pattern carries over unchanged.
+[MySQL](https://www.mysql.com/) as [`aa8y/mysql-dataset`](https://hub.docker.com/r/aa8y/mysql-dataset). Oracle MySQL has no official Alpine image, and the Alpine package repositories ship [MariaDB](https://mariadb.org/) in place of MySQL. The final stage starts from `alpine` and installs MariaDB (11.8 on Alpine 3.24) from the Alpine repository. The image has its own [entrypoint](docker-entrypoint.sh), so a MariaDB security fix needs only a rebuild.
+
+The entrypoint supports these settings:
+
+* `MYSQL_ROOT_PASSWORD` sets the password of `root@localhost` and `root@'%'`. The image sets it to `mysql`. If you set it to an empty value, the entrypoint generates a password and prints it to the log.
+* `MYSQL_DATABASE` names the database that the first start creates, with `utf8` and `utf8_general_ci`. The image sets it to the dataset name.
+* Every `*.sql` and `*.sql.gz` file in `/docker-entrypoint-initdb.d` is imported into that database on the first start, in name order. If an import fails, the container exits with an error and deletes the partial data directory.
+* The log line `DB init process done. Ready for start up.` marks the end of the import.
+
+The server default collation for `utf8mb4` stays `utf8mb4_general_ci`, the default before MariaDB 11.8 (see [conf/](conf/)). The images built on `yobasystems/alpine-mariadb` used that collation, so text sorts and compares the same way.
+
+Images built before this change used the `yobasystems/alpine-mariadb` entrypoint. That entrypoint also read `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_CHARSET`, `MYSQL_COLLATION`, the `*_FILE` and `MARIADB_*` variables, `/run/secrets`, and the `/scripts/*.d` hooks. The new entrypoint ignores all of them.
 
 ## Usage
 

@@ -1,0 +1,10 @@
+# Keep the default collation of utf8mb4 (and utf8) at the *_general_ci values
+# the images used on MariaDB 11.4.
+#
+# MariaDB 11.8 changed the default collation of utf8mb4 to
+# utf8mb4_uca1400_ai_ci. Upstream dumps declare CHARSET=utf8mb4 without a
+# collation, so the new default would change comparison and sort behaviour of
+# every text column versus the previously published images. This maps the
+# charset default back so table and column collations stay identical.
+[mysqld]
+character-set-collations=utf8mb4=utf8mb4_general_ci,utf8mb3=utf8mb3_general_ci
