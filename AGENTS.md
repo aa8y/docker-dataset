@@ -253,6 +253,10 @@ Plans must name the actual test commands before execution starts. [docs/testing.
 - Shell and manifest checks: `shellcheck -x -S warning bin/* test/integration/*.sh` and `python test/validate_manifest.py`.
 - Image checks for each affected engine: `dave build -c <engine> -t <tag>`, then `dave structure-test` and `dave test` with the same flags.
 
+Always name the `dave` subcommand. If you run `dave` without a subcommand, it ignores `-c` and `-t`.
+It then builds and tests every tag, and its push step publishes images and writes the registry build cache.
+The same rule goes into every agent assignment that runs `dave`.
+
 The Python in CI must match the `python3` package of the Alpine builder stage. Report any difference.
 Documentation-only changes require link, consistency, and diff review, but no image build.
 Never report commands as passed unless they ran.
