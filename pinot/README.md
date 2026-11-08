@@ -78,6 +78,8 @@ One **source table becomes one Pinot table with the same name**. Pinot has no da
 | `date`, `timestamp` | `TIMESTAMP` | stored as millis since the epoch, in UTC. |
 | everything else | `STRING` | `character(n)`, `varchar`, `text`, `bytea`, … |
 
+Pinot cuts a STRING value at the field's `maxLength`, which is 512 characters by default. If a column has a longer value, the build sets `maxLength` to the length of its longest value, so no value is cut. For example, geonames `alternatenames` reaches 2,602 characters. Images built before this change cut those values at 512.
+
 **What is dropped.** Everything Pinot has nowhere to put: primary and foreign keys, `CHECK` constraints, `UNIQUE`, sequences, `GRANT`, schemas, and dellstore's PL/pgSQL function. Pinot enforces no constraints at all, and its indexes are declared in the table config rather than in DDL. This is a much larger loss of fidelity than the other engines' — worth knowing before you use these images to test constraint behaviour, and irrelevant if you are here to practise analytical SQL.
 
 ### Nulls and defaults

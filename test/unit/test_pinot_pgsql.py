@@ -298,6 +298,31 @@ def test_pinot_schema_puts_every_column_in_dimensions(pinot_pgsql):
     assert "dateTimeFieldSpecs" not in schema
 
 
+def test_pinot_schema_sets_max_length_only_above_the_default(pinot_pgsql):
+    columns = [("id", "INT"), ("short", "STRING"), ("long", "STRING")]
+    schema = pinot_pgsql.pinot_schema(
+        "city", columns, {"short": 512, "long": 2602})
+    assert schema["dimensionFieldSpecs"] == [
+        {"name": "id", "dataType": "INT"},
+        {"name": "short", "dataType": "STRING"},
+        {"name": "long", "dataType": "STRING", "maxLength": 2602},
+    ]
+
+
+def test_table_writer_counts_utf16_code_units(pinot_pgsql, tmp_path):
+    # Pinot measures maxLength in Java chars. A character outside the BMP,
+    # such as U+1F600, is two of them, and a cut between the two halves makes
+    # Pinot 1.6.0 reject the file. So the writer counts it as 2, not 1.
+    writer = pinot_pgsql.TableWriter(
+        str(tmp_path), "t", [("id", "INT"), ("name", "STRING")])
+    writer.write(["id", "name"], ["1", "a" * 511 + "\U0001F600"])
+    writer.write(["id", "name"], ["2", None])
+    writer.close()
+    assert writer.max_lengths == {"name": 513}
+    schema = pinot_pgsql.pinot_schema("t", writer.columns, writer.max_lengths)
+    assert schema["dimensionFieldSpecs"][1]["maxLength"] == 513
+
+
 def test_pinot_table_config_is_offline_with_null_handling(pinot_pgsql):
     config = pinot_pgsql.pinot_table_config("city")
     assert config["tableName"] == "city"
