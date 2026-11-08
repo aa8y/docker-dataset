@@ -83,7 +83,7 @@ jobs:
 
       - name: Shellcheck
         # shellcheck is preinstalled on the runner image.
-        run: shellcheck -x -S warning bin/* test/integration/*.sh
+        run: shellcheck -x -S warning bin/* test/integration/*.sh mysql/docker-entrypoint.sh
 
       - name: actionlint
         run: |

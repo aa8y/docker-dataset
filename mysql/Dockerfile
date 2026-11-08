@@ -10,11 +10,13 @@
 #
 # Engine note. There is no official Alpine image for Oracle MySQL (the official
 # `mysql` image is Oracle Linux / Debian based, and Alpine's own repositories
-# ship MariaDB in place of MySQL). To honour the "thin, Alpine-based" goal we
-# build on the community `yobasystems/alpine-mariadb` image: MariaDB is the
-# MySQL drop-in Alpine itself substitutes, and that image's entrypoint honours
-# the same MYSQL_* env vars and /docker-entrypoint-initdb.d/*.sql convention the
-# official postgres image uses, so the dataset pattern carries over unchanged.
+# ship MariaDB in place of MySQL). To honour the "thin, Alpine-based" goal the
+# final stage starts from plain `alpine` and installs MariaDB from the Alpine
+# repository, the MySQL drop-in Alpine itself substitutes. The image carries its
+# own docker-entrypoint.sh, which honours MYSQL_ROOT_PASSWORD, MYSQL_DATABASE and
+# the /docker-entrypoint-initdb.d/*.sql convention the official postgres image
+# uses, so the dataset pattern carries over unchanged. A MariaDB fix then needs
+# only a rebuild, not a new third-party base image.
 #
 # The Dockerfile is dataset-agnostic: nothing here names a specific dataset.
 # Most datasets are fully described by EXTRACT_URL + SQL_FILES. Datasets with
@@ -124,7 +126,7 @@ RUN bash -c ' \
 # ---------------------------------------------------------------------------
 # Final image: thin Alpine MariaDB + the assembled init artifacts only.
 # ---------------------------------------------------------------------------
-FROM yobasystems/alpine-mariadb:11.4.9
+FROM alpine:3.24.4
 
 # Re-declared in this stage so the upstream-content fingerprint can be recorded
 # on the final image (visible via `docker inspect`) for observability.
@@ -138,6 +140,12 @@ LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
       org.opencontainers.image.url="https://hub.docker.com/r/aa8y/mysql-dataset" \
       org.opencontainers.image.vendor="https://github.com/aa8y"
 
+# MariaDB server plus the mariadb/mariadb-admin clients, from the Alpine
+# repository (versions follow the Alpine release; not pinned). zlib is upgraded
+# on its own to pick up the CVE-2026-4738 fix; no broad `apk upgrade`.
+RUN apk add --no-cache mariadb mariadb-client && \
+    apk add --no-cache --upgrade zlib
+
 ARG DATASET
 # A known root password so tests (and users) can connect without scraping the
 # random password the entrypoint would otherwise generate. MYSQL_DATABASE must
@@ -148,8 +156,14 @@ ENV MYSQL_DATABASE=${DATASET}
 
 # Server tuning that makes the entrypoint's one-time init-script import (run at
 # first container start) much faster; see conf/zz-dataset-fast-import.cnf. The
-# base image's my.cnf does `!includedir /etc/my.cnf.d`, so dropping the file
-# there is all that's needed.
+# Alpine mariadb-common /etc/my.cnf does `!includedir /etc/my.cnf.d`, so
+# dropping the file there is all that's needed.
 COPY conf/ /etc/my.cnf.d/
 
 COPY --from=builder /docker-entrypoint-initdb.d /docker-entrypoint-initdb.d
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+EXPOSE 3306
+VOLUME /var/lib/mysql
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
