@@ -41,7 +41,7 @@ jobs:
     # shell-utility tests (test/shell drives docker/curl/git through fakes on
     # PATH). Runs first and gates the image build below, so a logic regression
     # fails in seconds rather than after the multi-arch build. Pin to the
-    # interpreter the alpine:3.21 builder ships (python3 3.12) so tests exercise
+    # interpreter the alpine:3.24 builder ships (python3 3.14) so tests exercise
     # the same behavior as production; jq (needed by the shell tests) is
     # preinstalled on the runner image.
     runs-on: ubuntu-latest
@@ -53,7 +53,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: Install test dependencies
         run: pip install -r test/requirements-dev.txt
