@@ -40,7 +40,7 @@
 # ---------------------------------------------------------------------------
 # Builder: extract, transform, load.
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS builder
+FROM alpine:3.24.4 AS builder
 
 ARG DATASET
 # One URL or a space-separated list. Dispatched on suffix: *.git is cloned,
@@ -73,7 +73,7 @@ COPY scripts/ /usr/local/lib/scripts/
 # hook (inherited via the environment). Upstreams (archive.org, GitHub release
 # assets, ftp.postgresql.org) return transient 5xx/429s under load; retry with
 # backoff so a momentary hiccup doesn't fail the whole build. GNU wget (Alpine
-# 3.21 ships 1.25) honours these flags. Builder-only, so it never leaks into the
+# 3.24 ships 1.25) honours these flags. Builder-only, so it never leaks into the
 # final image.
 ENV WGET_OPTS="--tries=5 --waitretry=10 --timeout=30 --retry-connrefused --retry-on-host-error --retry-on-http-error=429,500,502,503,504"
 
@@ -179,6 +179,10 @@ RUN mkdir -p $PG_HOME && \
 COPY --from=pgvector /usr/local/lib/postgresql/vector.so /usr/local/lib/postgresql/
 COPY --from=pgvector /usr/local/share/postgresql/extension/vector* /usr/local/share/postgresql/extension/
 COPY --from=builder /docker-entrypoint-initdb.d /docker-entrypoint-initdb.d
+
+# Upgrade zlib only, to 1.4-r0, which fixes the critical CVE-2026-4738.
+# Do not run a broad `apk upgrade` here. It would change unrelated packages.
+RUN apk add --no-cache --upgrade zlib
 
 USER $PG_USER
 WORKDIR $PG_HOME
