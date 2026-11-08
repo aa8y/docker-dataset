@@ -31,7 +31,7 @@
 # ---------------------------------------------------------------------------
 # Builder: extract, transform, load.
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS builder
+FROM alpine:3.24.4 AS builder
 
 ARG DATASET
 # One URL or a space-separated list. Dispatched on suffix: *.git is cloned,
@@ -113,7 +113,7 @@ RUN bash -c ' \
 # ---------------------------------------------------------------------------
 # Final image: thin Alpine SQLite + the assembled database file only.
 # ---------------------------------------------------------------------------
-FROM keinos/sqlite3:3.53.2
+FROM keinos/sqlite3:3.54.1
 
 # Re-declared in this stage so the upstream-content fingerprint can be recorded
 # on the final image (visible via `docker inspect`) for observability.
@@ -130,6 +130,13 @@ LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
 ARG DATASET
 # Recorded so the CMD can open the shipped database file by name at runtime.
 ENV DATASET=${DATASET}
+
+# Upgrade zlib only, not the whole package set. zlib 1.4-r0 fixes the critical
+# CVE-2026-4738. The base image runs as the non-root `sqlite` user, so switch to
+# root for this one step and then restore that user.
+USER root
+RUN apk add --no-cache --upgrade zlib
+USER sqlite
 
 COPY --from=builder /data /data
 WORKDIR /data
