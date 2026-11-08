@@ -15,7 +15,7 @@
 # a property of this repository and not of whichever month is pinned. Its column
 # names and types are the TLC's own, taken from the file itself:
 #
-#   docker run --rm -v "$PWD:/d" clickhouse/clickhouse-server:26.8.2.7-alpine \
+#   docker run --rm -v "$PWD:/d" clickhouse/clickhouse-server:26.8.36.3-alpine \
 #     clickhouse-local -q "DESCRIBE file('/d/yellow_tripdata_2025-06.parquet')"
 #
 # which reports every column as Nullable (Parquet marks them all optional), an

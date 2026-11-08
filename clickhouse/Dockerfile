@@ -63,7 +63,7 @@
 # ---------------------------------------------------------------------------
 # Builder: extract, transform, load.
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS builder
+FROM alpine:3.24.4 AS builder
 
 ARG DATASET
 # One URL or a space-separated list. Dispatched on suffix: *.git is cloned,
@@ -152,7 +152,7 @@ RUN bash -c ' \
 # smallest official tag, which keeps these images in the same weight class as
 # the other engines here. Pinned to a release on the current LTS line; bump
 # deliberately, like any other upstream pin.
-FROM clickhouse/clickhouse-server:26.8.2.7-alpine
+FROM clickhouse/clickhouse-server:26.8.36.3-alpine
 
 # Re-declared in this stage so the upstream-content fingerprint can be recorded
 # on the final image (visible via `docker inspect`) for observability.
@@ -182,6 +182,10 @@ ENV CLICKHOUSE_DB=${DATASET}
 # mode -- so the documented, supported opt-out is used instead of shipping a
 # users.d override of our own.
 ENV CLICKHOUSE_SKIP_USER_SETUP=1
+
+# Upgrade zlib only, not the whole Alpine package set. zlib 1.4-r0 fixes the
+# critical CVE-2026-4738 in the base image's older zlib. Runs as root.
+RUN apk add --no-cache --upgrade zlib
 
 # The init script plus, for datasets whose load statements read a file, the
 # data files under /docker-entrypoint-initdb.d/${DATASET}/. Both are needed at
