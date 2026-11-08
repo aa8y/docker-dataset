@@ -161,6 +161,14 @@ def test_convert_file_drops_set_lines(pgsql):
     assert _convert(pgsql, "SET search_path = public;\n").strip() == ""
 
 
+@pytest.mark.parametrize("stmt", [
+    "ANALYZE country;", "analyze subcountry;", "ANALYZE;", "VACUUM ANALYZE foo;"])
+def test_convert_file_drops_maintenance_lines(pgsql, stmt):
+    # MariaDB rejects `ANALYZE <table>;`, and the entrypoint stops the import
+    # on the first error.
+    assert _convert(pgsql, stmt + "\n").strip() == ""
+
+
 def test_convert_file_passes_through_comments_and_inserts(pgsql):
     # No trailing newline, so there is no echoed blank final line.
     text = "-- a comment\nINSERT INTO foo VALUES (1);"

@@ -21,8 +21,9 @@ What it does, per file in $SQL_FILES:
     in the datasets that use this hook fits comfortably; making the column a
     bounded type lets it serve as a primary key / be part of a UNIQUE or be
     referenced, which MySQL forbids for TEXT);
-  * drops Postgres-only noise (``SET``, sequences, ``OWNER TO``, ``GRANT`` /
-    ``REVOKE``, ``COMMENT ON``, ``WITH/WITHOUT OIDS``, ``DEFAULT nextval(...)``,
+  * drops Postgres-only noise (``SET``, ``ANALYZE`` / ``VACUUM``, sequences,
+    ``OWNER TO``, ``GRANT`` / ``REVOKE``, ``COMMENT ON``, ``WITH/WITHOUT
+    OIDS``, ``DEFAULT nextval(...)``,
     psql ``\\connect`` / ``\\.``), turns ``ALTER TABLE ONLY`` into ``ALTER
     TABLE``, strips ``USING btree`` / ``USING hash`` access-method clauses and
     ``public.`` / ``cd.`` schema qualifiers; and
@@ -60,8 +61,12 @@ COPY_RE = re.compile(
 
 # Whole DDL lines that are Postgres-only and have no MySQL equivalent we need.
 # USING <method> covers btree/hash (pg_dump) and lsm (the Yugabyte dumps).
+# ANALYZE/VACUUM are Postgres maintenance statements (iso3166 ends with
+# `ANALYZE country;`, usda with a bare `ANALYZE;`). MariaDB rejects both
+# forms, and the entrypoint stops the import on the first error.
 DROP_LINE_RE = re.compile(
     r"^\s*(SET\s|SELECT\s+pg_catalog\.setval|GRANT\s|REVOKE\s|COMMENT\s+ON|"
+    r"ANALYZE\b|VACUUM\b|"
     r"WITHOUT\s+OIDS|USING\s+(btree|hash|lsm)\b|\\connect|\\c\s|\\\.)",
     re.IGNORECASE)
 
