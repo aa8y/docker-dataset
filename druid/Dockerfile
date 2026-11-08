@@ -58,7 +58,7 @@
 # ---------------------------------------------------------------------------
 # Engine: the pinned Apache Druid binary distribution, trimmed.
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS engine
+FROM alpine:3.24.4 AS engine
 
 # Single version pin for the engine. Druid 37 officially supports Java 17 and
 # 21; the final stage runs it on 21 (see there for why not 17).
@@ -131,7 +131,7 @@ RUN cd /opt/druid && \
 # ---------------------------------------------------------------------------
 # Builder: extract, transform, load.
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS builder
+FROM alpine:3.24.4 AS builder
 
 ARG DATASET
 # One URL or a space-separated list. Dispatched on suffix: *.git is cloned,
@@ -261,9 +261,12 @@ LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
 # curl: the entrypoint talks to Druid's own HTTP APIs (submit task, poll status,
 #       poll load status, query SQL) and the smoke test queries through it too.
 #       BusyBox wget cannot POST a JSON body portably.
+# zlib: CVE-2026-4738 (critical) is fixed in zlib 1.4-r0, so upgrade zlib alone.
+#       This is not a full `apk upgrade`, which would move every package.
 # The druid user mirrors the official image (uid/gid 1000, home /opt/druid) so a
 # bind-mounted var/ directory has the ownership people expect.
 RUN apk add --no-cache bash curl && \
+    apk add --no-cache --upgrade zlib && \
     addgroup -S -g 1000 druid && \
     adduser -S -u 1000 -D -H -h /opt/druid -s /bin/sh -G druid druid
 
