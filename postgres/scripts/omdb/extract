@@ -5,3 +5,19 @@
 set -e
 (cd omdb-postgresql && ./download)
 bunzip2 --force omdb-postgresql/www.omdb.org/data/*.bz2
+
+# The data is live, so it can contain rows whose parent is missing. Upstream
+# 40-clean-orphans.sql deletes those rows for most tables before
+# 41-foreign-keys.sql adds the constraints, but not for these child tables. In
+# November 2026, image_licenses referenced image 79148, which is absent from
+# image_ids, and the foreign key failed. Delete the orphans here the same way.
+cat >> omdb-postgresql/40-clean-orphans.sql <<'SQL'
+
+-- Added by docker-dataset (postgres/scripts/omdb/extract).
+BEGIN;
+DELETE FROM image_licenses c WHERE NOT EXISTS (SELECT * FROM image_ids p WHERE p.id = c.image_id);
+DELETE FROM casts          c WHERE NOT EXISTS (SELECT * FROM people p    WHERE p.id = c.person_id);
+DELETE FROM casts          c WHERE NOT EXISTS (SELECT * FROM jobs p      WHERE p.id = c.job_id);
+DELETE FROM job_names      c WHERE NOT EXISTS (SELECT * FROM jobs p      WHERE p.id = c.job_id);
+COMMIT;
+SQL
