@@ -9,7 +9,7 @@ constraints and re-emitted with ClickHouse types, a ``MergeTree`` engine and a
 sorting key, and every value that reaches a string literal is re-escaped for a
 parser that, unlike PostgreSQL's, does interpret backslashes.
 
-Everything below was verified against ClickHouse 26.8.2 (the pinned server) with
+Everything below was verified against ClickHouse 26.8.2 (the pin at the time) with
 the actual dumps behind the seven tags that use this hook (world, iso3166,
 frenchtowns, usda, pgexercises, dellstore, chinook); each rule names the error it
 avoids.

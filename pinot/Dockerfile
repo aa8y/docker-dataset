@@ -46,7 +46,7 @@
 # ---------------------------------------------------------------------------
 # Builder: extract, transform, load.
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS builder
+FROM alpine:3.24.4 AS builder
 
 ARG DATASET
 # One URL or a space-separated list. Dispatched on suffix: *.git is cloned,
@@ -134,10 +134,10 @@ RUN bash -c ' \
 # The official image is the only practical base: Pinot is a JVM application
 # assembled from ~40 plugin jars, there is no slim or Alpine variant published,
 # and rebuilding the distribution to shave it would mean maintaining a fork of
-# someone else's release. It is heavy (~2.6 GB on disk, Java 21 plus the full
+# someone else's release. It is heavy (~2.6 GB on disk, Java 25 plus the full
 # plugin set), but every tag in this repository shares those layers, so the cost
 # is paid once per host rather than once per dataset.
-FROM apachepinot/pinot:1.5.0
+FROM apachepinot/pinot:1.6.0
 
 # Re-declared in this stage so the upstream-content fingerprint can be recorded
 # on the final image (visible via `docker inspect`) for observability.
@@ -161,11 +161,15 @@ ENV DATASET=${DATASET}
 # images run one node holding one sample dataset, and OFFLINE segments are
 # memory-mapped rather than heaped, so the heap only has to cover query
 # execution and the largest single segment build. Measured peak *container*
-# usage (both JVMs, heap and non-heap) across the shipped tags runs 1.04 GB for
-# iso3166 to 1.30 GB for moma -- the widest table here, 160k rows of 30 text
-# columns -- so 2 GB leaves headroom without reserving memory nothing uses.
-# -Dpinot.admin.system.exit=false is carried over from the base image: without
-# it pinot-admin.sh calls System.exit after a subcommand returns, which would
+# usage (both JVMs, heap and non-heap) on Pinot 1.5.0 ran 1.04 GB for iso3166
+# to 1.30 GB for moma -- the widest table here, 160k rows of 30 text columns.
+# On 1.6.0 it is higher: over two runs each, sampled peaks were 1.34-1.38 GiB
+# for iso3166 and 1.42-1.48 GiB for dellstore (other tags not yet
+# re-measured). The 2 GB cap is on the main JVM's heap only, so those
+# container totals do not breach it.
+# -Dpinot.admin.system.exit=false is required, and the base image no longer
+# supplies it: 1.5.0 set it to false, but 1.6.0 sets it to true. With true,
+# pinot-admin.sh calls System.exit after a subcommand returns, which would
 # tear down the cluster the moment StartServiceManager finishes bootstrapping.
 ENV JAVA_OPTS="-Xms512M -Xmx2G -Dpinot.admin.system.exit=false"
 

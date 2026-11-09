@@ -19,7 +19,7 @@ converts each table that is present into ``CREATE TABLE`` + batched multi-row
 prepends a ``USE <dataset>;`` header to and the entrypoint runs at first start.
 
 Four things differ from the DuckDB emitter, all verified against ClickHouse
-26.8.2 (the pinned server):
+26.8.2 (the pin when this hook was written):
 
   * **Every table names an engine and a sorting key**: ``ENGINE = MergeTree
     ORDER BY (`Id`)``. Left unsaid, ClickHouse's ``default_table_engine`` would

@@ -42,11 +42,11 @@ The controller's REST API is on the same port as the console — `curl -s http:/
 
 ## Base image
 
-[Apache Pinot](https://pinot.apache.org/) as [`aa8y/pinot-dataset`](https://hub.docker.com/r/aa8y/pinot-dataset), built on the official [`apachepinot/pinot`](https://hub.docker.com/r/apachepinot/pinot) image (multi-arch `amd64` + `arm64`, Java 21 on Ubuntu 24.04, pinned in the [Dockerfile](Dockerfile)). It is by far the heaviest base in this repo — roughly 2.6 GB on disk, because Pinot is a JVM application assembled from some forty plugin jars and upstream publishes no slim variant — but every tag here shares those layers, so the cost is paid once per host rather than once per dataset.
+[Apache Pinot](https://pinot.apache.org/) as [`aa8y/pinot-dataset`](https://hub.docker.com/r/aa8y/pinot-dataset), built on the official [`apachepinot/pinot`](https://hub.docker.com/r/apachepinot/pinot) image (multi-arch `amd64` + `arm64`, Java 25 on Ubuntu 24.04, pinned in the [Dockerfile](Dockerfile)). It is by far the heaviest base in this repo — roughly 2.6 GB on disk, because Pinot is a JVM application assembled from some forty plugin jars and upstream publishes no slim variant — but every tag here shares those layers, so the cost is paid once per host rather than once per dataset.
 
 Two things are changed on top of it:
 
-* **`JAVA_OPTS`** drops from the base image's `-Xms4G -Xmx4G` to `-Xms512M -Xmx2G`. That is a production-cluster figure on a container running one node holding one sample dataset; OFFLINE segments are memory-mapped rather than heaped, so the heap only has to cover query execution and the largest single segment build. Measured peak container memory across the shipped tags is **1.04 GB (`iso3166`) to 1.30 GB (`moma`)** — the whole range sits inside the 2 GB ceiling with room to spare.
+* **`JAVA_OPTS`** drops from the base image's `-Xms4G -Xmx4G` to `-Xms512M -Xmx2G`. That is a production-cluster figure on a container running one node holding one sample dataset; OFFLINE segments are memory-mapped rather than heaped, so the heap only has to cover query execution and the largest single segment build. On Pinot 1.5.0, measured peak container memory across the shipped tags was **1.04 GB (`iso3166`) to 1.30 GB (`moma`)**. On 1.6.0 it is higher: over two runs each, sampled peaks were 1.34–1.38 GiB for `iso3166` and 1.42–1.48 GiB for `dellstore`, and the other tags have not been re-measured yet. Note that `JAVA_OPTS` caps only the heap of the main JVM, so these figures are for the whole container, not for the heap.
 * **The entrypoint** is a wrapper that starts the cluster and loads the dataset. It still forwards any arguments to `pinot-admin.sh`, so the base image's own interface (`docker run <image> QuickStart -help`) keeps working; only a bare `docker run` starts a dataset cluster.
 
 ## Topology
@@ -66,7 +66,7 @@ One **source table becomes one Pinot table with the same name**. Pinot has no da
 
 **Every column is a dimension.** Pinot's other two field categories would each cost fidelity here: a metric field defaults a null to `0`, and a date-time field would force the time column just ruled out.
 
-**Type mapping**, from the source DDL, verified against Pinot 1.5.0:
+**Type mapping**, from the source DDL, verified against Pinot 1.6.0:
 
 | PostgreSQL | Pinot | note |
 | --- | --- | --- |
@@ -78,11 +78,15 @@ One **source table becomes one Pinot table with the same name**. Pinot has no da
 | `date`, `timestamp` | `TIMESTAMP` | stored as millis since the epoch, in UTC. |
 | everything else | `STRING` | `character(n)`, `varchar`, `text`, `bytea`, … |
 
+Pinot cuts a STRING value at the field's `maxLength`, which is 512 characters by default. If a column has a longer value, the build sets `maxLength` to the length of its longest value, so no value is cut. For example, geonames `alternatenames` reaches 2,602 characters. Images built before this change cut those values at 512.
+
 **What is dropped.** Everything Pinot has nowhere to put: primary and foreign keys, `CHECK` constraints, `UNIQUE`, sequences, `GRANT`, schemas, and dellstore's PL/pgSQL function. Pinot enforces no constraints at all, and its indexes are declared in the table config rather than in DDL. This is a much larger loss of fidelity than the other engines' — worth knowing before you use these images to test constraint behaviour, and irrelevant if you are here to practise analytical SQL.
 
 ### Nulls and defaults
 
 Pinot's default behaviour is to replace a null with its column's **default value** — `"null"` for a STRING, `Integer.MIN_VALUE` for an INT, `-Infinity` for a DOUBLE. These tables set `nullHandlingEnabled`, which stores a real null vector, so with `SET enableNullHandling=true;` a NULL comes back as a JSON `null`. **Without that query option you get the default value instead**, which is a genuine footgun on `SELECT *` and on aggregates.
+
+Pinot 1.6.0 changed two query results. With `SET enableNullHandling=true;`, a single-stage `GROUP BY` now puts null keys in a separate NULL group ([upgrade notes](https://docs.pinot.apache.org/operate-pinot/upgrades/upgrade-notes)). A single-stage query also applies `HAVING` now. Earlier releases ignored it without an error.
 
 One fidelity loss remains and is not fixable from this side: **Pinot reads an empty CSV field as null**, so a column that held an empty string upstream is indistinguishable from one that held NULL. The build writes SQL NULL as an explicit `\N` sentinel (and tells Pinot to read it as null) precisely so the sentinel itself is never mistaken for data, but the reverse conflation stands.
 

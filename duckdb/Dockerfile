@@ -39,7 +39,7 @@ FROM duckdb/duckdb:1.5.5 AS engine
 # ---------------------------------------------------------------------------
 # Builder: extract, transform.
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS builder
+FROM alpine:3.24.4 AS builder
 
 ARG DATASET
 # One URL or a space-separated list. Dispatched on suffix: *.git is cloned,

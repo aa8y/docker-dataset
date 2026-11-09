@@ -41,7 +41,7 @@ jobs:
     # shell-utility tests (test/shell drives docker/curl/git through fakes on
     # PATH). Runs first and gates the image build below, so a logic regression
     # fails in seconds rather than after the multi-arch build. Pin to the
-    # interpreter the alpine:3.21 builder ships (python3 3.12) so tests exercise
+    # interpreter the alpine:3.24 builder ships (python3 3.14) so tests exercise
     # the same behavior as production; jq (needed by the shell tests) is
     # preinstalled on the runner image.
     runs-on: ubuntu-latest
@@ -53,7 +53,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: Install test dependencies
         run: pip install -r test/requirements-dev.txt
@@ -352,11 +352,14 @@ jobs:
       # pre-pulled above the remaining registry traffic is buildcache manifest
       # resolution against GHCR, which can still catch a transient error. A second
       # `dave build` finds every already-built layer in the local store, so a
-      # retry redoes only the tags a failure actually killed.
+      # retry redoes only the tags a failure actually killed. --keep-going makes
+      # one failed tag (for example an upstream download error) stop only that
+      # tag, so every other tag still builds and the export below can save it.
       - name: Build images
+        id: build
         run: |
           for attempt in 1 2 3; do
-            if dave build -c ${{ matrix.context }} -j "$DAVE_JOBS_BUILD"; then
+            if dave build -c ${{ matrix.context }} -j "$DAVE_JOBS_BUILD" --keep-going; then
               exit 0
             fi
             if [ "$attempt" -eq 3 ]; then
@@ -376,12 +379,20 @@ jobs:
       # writers. continue-on-error because the cache is
       # purely an optimization for the next attempt: a throttled export must
       # never fail a shard whose images built and will be tested regardless.
+      # It also runs when the Build step failed, so the tags that did build are
+      # saved and a rerun of the shard downloads only the tags that failed. The
+      # Build step must have run: a failure before it (for example a base
+      # pull 429) skips the export, because it would only spend more pulls.
+      # In that case the failed tags get one more serial try here.
       - name: Export PR build cache
-        if: env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
+        if: >-
+          !cancelled()
+          && (steps.build.outcome == 'success' || steps.build.outcome == 'failure')
+          && env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
         continue-on-error: true
         env:
           CACHE_TO_SCOPE: pr-${{ github.event.pull_request.number }}
-        run: dave build -c ${{ matrix.context }} -j 1
+        run: dave build -c ${{ matrix.context }} -j 1 --keep-going
 
       - name: Test images (structure)
         run: dave structure-test -c ${{ matrix.context }} -j "$DAVE_JOBS_ST"

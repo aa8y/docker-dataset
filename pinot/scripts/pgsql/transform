@@ -43,7 +43,7 @@ land in different tables. Quoted identifiers (usda's ``"year"``, world's
 ``"language"``, dellstore's ``"password"``) are already lower case in every
 dump here, so they survive folding unchanged.
 
-Type mapping (PostgreSQL -> Pinot), each verified against Pinot 1.5.0 by
+Type mapping (PostgreSQL -> Pinot), each verified against Pinot 1.6.0 by
 ingesting a probe CSV and reading the values back:
 
   ============================  =========  ====================================
@@ -494,7 +494,19 @@ def render(value, data_type):
 
 # --- artifact emission ----------------------------------------------------
 
-def pinot_schema(table, columns):
+# Pinot's default maxLength for a STRING field, in Java chars (UTF-16 code
+# units). Pinot cuts a longer value at this length. A cut can fall between the
+# two halves of a surrogate pair, and Pinot 1.6.0 then rejects the whole file
+# ("Unpaired surrogate"). geonames' alternatenames reaches 2602 units.
+DEFAULT_STRING_MAX_LENGTH = 512
+
+
+def utf16_length(value):
+    """The length of a string as Java counts it (UTF-16 code units)."""
+    return len(value.encode("utf-16-le")) // 2
+
+
+def pinot_schema(table, columns, max_lengths=None):
     """The Pinot schema document for a table.
 
     Every column is a *dimension*. Pinot's other two field categories buy
@@ -502,13 +514,19 @@ def pinot_schema(table, columns):
     (a dimension's is a null marker the table config preserves), and a
     date-time field would demand that one column be nominated as the table's
     time column, which none of these datasets has a natural candidate for.
+
+    ``max_lengths`` maps a STRING column to its longest value. A column longer
+    than Pinot's default gets a ``maxLength`` that fits it, so no value is cut.
     """
-    return {
-        "schemaName": table,
-        "dimensionFieldSpecs": [
-            {"name": name, "dataType": data_type} for name, data_type in columns
-        ],
-    }
+    max_lengths = max_lengths or {}
+    specs = []
+    for name, data_type in columns:
+        spec = {"name": name, "dataType": data_type}
+        longest = max_lengths.get(name, 0)
+        if data_type == "STRING" and longest > DEFAULT_STRING_MAX_LENGTH:
+            spec["maxLength"] = longest
+        specs.append(spec)
+    return {"schemaName": table, "dimensionFieldSpecs": specs}
 
 
 def pinot_table_config(table):
@@ -539,6 +557,9 @@ class TableWriter:
         self.columns = columns
         self.types = {name: data_type for name, data_type in columns}
         self.rows = 0
+        # Longest rendered value per STRING column, in UTF-16 code units.
+        self.max_lengths = {name: 0 for name, data_type in columns
+                            if data_type == "STRING"}
         self.path = os.path.join(out_dir, table + ".csv")
         self.fh = open(self.path, "w", newline="", encoding="utf-8")
         self.writer = csv.writer(self.fh, lineterminator="\n")
@@ -552,9 +573,13 @@ class TableWriter:
         the statement omits is written as NULL.
         """
         by_name = dict(zip(column_names, values))
-        self.writer.writerow([
-            render(by_name.get(name), data_type) for name, data_type in self.columns
-        ])
+        cells = [render(by_name.get(name), data_type)
+                 for name, data_type in self.columns]
+        for (name, _), cell in zip(self.columns, cells):
+            if name in self.max_lengths:
+                self.max_lengths[name] = max(self.max_lengths[name],
+                                             utf16_length(cell))
+        self.writer.writerow(cells)
         self.rows += 1
 
     def close(self):
@@ -689,7 +714,8 @@ def write_artifacts(out_dir, tables, writers):
         columns = tables[table]
         with open(os.path.join(out_dir, table + ".schema.json"),
                   "w", encoding="utf-8") as fh:
-            json.dump(pinot_schema(table, columns), fh, indent=2)
+            json.dump(pinot_schema(table, columns, writers[table].max_lengths),
+                      fh, indent=2)
             fh.write("\n")
         with open(os.path.join(out_dir, table + ".table.json"),
                   "w", encoding="utf-8") as fh:
