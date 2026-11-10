@@ -251,9 +251,21 @@ jobs:
       # that forced `dave push` to -j 1). Gated on the same-repo condition above:
       # on fork PRs the guard is false, the variable stays unset, and the
       # manifest's ${CACHE_FROM_SCOPE:+...} guard erases the flag entirely.
-      - name: Import PR build cache
-        if: env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
-        run: echo "CACHE_FROM_SCOPE=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+      #
+      # Pushes to master use a fixed `master` scope the same way. Master writes
+      # its main cache only in the Push step, which runs only after every test
+      # passes, so without this scope a failed master shard kept nothing and
+      # each rerun downloaded every dataset again.
+      - name: Import scoped build cache
+        if: >-
+          env.REGISTRY_AUTH == 'true'
+          && (github.event_name == 'pull_request'
+              || (github.event_name == 'push' && github.ref == 'refs/heads/master'))
+        env:
+          SCOPE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'master' }}
+        run: |
+          echo "CACHE_SCOPE=$SCOPE" >> "$GITHUB_ENV"
+          echo "CACHE_FROM_SCOPE=$SCOPE" >> "$GITHUB_ENV"
 
       # Last-known-good upstream fingerprints, carried across runs. When a live
       # metadata fetch fails, bin/dataset-checksum falls back to the newest
@@ -384,14 +396,17 @@ jobs:
       # Build step must have run: a failure before it (for example a base
       # pull 429) skips the export, because it would only spend more pulls.
       # In that case the failed tags get one more serial try here.
-      - name: Export PR build cache
+      # On master it runs after every build as well: the Push step saves the
+      # main cache only when every test passes, so a test failure would
+      # otherwise also leave a rerun with nothing.
+      - name: Export scoped build cache
         if: >-
           !cancelled()
+          && env.CACHE_SCOPE != ''
           && (steps.build.outcome == 'success' || steps.build.outcome == 'failure')
-          && env.REGISTRY_AUTH == 'true' && github.event_name == 'pull_request'
         continue-on-error: true
         env:
-          CACHE_TO_SCOPE: pr-${{ github.event.pull_request.number }}
+          CACHE_TO_SCOPE: ${{ env.CACHE_SCOPE }}
         run: dave build -c ${{ matrix.context }} -j 1 --keep-going
 
       - name: Test images (structure)

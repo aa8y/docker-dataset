@@ -68,8 +68,9 @@ templates:
   #                   arithmetic that forced `dave push` down to -j 1.
   #   CACHE_FROM_SCOPE  build: additionally IMPORT the scoped ref
   #                   (`...-<scope>`). Set alongside exports of that scope so a
-  #                   re-run attempt of a same-repo PR hits the cache its own
-  #                   earlier attempt wrote -- without it the retry would
+  #                   re-run attempt of a same-repo PR (scope `pr-<number>`)
+  #                   or of a master push (scope `master`) hits the cache its
+  #                   own earlier attempt wrote -- without it the retry would
   #                   rebuild, land on a different image ID, and miss the
   #                   integration-test skip stamps keyed on that ID. A ref that
   #                   does not exist yet (the first attempt) is a cache miss,
