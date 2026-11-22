@@ -183,9 +183,10 @@ ENV CLICKHOUSE_DB=${DATASET}
 # users.d override of our own.
 ENV CLICKHOUSE_SKIP_USER_SETUP=1
 
-# Upgrade zlib only, not the whole Alpine package set. zlib 1.4-r0 fixes the
-# critical CVE-2026-4738 in the base image's older zlib. Runs as root.
-RUN apk add --no-cache --upgrade zlib
+# Upgrade only the packages with CVE fixes, not the whole Alpine package set.
+# zlib 1.4-r0 fixes the critical CVE-2026-4738. OpenSSL 3.5.9-r1 (libssl3,
+# libcrypto3) fixes four high CVEs in 3.5.9-r0. Runs as root.
+RUN apk add --no-cache --upgrade zlib libssl3 libcrypto3
 
 # The init script plus, for datasets whose load statements read a file, the
 # data files under /docker-entrypoint-initdb.d/${DATASET}/. Both are needed at

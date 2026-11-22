@@ -131,11 +131,12 @@ ARG DATASET
 # Recorded so the CMD can open the shipped database file by name at runtime.
 ENV DATASET=${DATASET}
 
-# Upgrade zlib only, not the whole package set. zlib 1.4-r0 fixes the critical
-# CVE-2026-4738. The base image runs as the non-root `sqlite` user, so switch to
-# root for this one step and then restore that user.
+# Upgrade only the packages with CVE fixes, not the whole package set. zlib
+# 1.4-r0 fixes the critical CVE-2026-4738, and OpenSSL 3.5.9-r1 (libssl3,
+# libcrypto3) fixes four high CVEs. The base image runs as the non-root `sqlite`
+# user, so switch to root for this one step and then restore that user.
 USER root
-RUN apk add --no-cache --upgrade zlib
+RUN apk add --no-cache --upgrade zlib libssl3 libcrypto3
 USER sqlite
 
 COPY --from=builder /data /data

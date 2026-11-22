@@ -141,10 +141,11 @@ LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
       org.opencontainers.image.vendor="https://github.com/aa8y"
 
 # MariaDB server plus the mariadb/mariadb-admin clients, from the Alpine
-# repository (versions follow the Alpine release; not pinned). zlib is upgraded
-# on its own to pick up the CVE-2026-4738 fix; no broad `apk upgrade`.
+# repository (versions follow the Alpine release; not pinned). zlib, libssl3,
+# and libcrypto3 are upgraded on their own to pick up the CVE-2026-4738 fix
+# (zlib 1.4-r0) and the OpenSSL 3.5.9-r1 fixes; no broad `apk upgrade`.
 RUN apk add --no-cache mariadb mariadb-client && \
-    apk add --no-cache --upgrade zlib
+    apk add --no-cache --upgrade zlib libssl3 libcrypto3
 
 ARG DATASET
 # A known root password so tests (and users) can connect without scraping the
