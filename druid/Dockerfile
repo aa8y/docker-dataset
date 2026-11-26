@@ -261,12 +261,13 @@ LABEL org.opencontainers.image.authors="https://github.com/aa8y" \
 # curl: the entrypoint talks to Druid's own HTTP APIs (submit task, poll status,
 #       poll load status, query SQL) and the smoke test queries through it too.
 #       BusyBox wget cannot POST a JSON body portably.
-# zlib: CVE-2026-4738 (critical) is fixed in zlib 1.4-r0, so upgrade zlib alone.
+# zlib, libssl3, libcrypto3: zlib 1.4-r0 fixes CVE-2026-4738 (critical), and
+#       OpenSSL 3.5.9-r1 fixes four high CVEs, so upgrade these alone.
 #       This is not a full `apk upgrade`, which would move every package.
 # The druid user mirrors the official image (uid/gid 1000, home /opt/druid) so a
 # bind-mounted var/ directory has the ownership people expect.
 RUN apk add --no-cache bash curl && \
-    apk add --no-cache --upgrade zlib && \
+    apk add --no-cache --upgrade zlib libssl3 libcrypto3 && \
     addgroup -S -g 1000 druid && \
     adduser -S -u 1000 -D -H -h /opt/druid -s /bin/sh -G druid druid
 

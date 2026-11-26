@@ -180,9 +180,11 @@ COPY --from=pgvector /usr/local/lib/postgresql/vector.so /usr/local/lib/postgres
 COPY --from=pgvector /usr/local/share/postgresql/extension/vector* /usr/local/share/postgresql/extension/
 COPY --from=builder /docker-entrypoint-initdb.d /docker-entrypoint-initdb.d
 
-# Upgrade zlib only, to 1.4-r0, which fixes the critical CVE-2026-4738.
+# Upgrade only the packages with CVE fixes. zlib 1.4-r0 fixes the critical
+# CVE-2026-4738. OpenSSL 3.5.9-r1 (libssl3, libcrypto3), krb5-libs 1.22.3-r0,
+# and libxslt 1.1.43-r4 fix high CVEs in the base image's older packages.
 # Do not run a broad `apk upgrade` here. It would change unrelated packages.
-RUN apk add --no-cache --upgrade zlib
+RUN apk add --no-cache --upgrade zlib libssl3 libcrypto3 krb5-libs libxslt
 
 USER $PG_USER
 WORKDIR $PG_HOME
